@@ -95,6 +95,23 @@ func TestOllamaChat_LengthStopIsAnError(t *testing.T) {
 	require.Len(t, events, 2)
 }
 
+// shift:false is on the wire, and a generation that overruns the window then
+// ends with done_reason "length", which is a *StopError that Is ErrTruncated
+// (not a silent "stop" after llama-server discarded KV).
+func TestOllamaChat_ShiftFalseOverrunIsErrTruncated(t *testing.T) {
+	srv := newOllamaV2Server(t, []string{"tools"},
+		`{"message":{"role":"assistant","content":"cut off"},"done":false}`,
+		`{"message":{"role":"assistant","content":""},"done_reason":"length","done":true,"prompt_eval_count":32000,"eval_count":768}`,
+	)
+	resp, err := newTestOllama(t, srv, OllamaOptions{}).Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
+	require.Nil(t, resp)
+	require.Equal(t, `false`, string(srv.received()[0]["shift"]), `request body carries "shift":false`)
+	require.ErrorIs(t, err, ErrTruncated)
+	var se *StopError
+	require.True(t, errors.As(err, &se))
+	require.Equal(t, StopMaxTokens, se.Reason)
+}
+
 func TestOllamaChat_AlwaysSendsNumCtxAndKeepAlive(t *testing.T) {
 	done := `{"message":{"role":"assistant","content":"ok"},"done_reason":"stop","done":true}`
 	for _, tc := range []struct {
@@ -119,6 +136,7 @@ func TestOllamaChat_AlwaysSendsNumCtxAndKeepAlive(t *testing.T) {
 			require.Equal(t, map[string]int{"num_ctx": tc.ctx, "num_predict": tc.pred}, opts)
 			require.Equal(t, tc.keepAlive, string(b["keep_alive"]))
 			require.Equal(t, `false`, string(b["truncate"]), "truncate:false on every request")
+			require.Equal(t, `false`, string(b["shift"]), "shift:false on every request")
 		})
 	}
 }
@@ -222,10 +240,13 @@ func TestOllamaChat_InvalidToolArgumentsFailTheTurn(t *testing.T) {
 }
 
 // With truncate:false an over-long prompt is refused, not cut. The text is
-// Ollama v0.40.14's promptTooLongMessage (llm/llama_server.go, returned as a
-// 400 StatusError and sent as {"error":"..."}).
+// what a real Ollama v0.40.14 forwards from its llama.cpp b11963 runner: the
+// llama-server HTTP 400 (tools/server/server-context.cpp:4080-4086, status
+// from server-common.cpp:125-128), sent as {"error":"..."}. Ollama's own
+// promptTooLongMessage is reachable only with truncate:true and is NOT what
+// this path sees, so it is deliberately not the fixture.
 func TestOllamaChat_PromptOverContextIsErrContextFull(t *testing.T) {
-	const tooLong = "the prompt is longer than the context length currently available to the model; shorten the prompt, adjust the context length in settings, or use a model with a longer context length"
+	const tooLong = "request (40000 tokens) exceeds the available context size (32768 tokens), try increasing it"
 	t.Run("http 400", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/api/show" {
@@ -241,7 +262,7 @@ func TestOllamaChat_PromptOverContextIsErrContextFull(t *testing.T) {
 		_, err = c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
 		require.ErrorIs(t, err, ErrContextFull)
 		require.ErrorContains(t, err, "ollama: HTTP 400")
-		require.ErrorContains(t, err, "longer than the context length")
+		require.ErrorContains(t, err, "exceeds the available context size")
 		require.False(t, isRetryable(err), "the same prompt fails the same way")
 	})
 	t.Run("error line", func(t *testing.T) {
@@ -298,19 +319,18 @@ func TestOllamaChat_ParallelSameNameCallsKeepTheirIDs(t *testing.T) {
 	t.Run("server sends ids", func(t *testing.T) {
 		resp, msgs := roundTrip(t, `{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_aaa11111","function":{"name":"knomit_query","arguments":{"text":"1"}}},{"id":"call_bbb22222","function":{"name":"knomit_query","arguments":{"text":"2"}}}]},"done":false}`, "tu_a", "tu_b")
 		require.Equal(t, "tu_a", resp.Blocks[0].ToolUse.ID, "ToolUse.ID stays knomit's")
-		require.Equal(t, "call_aaa11111", resp.Blocks[0].ToolUse.ProviderID)
-		require.Equal(t, "call_bbb22222", resp.Blocks[1].ToolUse.ProviderID)
+		require.Equal(t, "tu_b", resp.Blocks[1].ToolUse.ID)
 		require.Len(t, msgs, 3)
-		require.Equal(t, "call_aaa11111", msgs[0].ToolCalls[0].ID)
-		require.Equal(t, "call_bbb22222", msgs[0].ToolCalls[1].ID)
-		require.Equal(t, ollamaMsgV2{Role: "tool", Content: "SECOND", ToolName: "knomit_query", ToolCallID: "call_bbb22222"}, msgs[1])
-		require.Equal(t, ollamaMsgV2{Role: "tool", Content: "FIRST", ToolName: "knomit_query", ToolCallID: "call_aaa11111"}, msgs[2])
+		require.Equal(t, "tu_a", msgs[0].ToolCalls[0].ID, "knomit's id is sent, not the server's call_aaa11111")
+		require.Equal(t, "tu_b", msgs[0].ToolCalls[1].ID)
+		require.Equal(t, ollamaMsgV2{Role: "tool", Content: "SECOND", ToolName: "knomit_query", ToolCallID: "tu_b"}, msgs[1])
+		require.Equal(t, ollamaMsgV2{Role: "tool", Content: "FIRST", ToolName: "knomit_query", ToolCallID: "tu_a"}, msgs[2])
 	})
 	t.Run("server sends no ids", func(t *testing.T) {
 		resp, msgs := roundTrip(t, `{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"knomit_query","arguments":{"text":"1"}}},{"function":{"name":"knomit_query","arguments":{"text":"2"}}}]},"done":false}`, "tu_a", "tu_b")
-		require.Equal(t, "", resp.Blocks[0].ToolUse.ProviderID)
+		require.Equal(t, "tu_a", resp.Blocks[0].ToolUse.ID)
 		require.Len(t, msgs, 3)
-		require.Equal(t, "tu_a", msgs[0].ToolCalls[0].ID, "knomit's id is sent when the server sent none")
+		require.Equal(t, "tu_a", msgs[0].ToolCalls[0].ID, "knomit's id is sent either way")
 		require.Equal(t, "tu_b", msgs[0].ToolCalls[1].ID)
 		require.Equal(t, ollamaMsgV2{Role: "tool", Content: "SECOND", ToolName: "knomit_query", ToolCallID: "tu_b"}, msgs[1])
 		require.Equal(t, ollamaMsgV2{Role: "tool", Content: "FIRST", ToolName: "knomit_query", ToolCallID: "tu_a"}, msgs[2])
@@ -411,6 +431,9 @@ func TestOllamaChat_UsageFromCachedCount(t *testing.T) {
 	// A reported 0 is a real "nothing cached", not the fallback.
 	require.Equal(t, Usage{Input: 900, PromptEval: 900, Output: 3, CacheRead: 0},
 		run(`"prompt_eval_count":900,"prompt_eval_cached_count":0`))
+	// A cached count above the total never makes Input negative.
+	require.Equal(t, Usage{Input: 0, PromptEval: 900, Output: 3, CacheRead: 950},
+		run(`"prompt_eval_count":900,"prompt_eval_cached_count":950`))
 }
 
 // A server with no prompt_eval_cached_count (Ollama before v0.35.0) gets the

@@ -165,12 +165,13 @@ func TestOllamaChat_StreamToolCallGetsKnomitID(t *testing.T) {
 	require.Len(t, got, 1)
 	b := got[0]
 	// Every field of the request body, none left unasserted.
-	require.Len(t, b, 7)
+	require.Len(t, b, 8)
 	require.Equal(t, `"test-model"`, string(b["model"]))
 	require.Equal(t, `true`, string(b["stream"]))
 	require.Equal(t, `"30m"`, string(b["keep_alive"]))
 	require.Equal(t, `{"num_ctx":32768,"num_predict":-1}`, string(b["options"]))
 	require.Equal(t, `false`, string(b["truncate"]))
+	require.Equal(t, `false`, string(b["shift"]))
 	wantMsgs, err := json.Marshal(renderOllama(ollamaSnapshot(t, "go"), "test-model", OllamaOptions{}).Messages)
 	require.NoError(t, err)
 	require.JSONEq(t, string(wantMsgs), string(b["messages"]), "the wire messages are exactly the render")

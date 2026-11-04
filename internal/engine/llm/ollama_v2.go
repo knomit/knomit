@@ -224,6 +224,17 @@ type ollamaChatRequestV2 struct {
 	// keep the whole conversation, so an over-long prompt fails instead of
 	// silently becoming a different conversation. See ollamaContextFull.
 	Truncate bool `json:"truncate"`
+	// Shift is ALWAYS sent, as false (user decision, 2026-11-04). Ollama
+	// launches llama-server with context shift ON by default; when prompt plus
+	// output reaches num_ctx WHILE GENERATING, llama-server then silently
+	// discards the middle of the KV cache (keeping only num_keep, default 4,
+	// tokens) and the response still ends done_reason "stop". With shift:false
+	// it stops with "length", which streamV2 maps to ErrTruncated. This does
+	// NOT affect an over-long PROMPT: that is refused with a 400 either way
+	// (see ollamaContextFull). Trade-off: shift is a runner launch attribute,
+	// so another client of the same Ollama that sends a different shift value
+	// forces a model reload.
+	Shift bool `json:"shift"`
 }
 
 // renderOllama lays a snapshot out as an /api/chat request:
@@ -232,13 +243,13 @@ type ollamaChatRequestV2 struct {
 //     blank line, in that order; none when all four are empty.
 //   - tools: hook 1 in snapshot (name) order, each schema verbatim.
 //   - messages: hook 6 then hook 7. A replayed tool call carries its id
-//     (ToolUse.ProviderID when the server sent one, else the knomit id) and a
+//     (always knomit's ToolUse.ID, whatever id the server sent) and a
 //     tool result is {role:"tool", tool_name, tool_call_id, content} with the
 //     same id and the name of the tool_use it answers, so parallel calls to
 //     one tool are told apart by id and, on a server that ignores ids, by
 //     name and order. The ids live in hooks 6 and 7, never in the shared
 //     prefix. Reasoning from another provider is dropped (ReplayFor).
-//   - keep_alive, options.num_ctx and truncate:false always set.
+//   - keep_alive, options.num_ctx, truncate:false and shift:false always set.
 //
 // It renders a tool result whose tool_use is not in the snapshot with an empty
 // tool_name; Stream refuses such a snapshot before sending (renderOllamaChecked's
@@ -255,7 +266,7 @@ func renderOllamaChecked(s Snapshot, model string, o OllamaOptions, thinks bool)
 		numPredict = o.MaxOutput
 	}
 	req := ollamaChatRequestV2{
-		Model: model, Stream: true, KeepAlive: o.KeepAlive, Truncate: false,
+		Model: model, Stream: true, KeepAlive: o.KeepAlive, Truncate: false, Shift: false,
 		Options: ollamaOptsV2{NumCtx: o.NumCtx, NumPredict: numPredict},
 	}
 	if thinks {
@@ -341,9 +352,6 @@ func ollamaAssistant(e Entry, names map[string]ollamaCallRef) ollamaMsgV2 {
 			}
 		case BlockToolUse:
 			id := b.ToolUse.ID
-			if b.ToolUse.ProviderID != "" {
-				id = b.ToolUse.ProviderID
-			}
 			names[b.ToolUse.ID] = ollamaCallRef{name: b.ToolUse.Name, id: id}
 			args := b.ToolUse.Args
 			if len(args) == 0 {
@@ -483,7 +491,7 @@ func (c *OllamaChat) Stream(ctx context.Context, s Snapshot, o StreamOptions, si
 			sink(Event{Kind: EventTextDelta, Text: ln.Message.Content})
 		}
 		for _, tc := range ln.Message.ToolCalls {
-			tu := &ToolUse{ID: o.newID(), ProviderID: tc.ID, Name: tc.Function.Name, Args: json.RawMessage(`{}`)}
+			tu := &ToolUse{ID: o.newID(), Name: tc.Function.Name, Args: json.RawMessage(`{}`)}
 			// Ollama always sends arguments as a JSON object: a model whose
 			// arguments are not valid JSON makes the SERVER fail the request
 			// (llm/llama_server.go, v0.40.14), which surfaces as an error
@@ -549,11 +557,14 @@ func ollamaLineError(msg string) error {
 	return err
 }
 
-// ollamaContextFull recognises the "prompt does not fit" error text. Ollama
-// v0.40.14 words it "the prompt is longer than the context length currently
-// available to the model; ..." (llm/llama_server.go promptTooLongMessage,
-// returned as a 400 StatusError and sent as {"error":"..."}); llama-server's
-// own refusal says "exceeds the available context size".
+// ollamaContextFull recognises the "prompt does not fit" error text. With
+// truncate:false the refusal a real Ollama v0.40.14 sends is llama.cpp b11963's
+// HTTP 400 "request (N tokens) exceeds the available context size (M tokens),
+// try increasing it" (tools/server/server-context.cpp:4080-4086, status from
+// server-common.cpp:125-128), forwarded as {"error":"..."}; that is the
+// "available context" alternative. The "context length" alternative is Ollama's
+// own promptTooLongMessage (llm/llama_server.go), reachable only with
+// truncate:true, kept as a cheap guard.
 func ollamaContextFull(msg string) bool {
 	m := strings.ToLower(msg)
 	return strings.Contains(m, "context length") || strings.Contains(m, "available context")
@@ -577,7 +588,7 @@ func usageFromFinal(s Snapshot, f *ollamaStreamLineV2) Usage {
 	if f.PromptEvalCachedCount != nil {
 		cached := *f.PromptEvalCachedCount
 		return Usage{
-			Input:      f.PromptEvalCount - cached,
+			Input:      max(0, f.PromptEvalCount-cached),
 			PromptEval: f.PromptEvalCount,
 			Output:     f.EvalCount,
 			CacheRead:  cached,

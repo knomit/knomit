@@ -58,19 +58,17 @@ type Block struct {
 }
 
 // ToolUse is a model's tool call. ID is knomit-assigned ("tu_<n>"), never the
-// provider's; ProviderID holds the id the provider put on the call, when it
-// sent one, so the adapter can send the same id back with the result. Args is always valid JSON. When the model streamed arguments
-// that are not valid JSON, the adapter stores Args as {} and keeps the bytes
-// it received in RawArgs, so the entry still marshals and renders; ArgsErr
-// then reports the problem, and the caller answers the call with a tool error
-// instead of running it.
+// provider's; adapters send it back to the provider as the call id. Args is
+// always valid JSON. When the model streamed arguments that are not valid
+// JSON, the adapter stores Args as {} and keeps the bytes it received in
+// RawArgs, so the entry still marshals and renders; ArgsErr then reports the
+// problem, and the caller answers the call with a tool error instead of
+// running it.
 type ToolUse struct {
 	ID      string          `json:"id"`
 	Name    string          `json:"name"`
 	Args    json.RawMessage `json:"args"`
 	RawArgs string          `json:"raw_args,omitempty"`
-
-	ProviderID string `json:"provider_id,omitempty"`
 }
 
 // ErrInvalidToolArgs is what an *InvalidToolArgsError Is.
