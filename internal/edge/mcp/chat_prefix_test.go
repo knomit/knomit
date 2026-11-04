@@ -77,6 +77,7 @@ func startPrefixManager(t *testing.T, in prefixInstance) *repos.Manager {
 type prefixRun struct {
 	canonical []byte // CanonicalPrefix(HookRepo)
 	anthropic []byte // "system" and "tools" of the HTTP body the API received
+	ollama    []byte // the system message and "tools" of the body Ollama received
 	tools     []llm.ToolDef
 }
 
@@ -125,6 +126,54 @@ func wirePrefix(t *testing.T, s llm.Snapshot) []byte {
 	return wire
 }
 
+// wirePrefixOllama sends s through the real Ollama adapter to an httptest
+// server and returns the first (system) message and the "tools" of the body it
+// received, as {"system":…,"tools":…}. It also checks them against
+// llm.OllamaPrefixJSON, so that export stays exactly what Ollama gets.
+func wirePrefixOllama(t *testing.T, s llm.Snapshot) []byte {
+	t.Helper()
+	var (
+		mu   sync.Mutex
+		body []byte
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/show":
+			_, _ = io.WriteString(w, `{"capabilities":["completion","tools"]}`)
+		case "/api/chat":
+			b, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			body = b
+			mu.Unlock()
+			_, _ = io.WriteString(w, `{"message":{"role":"assistant","content":"ok"},"done":true,"done_reason":"stop","prompt_eval_count":5,"eval_count":1}`+"\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	chat, err := llm.NewOllamaChat(context.Background(), "ollama-test-x", llm.OllamaOptions{Host: srv.URL})
+	require.NoError(t, err)
+	require.Empty(t, chat.UnusableReason())
+	_, err = chat.Stream(context.Background(), s, llm.StreamOptions{}, nil)
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	var got struct {
+		Messages []json.RawMessage `json:"messages"`
+		Tools    json.RawMessage   `json:"tools"`
+	}
+	require.NoError(t, json.Unmarshal(body, &got))
+	require.NotEmpty(t, got.Messages)
+	require.NotEmpty(t, got.Tools)
+	wire := []byte(`{"system":` + string(got.Messages[0]) + `,"tools":` + string(got.Tools) + `}`)
+
+	exported, err := llm.OllamaPrefixJSON(s, "ollama-test-x")
+	require.NoError(t, err)
+	require.Equal(t, string(exported), string(wire), "OllamaPrefixJSON differs from the received body")
+	return wire
+}
+
 // hookLine returns hook h's line of a CanonicalPrefix.
 func hookLine(t *testing.T, prefix []byte, h llm.Hook) string {
 	t.Helper()
@@ -154,7 +203,7 @@ func runPrefix(t *testing.T, mgr *repos.Manager, in prefixInstance) prefixRun {
 	require.NoError(t, AddPrefix(b, instr, tools))
 	require.NoError(t, b.Add(llm.Item{ID: "turn", Hook: llm.HookTurn, Text: "hello"}))
 	s := b.Snapshot()
-	return prefixRun{canonical: s.CanonicalPrefix(llm.HookRepo), anthropic: wirePrefix(t, s), tools: tools}
+	return prefixRun{canonical: s.CanonicalPrefix(llm.HookRepo), anthropic: wirePrefix(t, s), ollama: wirePrefixOllama(t, s), tools: tools}
 }
 
 func runInstance(t *testing.T, in prefixInstance) []prefixRun {
@@ -298,12 +347,13 @@ func TestChatPrefix_Hooks1to3ByteIdenticalAcrossInstances(t *testing.T) {
 	for i, r := range runs[1:] {
 		require.Equal(t, string(runs[0].canonical), string(r.canonical), "canonical prefix of run %d", i+1)
 		require.Equal(t, string(runs[0].anthropic), string(r.anthropic), "anthropic prefix of run %d", i+1)
+		require.Equal(t, string(runs[0].ollama), string(r.ollama), "ollama prefix of run %d", i+1)
 	}
 
 	// Non-vacuity: the bytes are the real prefix, not an empty agreement.
 	ref := runs[0]
 	require.Len(t, ref.tools, len(toolRegistrations(nil)))
-	for _, bs := range [][]byte{ref.canonical, ref.anthropic} {
+	for _, bs := range [][]byte{ref.canonical, ref.anthropic, ref.ollama} {
 		require.Contains(t, string(bs), "knomit_query")
 		require.Contains(t, string(bs), "## No repo bound yet")
 		require.Contains(t, string(bs), "You are the chat assistant of a knomit knowledge base")
@@ -311,6 +361,7 @@ func TestChatPrefix_Hooks1to3ByteIdenticalAcrossInstances(t *testing.T) {
 	require.Equal(t, 3, strings.Count(string(ref.canonical), "\n"))
 	requireNoMachineBytes(t, "canonical", ref.canonical, a, b)
 	requireNoMachineBytes(t, "anthropic", ref.anthropic, a, b)
+	requireNoMachineBytes(t, "ollama", ref.ollama, a, b)
 	// Hooks 2 and 3 hold no date at all, not even the example one.
 	require.NotRegexp(t, yearPattern, hookLine(t, ref.canonical, llm.HookSystem))
 	require.NotRegexp(t, yearPattern, hookLine(t, ref.canonical, llm.HookRepo))
@@ -328,9 +379,12 @@ func TestChatPrefix_Hooks1to3ByteIdenticalAcrossInstances(t *testing.T) {
 		for _, r := range []prefixRun{reader[1], reader2[0], reader2[1]} {
 			require.Equal(t, string(reader[0].canonical), string(r.canonical))
 			require.Equal(t, string(reader[0].anthropic), string(r.anthropic))
+			require.Equal(t, string(reader[0].ollama), string(r.ollama))
 		}
+		require.NotEqual(t, string(ref.ollama), string(reader[0].ollama), "the permission set changes the Ollama tools")
 		requireNoMachineBytes(t, "reader canonical", reader[0].canonical, ra, rb)
 		requireNoMachineBytes(t, "reader anthropic", reader[0].anthropic, ra, rb)
+		requireNoMachineBytes(t, "reader ollama", reader[0].ollama, ra, rb)
 
 		// Hooks 2 and 3 are identical across permission sets.
 		for _, h := range []llm.Hook{llm.HookSystem, llm.HookRepo} {
