@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 )
@@ -45,6 +46,19 @@ type StreamOptions struct {
 	// process-wide counter (NextToolUseID). The provider's own id never enters
 	// the neutral history.
 	NewID func() string
+	// Progress, when set, is called synchronously for EVERY stream event the
+	// provider sends, including those that never reach the sink: thinking and
+	// signature deltas, tool-argument (input_json) deltas, message_start and
+	// message_delta. It is the liveness signal WrapChat's stall timer uses, so
+	// a model that thinks for minutes before its first text is not taken for
+	// a stalled stream. It carries no data and must not block.
+	Progress func()
+}
+
+func (o StreamOptions) progress() {
+	if o.Progress != nil {
+		o.Progress()
+	}
 }
 
 // EventKind names a streamed event.
@@ -65,11 +79,66 @@ type Event struct {
 	Reasoning *Reasoning
 }
 
-// Response is one complete model response.
+// Response is one complete model response. StopReason is the provider's
+// own value; the Stop* constants name the ones the loop distinguishes.
 type Response struct {
 	Blocks     []Block
 	StopReason string
 	Usage      Usage
+}
+
+// Stop reasons a Response can carry. max_tokens and refusal never come back
+// as a plain Response: the adapter returns a *StopError for them instead (see
+// there), so a cut-off or declined answer cannot pass for a finished one.
+const (
+	StopEndTurn   = "end_turn"
+	StopToolUse   = "tool_use"
+	StopSequence  = "stop_sequence"
+	StopMaxTokens = "max_tokens"
+	StopRefusal   = "refusal"
+	// StopPauseTurn is a server-side tool loop that paused. It is returned as
+	// a normal Response; the caller continues by sending the conversation
+	// again with this response appended, never with a new user message.
+	// knomit declares no server-side tools, so it is not expected in chat.
+	StopPauseTurn = "pause_turn"
+)
+
+var (
+	// ErrTruncated: the response stopped at max_tokens. Thinking counts
+	// against max_tokens, so this can happen before any text.
+	ErrTruncated = errors.New("llm: the response hit the output token limit before it finished")
+	// ErrRefused: the provider's safety classifiers declined the request
+	// (stop_reason "refusal"). Retrying the same request gets the same answer.
+	ErrRefused = errors.New("llm: the model declined this request")
+)
+
+// StopError is a response that ended without a usable answer: max_tokens
+// (Is ErrTruncated) or refusal (Is ErrRefused). Response holds whatever was
+// streamed before the stop, usage included, so the caller can show the
+// partial text and account for the tokens. It is not retryable.
+type StopError struct {
+	Reason   string    // StopMaxTokens or StopRefusal
+	Category string    // refusal only: the provider's stop_details category, "" if none
+	Response *Response // never nil
+}
+
+func (e *StopError) Error() string {
+	switch e.Reason {
+	case StopRefusal:
+		msg := ErrRefused.Error()
+		if e.Category != "" {
+			msg += " (category: " + e.Category + ")"
+		}
+		return msg
+	case StopMaxTokens:
+		return ErrTruncated.Error()
+	}
+	return "llm: response stopped: " + e.Reason
+}
+
+// Is makes errors.Is(err, ErrRefused) and errors.Is(err, ErrTruncated) work.
+func (e *StopError) Is(target error) bool {
+	return (target == ErrRefused && e.Reason == StopRefusal) || (target == ErrTruncated && e.Reason == StopMaxTokens)
 }
 
 // toolUseSeq backs NextToolUseID.

@@ -63,6 +63,9 @@ var (
 	ErrDuplicateItem = errors.New("llm builder: duplicate item id")
 	// ErrUnknownItem: Replace named an ID that is not in the builder.
 	ErrUnknownItem = errors.New("llm builder: unknown item id")
+	// ErrHistoryAppendOnly: Replace or Remove named a HookConversation item.
+	// The neutral history is append-only (history.go).
+	ErrHistoryAppendOnly = errors.New("llm builder: the conversation hook is append-only")
 	// ErrFrameNotImplemented is what AddFrame returns this milestone.
 	ErrFrameNotImplemented = errors.New("llm builder: frame hook not implemented")
 )
@@ -73,7 +76,8 @@ type FrameSpec struct{ Root, Anchor string }
 // Builder assembles a request from the fixed hooks. Items are addressed by ID,
 // which is unique across all hooks, and keep their insertion order within a
 // hook (HookTools is sorted by name at Snapshot time instead). Add, Remove and
-// Replace are the seam later context management (eviction, trimming) uses.
+// Replace are the seam later context management (eviction) uses; they refuse
+// to edit HookConversation, which only grows.
 // A Builder is not safe for concurrent use.
 type Builder struct {
 	hooks [numHooks][]Item
@@ -111,23 +115,32 @@ func (b *Builder) Add(it Item) error {
 	return nil
 }
 
-// Remove deletes the item with id and reports whether it existed.
-func (b *Builder) Remove(id string) bool {
+// Remove deletes the item with id. It returns ErrUnknownItem when there is
+// none, and ErrHistoryAppendOnly for a HookConversation item, which it leaves
+// in place.
+func (b *Builder) Remove(id string) error {
 	h, i, ok := b.find(id)
 	if !ok {
-		return false
+		return fmt.Errorf("%w: %q", ErrUnknownItem, id)
+	}
+	if h == HookConversation {
+		return fmt.Errorf("%w: remove %q", ErrHistoryAppendOnly, id)
 	}
 	b.hooks[h] = append(b.hooks[h][:i:i], b.hooks[h][i+1:]...)
-	return true
+	return nil
 }
 
 // Replace swaps the item with id for it, in the same position. it must carry
 // the same ID and the same Hook: moving an item between hooks is a Remove and
-// an Add, because it changes which cached prefix the item belongs to.
+// an Add, because it changes which cached prefix the item belongs to. A
+// HookConversation item is never replaced (ErrHistoryAppendOnly).
 func (b *Builder) Replace(id string, it Item) error {
 	h, i, ok := b.find(id)
 	if !ok {
 		return fmt.Errorf("%w: %q", ErrUnknownItem, id)
+	}
+	if h == HookConversation {
+		return fmt.Errorf("%w: replace %q", ErrHistoryAppendOnly, id)
 	}
 	if it.ID != id || it.Hook != h {
 		return fmt.Errorf("llm builder: replace %q: want id %q in hook %d, got id %q in hook %d", id, id, h, it.ID, it.Hook)

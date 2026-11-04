@@ -36,25 +36,49 @@ func TestBuilder_ToolsSortedRegardlessOfInsertion(t *testing.T) {
 func TestBuilder_ReplaceKeepsPosition(t *testing.T) {
 	b := NewBuilder()
 	for i, txt := range []string{"one", "two", "three"} {
-		require.NoError(t, b.Add(Item{ID: fmt.Sprintf("c%d", i), Hook: HookConversation, Text: txt}))
+		require.NoError(t, b.Add(Item{ID: fmt.Sprintf("w%d", i), Hook: HookWorkingSet, Text: txt}))
 	}
-	require.NoError(t, b.Replace("c1", Item{ID: "c1", Hook: HookConversation, Text: "TWO"}))
-	got := b.Snapshot().Hooks[HookConversation]
+	require.NoError(t, b.Replace("w1", Item{ID: "w1", Hook: HookWorkingSet, Text: "TWO"}))
+	got := b.Snapshot().Hooks[HookWorkingSet]
 	require.Equal(t, []string{"one", "TWO", "three"}, []string{got[0].Text, got[1].Text, got[2].Text})
 
 	// Moving hooks and changing ids are refused, and leave the item alone.
-	require.Error(t, b.Replace("c1", Item{ID: "c1", Hook: HookTurn, Text: "x"}))
-	require.Error(t, b.Replace("c1", Item{ID: "c9", Hook: HookConversation, Text: "x"}))
-	require.ErrorIs(t, b.Replace("nope", Item{ID: "nope", Hook: HookConversation}), ErrUnknownItem)
-	require.Equal(t, "TWO", b.Snapshot().Hooks[HookConversation][1].Text)
+	require.Error(t, b.Replace("w1", Item{ID: "w1", Hook: HookTurn, Text: "x"}))
+	require.Error(t, b.Replace("w1", Item{ID: "w9", Hook: HookWorkingSet, Text: "x"}))
+	require.ErrorIs(t, b.Replace("nope", Item{ID: "nope", Hook: HookWorkingSet}), ErrUnknownItem)
+	require.Equal(t, "TWO", b.Snapshot().Hooks[HookWorkingSet][1].Text)
+}
+
+// The conversation only grows: no earlier entry, tool result or note is
+// replaced or removed, because current Anthropic models bind each thinking
+// block to the exact history before it.
+func TestBuilder_ConversationIsAppendOnly(t *testing.T) {
+	b := NewBuilder()
+	res := &Entry{ID: "u1", Role: RoleUser, Blocks: []Block{{Kind: BlockToolResult, ToolResult: &ToolResult{ToolUseID: "tu_1", Content: "big result"}}}}
+	require.NoError(t, b.Add(Item{ID: "u1", Hook: HookConversation, Entry: res}))
+	require.NoError(t, b.Add(Item{ID: "turn", Hook: HookTurn, Text: "q"}))
+
+	stub := &Entry{ID: "u1", Role: RoleUser, Blocks: []Block{{Kind: BlockToolResult, ToolResult: &ToolResult{ToolUseID: "tu_1", Content: "[elided]", Elided: true}}}}
+	require.ErrorIs(t, b.Replace("u1", Item{ID: "u1", Hook: HookConversation, Entry: stub}), ErrHistoryAppendOnly)
+	require.ErrorIs(t, b.Remove("u1"), ErrHistoryAppendOnly)
+	got := b.Snapshot().Hooks[HookConversation]
+	require.Len(t, got, 1)
+	require.Equal(t, "big result", got[0].Entry.Blocks[0].ToolResult.Content)
+
+	// Moving the finished turn into the history is a Remove from hook 7 and
+	// an Add to hook 6, both allowed.
+	require.NoError(t, b.Remove("turn"))
+	require.NoError(t, b.Add(Item{ID: "turn", Hook: HookConversation, Text: "q"}))
+	require.Len(t, b.Snapshot().Hooks[HookConversation], 2)
+	require.Empty(t, b.Snapshot().Hooks[HookTurn])
 }
 
 func TestBuilder_RemoveThenAddSameIDFails(t *testing.T) {
 	b := NewBuilder()
 	it := Item{ID: "w1", Hook: HookWorkingSet, Text: "fact"}
 	require.NoError(t, b.Add(it))
-	require.True(t, b.Remove("w1"))
-	require.False(t, b.Remove("w1"))
+	require.NoError(t, b.Remove("w1"))
+	require.ErrorIs(t, b.Remove("w1"), ErrUnknownItem)
 	require.Empty(t, b.Snapshot().Hooks[HookWorkingSet])
 	require.NoError(t, b.Add(it))
 	require.ErrorIs(t, b.Add(it), ErrDuplicateItem)

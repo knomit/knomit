@@ -10,8 +10,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// errAttemptStalled is the cancel cause when an attempt produced no event
-// within Policy.AttemptTimeout.
+// errAttemptStalled is the cancel cause when an attempt showed no activity
+// (no sink event and no StreamOptions.Progress call) within
+// Policy.AttemptTimeout.
 var errAttemptStalled = errors.New("llm: no event within the attempt timeout")
 
 // resilientChat is the v2 twin of resilientAdapter: bounded retries of
@@ -30,10 +31,16 @@ type resilientChat struct {
 //   - A retry happens only while nothing has reached the sink. Once an event
 //     has been delivered, a replay would deliver it again, so the error is
 //     returned as is.
-//   - Policy.AttemptTimeout bounds the time to the FIRST event, not the whole
-//     stream. A chat turn that streams for ten minutes is healthy; one that
-//     has said nothing for AttemptTimeout is the stall this exists to catch.
-//     The overall budget belongs to the caller's context.
+//   - Policy.AttemptTimeout bounds the time to the FIRST sign of life, not
+//     the whole stream. A sign of life is a sink event OR a
+//     StreamOptions.Progress call, which adapters make for every provider
+//     stream event: thinking, signature and tool-argument deltas reach no
+//     sink but do count, so a model that thinks for minutes before its first
+//     text is not cut off. A chat turn that streams for ten minutes is
+//     healthy; one whose provider has sent nothing for AttemptTimeout is the
+//     stall this exists to catch. The overall budget belongs to the caller's
+//     context. Progress alone does not forbid a retry: only a delivered sink
+//     event does, since only that would be delivered twice.
 //
 // The result is a ChatModel, not a concrete type, and every ChatModel method
 // delegates, so wrapping never changes Caps (the decorator-erasure trap of
@@ -82,25 +89,39 @@ func (r *resilientChat) Stream(ctx context.Context, s Snapshot, o StreamOptions,
 	}
 }
 
-// attempt runs one inner Stream with the first-event timer armed.
+// attempt runs one inner Stream with the first-activity timer armed.
 func (r *resilientChat) attempt(ctx context.Context, s Snapshot, o StreamOptions, sink func(Event), emitted *atomic.Bool) (*Response, error) {
 	actx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	var timer *time.Timer
+	var (
+		timer *time.Timer
+		alive atomic.Bool
+	)
 	if r.policy.AttemptTimeout > 0 {
 		timer = time.AfterFunc(r.policy.AttemptTimeout, func() {
-			// Stop on the first event normally prevents this from running;
-			// the check covers the race where it fires as that event lands.
-			if !emitted.Load() {
+			// Stop on the first activity normally prevents this from running;
+			// the check covers the race where it fires as that activity lands.
+			if !alive.Load() {
 				cancel(errAttemptStalled)
 			}
 		})
 		defer timer.Stop()
 	}
-	resp, err := r.inner.Stream(actx, s, o, func(e Event) {
-		if !emitted.Swap(true) && timer != nil {
+	markAlive := func() {
+		if !alive.Swap(true) && timer != nil {
 			timer.Stop()
 		}
+	}
+	callerProgress := o.Progress
+	o.Progress = func() {
+		markAlive()
+		if callerProgress != nil {
+			callerProgress()
+		}
+	}
+	resp, err := r.inner.Stream(actx, s, o, func(e Event) {
+		markAlive()
+		emitted.Store(true)
 		sink(e)
 	})
 	if err != nil && errors.Is(context.Cause(actx), errAttemptStalled) && ctx.Err() == nil {

@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -65,8 +66,13 @@ func (t *tracingChat) Stream(ctx context.Context, s Snapshot, o StreamOptions, s
 	if err != nil {
 		line.Error = err.Error()
 	}
-	if resp != nil {
-		line.Blocks, line.StopReason, line.Usage = resp.Blocks, resp.StopReason, &resp.Usage
+	traced := resp
+	var stop *StopError
+	if traced == nil && errors.As(err, &stop) {
+		traced = stop.Response // a truncated or refused response still used tokens
+	}
+	if traced != nil {
+		line.Blocks, line.StopReason, line.Usage = traced.Blocks, traced.StopReason, &traced.Usage
 	}
 	t.write(line)
 	return resp, err

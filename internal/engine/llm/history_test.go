@@ -8,24 +8,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEntry_ReplayForDropsForeignReasoning(t *testing.T) {
+func TestEntry_ReplayForDropsOnlyOtherProvidersReasoning(t *testing.T) {
 	e := Entry{ID: "e1", Role: RoleAssistant, Blocks: []Block{
-		{Kind: BlockReasoning, Reasoning: &Reasoning{Provider: "anthropic", Model: "claude-a", Native: json.RawMessage(`{"type":"thinking"}`)}},
+		{Kind: BlockReasoning, Reasoning: &Reasoning{Provider: "anthropic", Model: "claude-a", Native: json.RawMessage(`{"type":"thinking","signature":"S"}`)}},
 		{Kind: BlockText, Text: "answer"},
 	}}
 
-	other := e.ReplayFor("anthropic", "claude-b")
+	// Any Anthropic model gets the block, unchanged, whichever model made it.
+	got := e.ReplayFor("anthropic")
+	require.Len(t, got.Blocks, 2)
+	require.Equal(t, BlockReasoning, got.Blocks[0].Kind)
+	require.Equal(t, "claude-a", got.Blocks[0].Reasoning.Model)
+	require.JSONEq(t, `{"type":"thinking","signature":"S"}`, string(got.Blocks[0].Reasoning.Native))
+	require.Equal(t, "answer", got.Blocks[1].Text)
+
+	// Another provider never sees it, and keeps the rest in order.
+	other := e.ReplayFor("ollama")
 	require.Len(t, other.Blocks, 1)
 	require.Equal(t, BlockText, other.Blocks[0].Kind)
 	require.Equal(t, "answer", other.Blocks[0].Text)
-
-	same := e.ReplayFor("anthropic", "claude-a")
-	require.Len(t, same.Blocks, 2)
-	require.Equal(t, BlockReasoning, same.Blocks[0].Kind)
-	require.Equal(t, "claude-a", same.Blocks[0].Reasoning.Model)
-
-	// Same model name under another provider is foreign too.
-	require.Len(t, e.ReplayFor("bedrock", "claude-a").Blocks, 1)
+	// A reasoning block without provenance is never replayed.
+	bare := Entry{Blocks: []Block{{Kind: BlockReasoning}, {Kind: BlockText, Text: "x"}}}
+	require.Len(t, bare.ReplayFor("anthropic").Blocks, 1)
 	// The receiver is untouched.
 	require.Len(t, e.Blocks, 2)
 }

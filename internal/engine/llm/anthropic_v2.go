@@ -18,25 +18,93 @@ const (
 	anthropicMaxBreakpoints = 4
 )
 
-// AnthropicOptions configures an AnthropicChat. Zero values take defaults:
-// ContextWindow 200000, MaxOutput 8192. ThinkingBudget > 0 sends
-// thinking {type: enabled, budget_tokens}; 0 sends no thinking parameter at
-// all, which leaves the model's own default in force (current models think
-// adaptively by default, and reject budget_tokens). An empty APIKey leaves
-// the SDK's own credential resolution (ANTHROPIC_API_KEY and friends) in
-// charge; an empty BaseURL is the public API.
+// Effort levels (output_config.effort). Which levels a model accepts, and
+// which is its default, is per model; see ModelProfile.
+const (
+	EffortLow    = "low"
+	EffortMedium = "medium"
+	EffortHigh   = "high"
+	EffortXHigh  = "xhigh"
+	EffortMax    = "max"
+)
+
+// Thinking display values (thinking.display).
+const (
+	DisplaySummarized = "summarized"
+	DisplayOmitted    = "omitted"
+)
+
+// ModelProfile is the per-model request defaults the caller supplies (from
+// the provider config, PR5). Zero fields take DefaultModelProfile's values.
+//
+// Thinking is always on: the adapter sends thinking {type: adaptive} on
+// every request and never "disabled" or budget_tokens, which current models
+// (Haiku 5.5, Sonnet 5.5, Opus 5.5) reject or restrict. Effort is THE control
+// for how much the model thinks, and it is always sent explicitly, so a
+// request never depends on a model's own default (medium on Haiku 5.5 and
+// Opus 5.5, high on Sonnet 5.5). Keep one Effort per conversation: changing
+// the top-level effort between requests invalidates the prompt cache.
+//
+// MaxOutput is max_tokens. Thinking counts against it, so it must leave room
+// for the reasoning as well as the reply.
+type ModelProfile struct {
+	Effort          string // EffortLow … EffortMax
+	MaxOutput       int    // max_tokens
+	ThinkingDisplay string // DisplaySummarized or DisplayOmitted
+}
+
+// DefaultModelProfile is the chat default: medium effort, a generous
+// max_tokens (64000, the current guidance for long streamed turns), and
+// summarized thinking so a chat UI is not a silent pause while the model
+// thinks.
+var DefaultModelProfile = ModelProfile{Effort: EffortMedium, MaxOutput: 64000, ThinkingDisplay: DisplaySummarized}
+
+func (p ModelProfile) withDefaults() ModelProfile {
+	if p.Effort == "" {
+		p.Effort = DefaultModelProfile.Effort
+	}
+	if p.MaxOutput <= 0 {
+		p.MaxOutput = DefaultModelProfile.MaxOutput
+	}
+	if p.ThinkingDisplay == "" {
+		p.ThinkingDisplay = DefaultModelProfile.ThinkingDisplay
+	}
+	return p
+}
+
+func (p ModelProfile) validate() error {
+	switch p.Effort {
+	case EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax:
+	default:
+		return fmt.Errorf("anthropic: unknown effort %q", p.Effort)
+	}
+	switch p.ThinkingDisplay {
+	case DisplaySummarized, DisplayOmitted:
+	default:
+		return fmt.Errorf("anthropic: unknown thinking display %q", p.ThinkingDisplay)
+	}
+	return nil
+}
+
+// AnthropicOptions configures an AnthropicChat. ContextWindow defaults to
+// 200000; Profile fields default per DefaultModelProfile. An empty APIKey
+// leaves the SDK's own credential resolution (ANTHROPIC_API_KEY and friends)
+// in charge; an empty BaseURL is the public API.
+//
+// The request shape is the same for every Anthropic model: no tool_choice
+// (so never a forced one, a 400 on Sonnet 5.5 and Opus 5.5), no temperature,
+// top_p or top_k, no budget_tokens, never thinking disabled.
 type AnthropicOptions struct {
-	APIKey, BaseURL                          string
-	ContextWindow, MaxOutput, ThinkingBudget int
+	APIKey, BaseURL string
+	ContextWindow   int
+	Profile         ModelProfile
 }
 
 func (o AnthropicOptions) withDefaults() AnthropicOptions {
 	if o.ContextWindow <= 0 {
 		o.ContextWindow = defaultAnthropicContextWindow
 	}
-	if o.MaxOutput <= 0 {
-		o.MaxOutput = defaultMaxTokens
-	}
+	o.Profile = o.Profile.withDefaults()
 	return o
 }
 
@@ -66,7 +134,7 @@ func NewAnthropicChat(model string, o AnthropicOptions) *AnthropicChat {
 func (a *AnthropicChat) Provider() string { return anthropicProvider }
 func (a *AnthropicChat) Model() string    { return a.model }
 func (a *AnthropicChat) Caps() Caps {
-	return Caps{Tools: true, MaxBreakpoints: anthropicMaxBreakpoints, ContextWindow: a.o.ContextWindow, MaxOutput: a.o.MaxOutput}
+	return Caps{Tools: true, MaxBreakpoints: anthropicMaxBreakpoints, ContextWindow: a.o.ContextWindow, MaxOutput: a.o.Profile.MaxOutput}
 }
 
 var (
@@ -86,25 +154,26 @@ var (
 //     prompt + instructions, the prefix shared per permission set. The last
 //     hook-4 block, when there is one, carries a second 1h breakpoint. Hook 5
 //     gets none: the working set changes within a conversation.
-//   - messages: hook 6 then hook 7, each entry replayed for this model only
-//     (ReplayFor), consecutive same-role entries merged. The last cacheable
-//     block of the last message carries the rolling ttl 5m breakpoint.
+//   - messages: hook 6 then hook 7, consecutive same-role entries merged.
+//     Every entry goes out unchanged, Anthropic reasoning included whichever
+//     Anthropic model produced it (ReplayFor drops only other providers'
+//     reasoning); the API drops the thinking blocks the target model cannot
+//     read. The last cacheable block of the last message carries the rolling
+//     ttl 5m breakpoint.
 //
 // That is at most three breakpoints (the API allows four), and every 1h
 // breakpoint precedes the 5m one, which the API requires of mixed TTLs.
 func renderAnthropic(s Snapshot, model string, o AnthropicOptions) anthropic.MessageNewParams {
 	o = o.withDefaults()
+	// SDK v1.26.0's ThinkingConfigAdaptiveParam has no display field, so it
+	// goes in as the one extra field (one key: no map-order instability).
+	adaptive := anthropic.ThinkingConfigAdaptiveParam{}
+	adaptive.SetExtraFields(map[string]any{"display": o.Profile.ThinkingDisplay})
 	p := anthropic.MessageNewParams{
-		Model:     anthropic.Model(model),
-		MaxTokens: int64(o.MaxOutput),
-	}
-	if o.ThinkingBudget > 0 {
-		p.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(o.ThinkingBudget))
-		// max_tokens must exceed the thinking budget, and the budget is not
-		// meant to eat the answer's own allowance.
-		if p.MaxTokens <= int64(o.ThinkingBudget) {
-			p.MaxTokens = int64(o.ThinkingBudget) + int64(o.MaxOutput)
-		}
+		Model:        anthropic.Model(model),
+		MaxTokens:    int64(o.Profile.MaxOutput),
+		Thinking:     anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive},
+		OutputConfig: anthropic.OutputConfigParam{Effort: anthropic.OutputConfigEffort(o.Profile.Effort)},
 	}
 
 	for _, it := range s.Hooks[HookTools] {
@@ -142,7 +211,7 @@ func renderAnthropic(s Snapshot, model string, o AnthropicOptions) anthropic.Mes
 
 	for _, h := range []Hook{HookConversation, HookTurn} {
 		for _, it := range s.Hooks[h] {
-			role, blocks := anthropicItem(it, model)
+			role, blocks := anthropicItem(it)
 			if len(blocks) == 0 {
 				continue
 			}
@@ -165,14 +234,14 @@ func renderAnthropic(s Snapshot, model string, o AnthropicOptions) anthropic.Mes
 }
 
 // anthropicItem converts one hook-6/7 item. A text item is a user message.
-func anthropicItem(it Item, model string) (anthropic.MessageParamRole, []anthropic.ContentBlockParamUnion) {
+func anthropicItem(it Item) (anthropic.MessageParamRole, []anthropic.ContentBlockParamUnion) {
 	if it.Entry == nil {
 		if it.Text == "" {
 			return anthropic.MessageParamRoleUser, nil
 		}
 		return anthropic.MessageParamRoleUser, []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(it.Text)}
 	}
-	e := it.Entry.ReplayFor(anthropicProvider, model)
+	e := it.Entry.ReplayFor(anthropicProvider)
 	role := anthropic.MessageParamRoleUser
 	if e.Role == RoleAssistant {
 		role = anthropic.MessageParamRoleAssistant
@@ -211,6 +280,8 @@ func anthropicItem(it Item, model string) (anthropic.MessageParamRole, []anthrop
 }
 
 // anthropicNative is the stored Native form of an Anthropic reasoning block.
+// An empty thinking string (display "omitted") is a real block and is kept:
+// it is replayed as "thinking":"" with its signature.
 type anthropicNative struct {
 	Type      string `json:"type"`
 	Thinking  string `json:"thinking,omitempty"`
@@ -257,13 +328,22 @@ type pendingBlock struct {
 
 // Stream sends the rendered snapshot as a streaming Messages request.
 //
+// Every stream event calls o.Progress, whether or not it reaches the sink.
+//
 // Usage: message_start carries input, cache_read_input_tokens and
 // cache_creation_input_tokens (and a first output count); message_delta
 // carries the CUMULATIVE counts, output always and, on current API versions,
 // the input and cache counts too. Each field is therefore the larger of the
 // two. The SDK's own Message.Accumulate copies only output_tokens from
 // message_delta, which is why this does not use it for usage.
+//
+// Stop reasons: max_tokens and refusal return a *StopError holding the
+// partial Response (and no EventDone); every other reason, pause_turn
+// included, returns the Response.
 func (a *AnthropicChat) Stream(ctx context.Context, s Snapshot, o StreamOptions, sink func(Event)) (*Response, error) {
+	if err := a.o.Profile.validate(); err != nil {
+		return nil, err
+	}
 	params := renderAnthropic(s, a.model, a.o)
 	if o.MaxOutput > 0 {
 		params.MaxTokens = int64(o.MaxOutput)
@@ -276,9 +356,11 @@ func (a *AnthropicChat) Stream(ctx context.Context, s Snapshot, o StreamOptions,
 	defer stream.Close()
 
 	resp := &Response{}
+	var refusalCategory string
 	open := map[int64]*pendingBlock{}
 	for stream.Next() {
 		ev := stream.Current()
+		o.progress()
 		switch ev.Type {
 		case "message_start":
 			u := ev.Message.Usage
@@ -322,6 +404,9 @@ func (a *AnthropicChat) Stream(ctx context.Context, s Snapshot, o StreamOptions,
 			}
 		case "message_delta":
 			resp.StopReason = string(ev.Delta.StopReason)
+			if resp.StopReason == StopRefusal {
+				refusalCategory = stopDetailsCategory(ev.RawJSON())
+			}
 			u := ev.Usage
 			resp.Usage.Input = max(resp.Usage.Input, u.InputTokens)
 			resp.Usage.CacheRead = max(resp.Usage.CacheRead, u.CacheReadInputTokens)
@@ -332,13 +417,37 @@ func (a *AnthropicChat) Stream(ctx context.Context, s Snapshot, o StreamOptions,
 	if err := stream.Err(); err != nil {
 		return nil, fmt.Errorf("anthropic: %w", err)
 	}
+	switch resp.StopReason {
+	case StopMaxTokens, StopRefusal:
+		return nil, &StopError{Reason: resp.StopReason, Category: refusalCategory, Response: resp}
+	}
 	sink(Event{Kind: EventDone})
 	return resp, nil
 }
 
+// stopDetailsCategory reads delta.stop_details.category from a raw
+// message_delta event. SDK v1.26.0 has no stop_details field; the category is
+// informational (branch on stop_reason, never on it), so a missing or
+// malformed value is "".
+func stopDetailsCategory(raw string) string {
+	var ev struct {
+		Delta struct {
+			StopDetails *struct {
+				Category *string `json:"category"`
+			} `json:"stop_details"`
+		} `json:"delta"`
+	}
+	if json.Unmarshal([]byte(raw), &ev) != nil || ev.Delta.StopDetails == nil || ev.Delta.StopDetails.Category == nil {
+		return ""
+	}
+	return *ev.Delta.StopDetails.Category
+}
+
 // finishBlock turns a completed stream block into a neutral Block, emitting
 // the tool_use or reasoning event for it. The provider's tool_use id is
-// replaced by a knomit id.
+// replaced by a knomit id. Tool arguments that are not valid JSON are kept in
+// RawArgs with Args {} (ToolUse.ArgsErr), so no invalid JSON ever enters the
+// neutral history, where it would fail CanonicalPrefix and rendering.
 func (a *AnthropicChat) finishBlock(pb *pendingBlock, o StreamOptions, sink func(Event)) (Block, bool) {
 	switch pb.typ {
 	case "text":
@@ -347,11 +456,14 @@ func (a *AnthropicChat) finishBlock(pb *pendingBlock, o StreamOptions, sink func
 		}
 		return Block{Kind: BlockText, Text: pb.text.String()}, true
 	case "tool_use":
-		args := json.RawMessage(pb.args.String())
-		if len(args) == 0 {
-			args = json.RawMessage(`{}`)
+		tu := &ToolUse{ID: o.newID(), Name: pb.name, Args: json.RawMessage(`{}`)}
+		if raw := pb.args.String(); raw != "" {
+			if json.Valid([]byte(raw)) {
+				tu.Args = json.RawMessage(raw)
+			} else {
+				tu.RawArgs = raw
+			}
 		}
-		tu := &ToolUse{ID: o.newID(), Name: pb.name, Args: args}
 		sink(Event{Kind: EventToolUse, ToolUse: tu})
 		return Block{Kind: BlockToolUse, ToolUse: tu}, true
 	case "thinking", "redacted_thinking":

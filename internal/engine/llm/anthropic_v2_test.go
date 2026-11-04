@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -246,8 +247,8 @@ func TestAnthropicChat_StreamMapsEventsAndUsage(t *testing.T) {
 			require.NoError(t, json.Unmarshal(bs[0], &body))
 			require.Equal(t, "claude-test-x", body["model"])
 			require.Equal(t, true, body["stream"])
-			require.EqualValues(t, defaultMaxTokens, body["max_tokens"])
-			require.NotContains(t, body, "thinking")
+			require.EqualValues(t, 64000, body["max_tokens"])
+			require.Equal(t, map[string]any{"type": "adaptive", "display": "summarized"}, body["thinking"])
 			require.Equal(t, map[string]string{"$.system[1]": "1h", "$.messages[2].content[0]": "5m"}, cacheControls(t, bs[0]))
 		})
 	}
@@ -260,20 +261,30 @@ func mustJSON(t *testing.T, v any) []byte {
 	return b
 }
 
-func TestAnthropicChat_ThinkingReplayedOnlyToSameModel(t *testing.T) {
-	srv, bodies := anthropicSSEServer(t,
+// Thinking blocks are replayed unchanged, signature included, to EVERY
+// Anthropic model, not only the one that produced them: the API drops what the
+// target model cannot read (user decision, 2026-11-04). Only a non-Anthropic
+// provider loses them (TestEntry_ReplayForDropsOnlyOtherProvidersReasoning).
+func TestAnthropicChat_ThinkingReplayedUnchangedToAnyAnthropicModel(t *testing.T) {
+	srv, _ := anthropicSSEServer(t,
 		sseEvent("message_start", msgStartFull),
 		sseEvent("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`),
 		sseEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"let me think"}}`),
 		sseEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"SIG-abc"}}`),
 		sseEvent("content_block_stop", `{"type":"content_block_stop","index":0}`),
-		sseEvent("content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}`),
-		sseEvent("content_block_delta", `{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"done"}}`),
+		// display "omitted": an empty thinking string, only a signature.
+		sseEvent("content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"thinking","thinking":"","signature":""}}`),
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":1,"delta":{"type":"signature_delta","signature":"SIG-empty"}}`),
 		sseEvent("content_block_stop", `{"type":"content_block_stop","index":1}`),
+		sseEvent("content_block_start", `{"type":"content_block_start","index":2,"content_block":{"type":"redacted_thinking","data":"REDACTED-1"}}`),
+		sseEvent("content_block_stop", `{"type":"content_block_stop","index":2}`),
+		sseEvent("content_block_start", `{"type":"content_block_start","index":3,"content_block":{"type":"text","text":""}}`),
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":"done"}}`),
+		sseEvent("content_block_stop", `{"type":"content_block_stop","index":3}`),
 		sseEvent("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}`),
 		sseEvent("message_stop", `{"type":"message_stop"}`),
 	)
-	chat := NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL, ThinkingBudget: 9000})
+	chat := NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL})
 	b := NewBuilder()
 	require.NoError(t, b.Add(Item{ID: "turn", Hook: HookTurn, Text: "q"}))
 	var reasoning []*Reasoning
@@ -283,33 +294,36 @@ func TestAnthropicChat_ThinkingReplayedOnlyToSameModel(t *testing.T) {
 		}
 	})
 	require.NoError(t, err)
-	require.Len(t, reasoning, 1)
+	require.Len(t, reasoning, 3)
 	require.Equal(t, "anthropic", reasoning[0].Provider)
 	require.Equal(t, "claude-test-x", reasoning[0].Model)
 	require.JSONEq(t, `{"type":"thinking","thinking":"let me think","signature":"SIG-abc"}`, string(reasoning[0].Native))
+	require.JSONEq(t, `{"type":"thinking","signature":"SIG-empty"}`, string(reasoning[1].Native))
+	require.JSONEq(t, `{"type":"redacted_thinking","data":"REDACTED-1"}`, string(reasoning[2].Native))
 
-	// The request asked for thinking with the budget, and max_tokens above it.
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(bodies()[0], &body))
-	require.Equal(t, map[string]any{"type": "enabled", "budget_tokens": float64(9000)}, body["thinking"])
-	require.EqualValues(t, 9000+defaultMaxTokens, body["max_tokens"])
-
-	// Put the turn and the answer into history and render for both models.
 	hist := NewBuilder()
 	require.NoError(t, hist.Add(Item{ID: "u", Hook: HookConversation, Entry: &Entry{ID: "u", Role: RoleUser, Blocks: []Block{{Kind: BlockText, Text: "q"}}}}))
 	require.NoError(t, hist.Add(Item{ID: "a", Hook: HookConversation, Entry: &Entry{ID: "a", Role: RoleAssistant, Blocks: resp.Blocks}}))
 	require.NoError(t, hist.Add(Item{ID: "turn", Hook: HookTurn, Text: "next"}))
 	snap := hist.Snapshot()
 
-	same, err := json.Marshal(renderAnthropic(snap, "claude-test-x", AnthropicOptions{}))
-	require.NoError(t, err)
-	require.Contains(t, string(same), `{"signature":"SIG-abc","thinking":"let me think","type":"thinking"}`)
-
-	other, err := json.Marshal(renderAnthropic(snap, "claude-test-y", AnthropicOptions{}))
-	require.NoError(t, err)
-	require.NotContains(t, string(other), `"thinking"`)
-	require.NotContains(t, string(other), "SIG-abc")
-	require.Contains(t, string(other), `"text":"done"`)
+	// The same assistant content, in order, for the producing model and for
+	// a different Anthropic model alike.
+	want := `[{"signature":"SIG-abc","thinking":"let me think","type":"thinking"},{"signature":"SIG-empty","thinking":"","type":"thinking"},{"data":"REDACTED-1","type":"redacted_thinking"},{"text":"done","type":"text"}]`
+	for _, model := range []string{"claude-test-x", "claude-test-y"} {
+		raw, err := json.Marshal(renderAnthropic(snap, model, AnthropicOptions{}))
+		require.NoError(t, err)
+		var req struct {
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &req))
+		require.Len(t, req.Messages, 3, model)
+		require.Equal(t, "assistant", req.Messages[1].Role, model)
+		require.Equal(t, want, string(req.Messages[1].Content), model)
+	}
 }
 
 func TestAnthropicChat_HTTPErrorIsReturned(t *testing.T) {
@@ -328,9 +342,365 @@ func TestAnthropicChat_HTTPErrorIsReturned(t *testing.T) {
 }
 
 func TestAnthropicChat_Caps(t *testing.T) {
-	c := NewAnthropicChat("claude-test-x", AnthropicOptions{ContextWindow: 123456, MaxOutput: 777})
+	c := NewAnthropicChat("claude-test-x", AnthropicOptions{ContextWindow: 123456, Profile: ModelProfile{MaxOutput: 777}})
 	require.Equal(t, Caps{Tools: true, MaxBreakpoints: 4, ContextWindow: 123456, MaxOutput: 777}, c.Caps())
-	require.Equal(t, Caps{Tools: true, MaxBreakpoints: 4, ContextWindow: 200000, MaxOutput: 8192}, NewAnthropicChat("m", AnthropicOptions{}).Caps())
+	require.Equal(t, Caps{Tools: true, MaxBreakpoints: 4, ContextWindow: 200000, MaxOutput: 64000}, NewAnthropicChat("m", AnthropicOptions{}).Caps())
 	require.Equal(t, "anthropic", c.Provider())
 	require.Equal(t, "claude-test-x", c.Model())
+}
+
+// scriptedServer answers POST /v1/messages by running script, which writes
+// SSE events and may flush and wait; bodies records each request body.
+func scriptedServer(t *testing.T, script func(w http.ResponseWriter, r *http.Request, flush func())) (*httptest.Server, func() [][]byte) {
+	t.Helper()
+	var (
+		mu     sync.Mutex
+		bodies [][]byte
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, b)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fl, _ := w.(http.Flusher)
+		script(w, r, func() {
+			if fl != nil {
+				fl.Flush()
+			}
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() [][]byte {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([][]byte(nil), bodies...)
+	}
+}
+
+func writeEvents(w io.Writer, events ...string) {
+	for _, e := range events {
+		_, _ = io.WriteString(w, e)
+	}
+}
+
+func textEndStream(stop, deltaExtra string) []string {
+	return []string{
+		sseEvent("message_start", msgStartFull),
+		sseEvent("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`),
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`),
+		sseEvent("content_block_stop", `{"type":"content_block_stop","index":0}`),
+		sseEvent("message_delta", `{"type":"message_delta","delta":{"stop_reason":"`+stop+`","stop_sequence":null`+deltaExtra+`},"usage":{"output_tokens":44}}`),
+		sseEvent("message_stop", `{"type":"message_stop"}`),
+	}
+}
+
+func oneTurn(t *testing.T) Snapshot {
+	t.Helper()
+	b := NewBuilder()
+	require.NoError(t, b.Add(Item{ID: "turn", Hook: HookTurn, Text: "q"}))
+	return b.Snapshot()
+}
+
+// One request shape for every Anthropic model: adaptive thinking with an
+// explicit display, an explicit effort, max_tokens from the profile, and none
+// of the fields current models reject.
+func TestAnthropicChat_RequestShapeFromProfile(t *testing.T) {
+	cases := []struct {
+		name     string
+		profile  ModelProfile
+		thinking map[string]any
+		effort   string
+		max      float64
+	}{
+		{"defaults", ModelProfile{}, map[string]any{"type": "adaptive", "display": "summarized"}, "medium", 64000},
+		{"profile", ModelProfile{Effort: EffortXHigh, MaxOutput: 32000, ThinkingDisplay: DisplayOmitted}, map[string]any{"type": "adaptive", "display": "omitted"}, "xhigh", 32000},
+		{"sonnet-like", ModelProfile{Effort: EffortHigh}, map[string]any{"type": "adaptive", "display": "summarized"}, "high", 64000},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, bodies := anthropicSSEServer(t, textEndStream("end_turn", "")...)
+			chat := NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL, Profile: tc.profile})
+			_, err := chat.Stream(context.Background(), prefixSnapshot(t, false), StreamOptions{}, nil)
+			require.NoError(t, err)
+			bs := bodies()
+			require.Len(t, bs, 1)
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(bs[0], &body))
+			require.Equal(t, tc.thinking, body["thinking"])
+			require.Equal(t, map[string]any{"effort": tc.effort}, body["output_config"])
+			require.EqualValues(t, tc.max, body["max_tokens"])
+			for _, k := range []string{"tool_choice", "temperature", "top_p", "top_k"} {
+				require.NotContains(t, body, k)
+			}
+			require.NotContains(t, string(bs[0]), "budget_tokens")
+			require.NotContains(t, string(bs[0]), `"disabled"`)
+		})
+	}
+
+	// A per-request MaxOutput still overrides the profile.
+	srv, bodies := anthropicSSEServer(t, textEndStream("end_turn", "")...)
+	chat := NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL})
+	_, err := chat.Stream(context.Background(), oneTurn(t), StreamOptions{MaxOutput: 1234}, nil)
+	require.NoError(t, err)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(bodies()[0], &body))
+	require.EqualValues(t, 1234, body["max_tokens"])
+
+	// An unknown effort or display fails before any request is sent.
+	for _, p := range []ModelProfile{{Effort: "turbo"}, {ThinkingDisplay: "full"}} {
+		srv, bodies := anthropicSSEServer(t, textEndStream("end_turn", "")...)
+		chat := NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL, Profile: p})
+		_, err := chat.Stream(context.Background(), oneTurn(t), StreamOptions{}, nil)
+		require.ErrorContains(t, err, "unknown")
+		require.Empty(t, bodies())
+	}
+}
+
+// max_tokens and refusal are not answers: they come back as a *StopError
+// carrying the partial response, with no EventDone. pause_turn is a normal
+// response.
+func TestAnthropicChat_StopReasons(t *testing.T) {
+	run := func(t *testing.T, events []string) (*Response, error, []Event) {
+		srv, _ := anthropicSSEServer(t, events...)
+		chat := NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL})
+		var got []Event
+		resp, err := chat.Stream(context.Background(), oneTurn(t), StreamOptions{}, func(e Event) { got = append(got, e) })
+		return resp, err, got
+	}
+
+	t.Run("max_tokens", func(t *testing.T) {
+		resp, err, got := run(t, textEndStream("max_tokens", ""))
+		require.Nil(t, resp)
+		require.ErrorIs(t, err, ErrTruncated)
+		require.NotErrorIs(t, err, ErrRefused)
+		var se *StopError
+		require.ErrorAs(t, err, &se)
+		require.Equal(t, StopMaxTokens, se.Reason)
+		require.Equal(t, "partial", se.Response.Blocks[0].Text)
+		require.Equal(t, int64(44), se.Response.Usage.Output)
+		require.Equal(t, []Event{{Kind: EventTextDelta, Text: "partial"}}, got) // no EventDone
+		require.False(t, isRetryable(err))
+	})
+	t.Run("refusal", func(t *testing.T) {
+		_, err, got := run(t, textEndStream("refusal", `,"stop_details":{"type":"refusal","category":"cyber","explanation":"x"}`))
+		require.ErrorIs(t, err, ErrRefused)
+		var se *StopError
+		require.ErrorAs(t, err, &se)
+		require.Equal(t, StopRefusal, se.Reason)
+		require.Equal(t, "cyber", se.Category)
+		require.Equal(t, "llm: the model declined this request (category: cyber)", err.Error())
+		require.Len(t, got, 1)
+		require.False(t, isRetryable(err))
+	})
+	t.Run("refusal without details", func(t *testing.T) {
+		_, err, _ := run(t, textEndStream("refusal", ""))
+		var se *StopError
+		require.ErrorAs(t, err, &se)
+		require.Equal(t, "", se.Category)
+		require.Equal(t, "llm: the model declined this request", err.Error())
+	})
+	t.Run("pause_turn", func(t *testing.T) {
+		resp, err, got := run(t, textEndStream("pause_turn", ""))
+		require.NoError(t, err)
+		require.Equal(t, StopPauseTurn, resp.StopReason)
+		require.Equal(t, "partial", resp.Blocks[0].Text)
+		require.Equal(t, EventDone, got[len(got)-1].Kind)
+	})
+}
+
+// Arguments the model streams as invalid JSON never reach the neutral history
+// as invalid JSON: Args is {}, the bytes are in RawArgs, and ArgsErr is the
+// typed error the loop turns into a tool error. The entry still marshals,
+// canonicalizes and renders.
+func TestAnthropicChat_InvalidToolArgsAreTyped(t *testing.T) {
+	srv, _ := anthropicSSEServer(t,
+		sseEvent("message_start", msgStartFull),
+		sseEvent("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"knomit_query","input":{}}}`),
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"q\":"}}`),
+		sseEvent("content_block_stop", `{"type":"content_block_stop","index":0}`),
+		sseEvent("message_delta", `{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":5}}`),
+		sseEvent("message_stop", `{"type":"message_stop"}`),
+	)
+	chat := NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL})
+	var events []Event
+	resp, err := chat.Stream(context.Background(), oneTurn(t), StreamOptions{NewID: func() string { return "tu_7" }}, func(e Event) { events = append(events, e) })
+	require.NoError(t, err)
+	tu := resp.Blocks[0].ToolUse
+	require.Equal(t, `{}`, string(tu.Args))
+	require.Equal(t, `{"q":`, tu.RawArgs)
+	require.Same(t, tu, events[0].ToolUse)
+
+	argsErr := tu.ArgsErr()
+	require.ErrorIs(t, argsErr, ErrInvalidToolArgs)
+	var ia *InvalidToolArgsError
+	require.ErrorAs(t, argsErr, &ia)
+	require.Equal(t, InvalidToolArgsError{ToolUseID: "tu_7", Name: "knomit_query", Raw: `{"q":`}, *ia)
+	require.NoError(t, (&ToolUse{Args: json.RawMessage(`{}`)}).ArgsErr())
+
+	entry := &Entry{ID: "a", Role: RoleAssistant, Blocks: resp.Blocks}
+	_, err = json.Marshal(entry)
+	require.NoError(t, err)
+	b := NewBuilder()
+	require.NoError(t, b.Add(Item{ID: "a", Hook: HookConversation, Entry: entry}))
+	require.NoError(t, b.Add(Item{ID: "turn", Hook: HookTurn, Text: "next"}))
+	snap := b.Snapshot()
+	require.Contains(t, string(snap.CanonicalPrefix(HookTurn)), `"raw_args":"{\"q\":"`)
+	raw, err := json.Marshal(renderAnthropic(snap, "claude-test-x", AnthropicOptions{}))
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"id":"tu_7","input":{},"name":"knomit_query"`)
+}
+
+// Every stream event calls Progress, including the thinking, signature and
+// tool-argument deltas that never reach the sink.
+func TestAnthropicChat_ProgressOnEveryStreamEvent(t *testing.T) {
+	events := []string{
+		sseEvent("message_start", msgStartFull),
+		sseEvent("ping", `{"type":"ping"}`), // the SDK swallows pings
+		sseEvent("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`),
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}`),
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"S"}}`),
+		sseEvent("content_block_stop", `{"type":"content_block_stop","index":0}`),
+		sseEvent("content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"knomit_learn","input":{}}}`),
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"body\":"}}`),
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"long\"}"}}`),
+		sseEvent("content_block_stop", `{"type":"content_block_stop","index":1}`),
+		sseEvent("message_delta", `{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":5}}`),
+		sseEvent("message_stop", `{"type":"message_stop"}`),
+	}
+	srv, _ := anthropicSSEServer(t, events...)
+	chat := NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL})
+	var trail []string // "p" per Progress, the event kind per sink event
+	_, err := chat.Stream(context.Background(), oneTurn(t), StreamOptions{Progress: func() { trail = append(trail, "p") }},
+		func(e Event) { trail = append(trail, string(e.Kind)) })
+	require.NoError(t, err)
+	// 11 non-ping events, each one Progress; the sink sees the reasoning at
+	// the thinking block's stop, the tool_use at its stop, and done.
+	require.Equal(t, []string{
+		"p",           // message_start
+		"p", "p", "p", // thinking start, thinking_delta, signature_delta
+		"p", "reasoning", // thinking stop
+		"p", "p", "p", // tool_use start, two input_json_deltas
+		"p", "tool_use", // tool_use stop
+		"p", "p", // message_delta, message_stop
+		"done",
+	}, trail)
+}
+
+// End to end through WrapChat: a stream that thinks past AttemptTimeout before
+// its first sink event is alive and is not cut off; a server that sends
+// nothing for AttemptTimeout is a stall.
+func TestWrapChat_AnthropicThinkingIsNotAStall(t *testing.T) {
+	const timeout = 60 * time.Millisecond
+	policy := Policy{AttemptTimeout: timeout} // anthropic's budget: no retries
+
+	t.Run("thinking keeps it alive", func(t *testing.T) {
+		srv, bodies := scriptedServer(t, func(w http.ResponseWriter, r *http.Request, flush func()) {
+			writeEvents(w,
+				sseEvent("message_start", msgStartFull),
+				sseEvent("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`),
+				sseEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"long thought"}}`))
+			flush()
+			time.Sleep(4 * timeout) // thinking, with no sink event yet
+			writeEvents(w,
+				sseEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"S"}}`),
+				sseEvent("content_block_stop", `{"type":"content_block_stop","index":0}`))
+			writeEvents(w, textEndStream("end_turn", "")[1:]...)
+		})
+		chat := WrapChat(NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL}), policy)
+		resp, err := chat.Stream(context.Background(), oneTurn(t), StreamOptions{}, nil)
+		require.NoError(t, err)
+		require.Equal(t, StopEndTurn, resp.StopReason)
+		require.Equal(t, BlockReasoning, resp.Blocks[0].Kind)
+		require.Equal(t, "partial", resp.Blocks[1].Text)
+		require.Len(t, bodies(), 1)
+	})
+
+	t.Run("silence is a stall", func(t *testing.T) {
+		srv, _ := scriptedServer(t, func(w http.ResponseWriter, r *http.Request, flush func()) {
+			flush() // headers only
+			select {
+			case <-time.After(10 * timeout):
+			case <-r.Context().Done():
+				return
+			}
+			writeEvents(w, textEndStream("end_turn", "")...)
+		})
+		chat := WrapChat(NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL}), policy)
+		_, err := chat.Stream(context.Background(), oneTurn(t), StreamOptions{}, nil)
+		require.ErrorIs(t, err, errAttemptStalled)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+}
+
+// An SSE error event after message_start (an overload mid-stream) is an
+// error, after whatever text already streamed, and there is no EventDone.
+func TestAnthropicChat_MidStreamErrorEvent(t *testing.T) {
+	srv, _ := anthropicSSEServer(t,
+		sseEvent("message_start", msgStartFull),
+		sseEvent("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`),
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}}`),
+		sseEvent("error", `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`),
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"NEVER"}}`),
+	)
+	chat := NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL})
+	var got []Event
+	resp, err := chat.Stream(context.Background(), oneTurn(t), StreamOptions{}, func(e Event) { got = append(got, e) })
+	require.Nil(t, resp)
+	require.ErrorContains(t, err, "overloaded_error")
+	require.Equal(t, []Event{{Kind: EventTextDelta, Text: "Hel"}}, got)
+
+	// Through WrapChat the text already reached the sink, so it is not
+	// retried even under a budget that would allow it.
+	f := 0
+	wrapped := WrapChat(NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL}), Policy{MaxRetries: 2})
+	_, err = wrapped.Stream(context.Background(), oneTurn(t), StreamOptions{}, func(Event) { f++ })
+	require.ErrorContains(t, err, "overloaded_error")
+	require.Equal(t, 1, f)
+}
+
+// Cancelling the context mid-stream ends Stream promptly with the
+// cancellation, and no EventDone.
+func TestAnthropicChat_CancelMidStream(t *testing.T) {
+	srv, _ := scriptedServer(t, func(w http.ResponseWriter, r *http.Request, flush func()) {
+		writeEvents(w, textEndStream("end_turn", "")[:3]...)
+		flush()
+		<-r.Context().Done() // the client went away
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	chat := NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL})
+	var got []Event
+	start := time.Now()
+	resp, err := chat.Stream(ctx, oneTurn(t), StreamOptions{}, func(e Event) {
+		got = append(got, e)
+		cancel() // the user hits stop on the first text
+	})
+	require.Nil(t, resp)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Less(t, time.Since(start), 5*time.Second)
+	require.Equal(t, []Event{{Kind: EventTextDelta, Text: "partial"}}, got)
+}
+
+// AnthropicPrefixJSON is exactly the "system" and "tools" bytes of the HTTP
+// body the API receives.
+func TestAnthropicPrefixJSON_EqualsReceivedBody(t *testing.T) {
+	srv, bodies := anthropicSSEServer(t, textEndStream("end_turn", "")...)
+	snap := prefixSnapshot(t, true)
+	chat := NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL})
+	_, err := chat.Stream(context.Background(), snap, StreamOptions{}, nil)
+	require.NoError(t, err)
+
+	var received, exported map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(bodies()[0], &received))
+	prefix, err := AnthropicPrefixJSON(snap, "claude-test-x")
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(prefix, &exported))
+	require.Len(t, exported, 2)
+	for _, k := range []string{"system", "tools"} {
+		require.NotEmpty(t, received[k], k)
+		require.Equal(t, string(received[k]), string(exported[k]), k)
+	}
+	require.Contains(t, string(received["system"]), "FRAME B")
 }

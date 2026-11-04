@@ -1,12 +1,25 @@
 package llm
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+)
 
 // The neutral history: knomit's own, provider-independent record of a
 // conversation. Each adapter converts it to its native shape on every request
 // and the stored form never takes a provider's shape (no cache_control, no
 // provider tool-call ids, no tool-name matching). That is what makes a
 // mid-chat provider or model switch possible later.
+//
+// The history is APPEND-ONLY (user decision, 2026-11-04). Nothing edits,
+// reorders, trims or removes an earlier entry, its tool results included:
+// current Anthropic models bind each thinking block to the exact system,
+// tools and earlier messages it was produced after, and on accounts created
+// on or after 2026-08-31 replaying a block after such an edit is a 400. The
+// Builder refuses Replace and Remove in HookConversation for that reason.
+// Shrinking a long conversation is left to the provider's server-side context
+// editing or compaction, which do not count as edits (deferred work).
 
 // Role is the speaker of an Entry.
 type Role string
@@ -45,15 +58,45 @@ type Block struct {
 }
 
 // ToolUse is a model's tool call. ID is knomit-assigned ("tu_<n>"), never the
-// provider's.
+// provider's. Args is always valid JSON. When the model streamed arguments
+// that are not valid JSON, the adapter stores Args as {} and keeps the bytes
+// it received in RawArgs, so the entry still marshals and renders; ArgsErr
+// then reports the problem, and the caller answers the call with a tool error
+// instead of running it.
 type ToolUse struct {
-	ID   string          `json:"id"`
-	Name string          `json:"name"`
-	Args json.RawMessage `json:"args"`
+	ID      string          `json:"id"`
+	Name    string          `json:"name"`
+	Args    json.RawMessage `json:"args"`
+	RawArgs string          `json:"raw_args,omitempty"`
 }
 
-// ToolResult answers the ToolUse whose ID it names. Elided marks a result the
-// trimmer replaced with a stub; the full result is kept outside the context.
+// ErrInvalidToolArgs is what an *InvalidToolArgsError Is.
+var ErrInvalidToolArgs = errors.New("llm: tool arguments are not valid JSON")
+
+// InvalidToolArgsError names a tool call whose streamed arguments were not
+// valid JSON. Raw is what the model sent.
+type InvalidToolArgsError struct {
+	ToolUseID, Name, Raw string
+}
+
+func (e *InvalidToolArgsError) Error() string {
+	return fmt.Sprintf("llm: tool call %s (%s): arguments are not valid JSON: %q", e.ToolUseID, e.Name, e.Raw)
+}
+
+func (e *InvalidToolArgsError) Unwrap() error { return ErrInvalidToolArgs }
+
+// ArgsErr is nil for a call whose arguments parsed, and an
+// *InvalidToolArgsError otherwise.
+func (t ToolUse) ArgsErr() error {
+	if t.RawArgs == "" {
+		return nil
+	}
+	return &InvalidToolArgsError{ToolUseID: t.ID, Name: t.Name, Raw: t.RawArgs}
+}
+
+// ToolResult answers the ToolUse whose ID it names. Elided is reserved and
+// unused: the history is append-only, so nothing replaces an earlier result
+// with a stub (see the package note on the neutral history).
 type ToolResult struct {
 	ToolUseID string `json:"tool_use_id"`
 	Content   string `json:"content"`
@@ -62,8 +105,9 @@ type ToolResult struct {
 }
 
 // Reasoning is a provider-bound reasoning artifact (an Anthropic thinking
-// block with its signature, say). Native is the provider's own encoding and is
-// replayed only to the exact Provider+Model that produced it.
+// block with its signature, say). Native is the provider's own encoding.
+// Model records which model produced it; it does not limit where it is
+// replayed (see ReplayFor).
 type Reasoning struct {
 	Provider string          `json:"provider"`
 	Model    string          `json:"model"`
@@ -90,14 +134,21 @@ type Usage struct {
 	Estimated  bool  `json:"estimated,omitempty"`
 }
 
-// ReplayFor returns e as it may be sent to provider/model: reasoning produced
-// by any other provider or model is dropped, everything else is kept in
+// ReplayFor returns e as it may be sent to provider: reasoning produced by a
+// DIFFERENT provider is dropped, everything else is kept unchanged and in
 // order. The receiver is not modified.
-func (e Entry) ReplayFor(provider, model string) Entry {
+//
+// Reasoning from the same provider is replayed to every model of it, whichever
+// model produced it (user decision, 2026-11-04). Anthropic's API reads the
+// thinking blocks the target model can read and drops the rest itself,
+// silently and unbilled; stripping them here would lose reasoning the target
+// could have read (Haiku 5.5 → Sonnet 5.5 → Opus 5.5 read upward) and edit the
+// history the later blocks are bound to.
+func (e Entry) ReplayFor(provider string) Entry {
 	out := e
 	out.Blocks = make([]Block, 0, len(e.Blocks))
 	for _, b := range e.Blocks {
-		if b.Kind == BlockReasoning && (b.Reasoning == nil || b.Reasoning.Provider != provider || b.Reasoning.Model != model) {
+		if b.Kind == BlockReasoning && (b.Reasoning == nil || b.Reasoning.Provider != provider) {
 			continue
 		}
 		out.Blocks = append(out.Blocks, b)

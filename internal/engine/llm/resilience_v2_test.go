@@ -119,6 +119,52 @@ func TestWrapChat_AttemptTimeoutIsTimeToFirstEvent(t *testing.T) {
 	require.ErrorIs(t, err, errAttemptStalled)
 }
 
+// progressChat calls StreamOptions.Progress, then stays silent toward the
+// sink for hold, then answers (or fails with err).
+type progressChat struct {
+	fakeChat
+	hold time.Duration
+	err  error
+}
+
+func (p *progressChat) Stream(ctx context.Context, _ Snapshot, o StreamOptions, sink func(Event)) (*Response, error) {
+	p.attempts.Add(1)
+	if o.Progress != nil {
+		o.Progress() // a thinking delta: alive, but nothing for the sink
+	}
+	select {
+	case <-time.After(p.hold):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if p.err != nil {
+		return nil, p.err
+	}
+	sink(Event{Kind: EventTextDelta, Text: "answer"})
+	return &Response{StopReason: StopEndTurn}, nil
+}
+
+// Progress is life: an attempt that reported progress but sent the sink
+// nothing for longer than AttemptTimeout is not a stall. It is still
+// retryable, because nothing reached the caller.
+func TestWrapChat_ProgressCountsAsActivity(t *testing.T) {
+	var callerProgress int
+	p := &progressChat{hold: 150 * time.Millisecond}
+	var texts []string
+	_, err := WrapChat(p, Policy{AttemptTimeout: 40 * time.Millisecond}).
+		Stream(context.Background(), Snapshot{}, StreamOptions{Progress: func() { callerProgress++ }}, collect(&texts))
+	require.NoError(t, err)
+	require.EqualValues(t, 1, p.attempts.Load())
+	require.Equal(t, []string{"answer"}, texts)
+	require.Equal(t, 1, callerProgress) // the caller's own Progress still runs
+
+	// A failure after progress only (no sink event) may be retried.
+	p2 := &progressChat{hold: time.Millisecond, err: errOverloaded}
+	_, err = WrapChat(p2, Policy{MaxRetries: 1}).Stream(context.Background(), Snapshot{}, StreamOptions{}, nil)
+	require.ErrorIs(t, err, errOverloaded)
+	require.EqualValues(t, 2, p2.attempts.Load())
+}
+
 func TestWrapChat_KeepsCaps(t *testing.T) {
 	f := &fakeChat{caps: Caps{Tools: true, MaxBreakpoints: 3, ContextWindow: 4242, MaxOutput: 99}}
 	w := WrapChat(f, policyFor("anthropic"))
@@ -175,4 +221,27 @@ func TestTracingChat_WritesOneLinePerRequest(t *testing.T) {
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+// A truncated or refused response still used tokens: the trace line keeps its
+// stop reason, blocks and usage next to the error.
+func TestTracingChat_RecordsStopErrorResponse(t *testing.T) {
+	stop := &StopError{Reason: StopMaxTokens, Response: &Response{
+		Blocks: []Block{{Kind: BlockText, Text: "cut"}}, StopReason: StopMaxTokens, Usage: Usage{Input: 3, Output: 64000},
+	}}
+	f := &fakeChat{script: []func(context.Context, func(Event)) (*Response, error){fail(stop)}}
+	path := filepath.Join(t.TempDir(), "trace.jsonl")
+	tr, c, err := NewTracingChat(f, path)
+	require.NoError(t, err)
+	_, err = tr.Stream(context.Background(), Snapshot{}, StreamOptions{}, nil)
+	require.ErrorIs(t, err, ErrTruncated)
+	require.NoError(t, c.Close())
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var line map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw, &line))
+	require.JSONEq(t, `"max_tokens"`, string(line["stop_reason"]))
+	require.JSONEq(t, `{"input":3,"cache_read":0,"cache_write":0,"output":64000}`, string(line["usage"]))
+	require.Contains(t, string(line["blocks"]), `"text":"cut"`)
+	require.JSONEq(t, `"llm: the response hit the output token limit before it finished"`, string(line["error"]))
 }
