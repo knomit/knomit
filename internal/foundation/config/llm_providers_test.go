@@ -99,6 +99,7 @@ func TestLLMProviders_ShippedExample(t *testing.T) {
 		CacheReadMult: 0.1, CacheWrite5mMult: 1.25, CacheWrite1hMult: 2, WarnPromptTokens: 95000,
 	}, h.Price)
 	s := p.ModelDefaults["claude-sonnet-5-5"]
+	require.Equal(t, "high", s.Effort, "Sonnet 5.5's documented default effort")
 	require.Equal(t, 2.0, s.Price.Tiers[0].InputPerMTok)
 	require.Equal(t, 10.0, s.Price.Tiers[0].OutputPerMTok)
 	o := p.ModelDefaults["claude-opus-5-5"]

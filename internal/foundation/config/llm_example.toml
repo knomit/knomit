@@ -29,7 +29,7 @@ tiers = [
 
 # Sonnet 5.5: $2 / $10 per MTok, cache reads $0.20 per MTok.
 [llm.providers.anthropic.model.claude-sonnet-5-5]
-effort = "medium"
+effort = "high" # Sonnet 5.5's documented default
 max_output_tokens = 64000
 thinking_display = "summarized"
 context_window = 1000000
