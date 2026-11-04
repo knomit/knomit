@@ -39,7 +39,7 @@ vi.mock('./api', async (importOriginal) => {
       fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(), getRepo: vi.fn(), listBranchNames: vi.fn(),
       listRepoCreates: vi.fn(), listExperiments: vi.fn(), listPushedBranches: vi.fn(),
       // The drafts and the pinned targets.
-      createRepo: vi.fn(), createLens: vi.fn(), updateLens: vi.fn(), renameLens: vi.fn(), archiveRepo: vi.fn(), restoreRepo: vi.fn(), purgeRepo: vi.fn(),
+      createRepo: vi.fn(), createLens: vi.fn(), updateLens: vi.fn(), renameLens: vi.fn(), renameRepo: vi.fn(), archiveRepo: vi.fn(), restoreRepo: vi.fn(), purgeRepo: vi.fn(),
       getRepoCreate: vi.fn(), cancelRepoCreate: vi.fn(), dismissRepoCreate: vi.fn(),
       ontologyPresets: vi.fn(), ontologyPresetYAML: vi.fn(), validateOntology: vi.fn(), ontologySchema: vi.fn(), listTemplates: vi.fn(),
     },
@@ -936,6 +936,259 @@ describe('a pinned pending create that is cancelled', () => {
     fireEvent.click(await screen.findByTestId('create-cancel-button'));
     await screen.findByTestId('create-cancelled');
     expect(screen.getByTestId('target-label')).toHaveTextContent('b-kb');
+  });
+});
+
+// #469: a create started by ANOTHER client is seen by the creates poll, but
+// nothing in this tab re-read the repo list for it, so it stayed a "created"
+// pending row until clicked and was missing from the lens draft's mounts.
+describe('a create that finished elsewhere', () => {
+  beforeEach(() => { localStorage.setItem('knomit.rail', '1'); });
+
+  const job = (over: Record<string, unknown> = {}) => ({
+    create_id: 'c-far', name: 'far-kb', mode: 'initialize', state: 'running', step: 'ingest', phase: 'ingest',
+    ...over,
+  });
+  const BASE = [{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-kb', uid: 'u-ops' }];
+  const WITH_FAR = [...BASE, { name: 'far-kb', uid: 'u-far' }];
+
+  it('becomes a real repo row with no click, and a mount the lens draft offers', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    m.listRepoCreates.mockResolvedValue([job()]);
+    await mountApp();
+    expect(await screen.findByTestId('pending-create-rail-far-kb')).toBeInTheDocument();
+
+    // The other client's create finishes; the server lists its repo.
+    m.repos.mockResolvedValue(WITH_FAR);
+    m.listRepoCreates.mockResolvedValue([job({ state: 'done', step: 'done', phase: 'done', index_state: 'ready', repo: { name: 'far-kb', uid: 'u-far' } })]);
+    await act(async () => { await refreshRepoCreates(); });
+
+    expect(await screen.findByTestId('rail-repo-far-kb')).toBeInTheDocument();
+    expect(screen.queryByTestId('pending-create-rail-far-kb')).toBeNull();
+    fireEvent.click(screen.getByTestId('rail-new-lens'));
+    expect(await screen.findByTestId('lens-read-far-kb')).toBeInTheDocument();
+  });
+
+  it('is listed, flagged creating, as soon as it registers — before the job is done', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    m.listRepoCreates.mockResolvedValue([job()]);
+    await mountApp();
+    await screen.findByTestId('pending-create-rail-far-kb');
+
+    m.repos.mockResolvedValue(WITH_FAR);
+    m.listRepoCreates.mockResolvedValue([job({ step: 'index', phase: 'index', index_state: 'indexing', repo: { name: 'far-kb', uid: 'u-far' } })]);
+    await act(async () => { await refreshRepoCreates(); });
+
+    await screen.findByTestId('rail-repo-far-kb');
+    expect(screen.getByTestId('rail-create-chip-far-kb')).toHaveTextContent(/^creating$/);
+    expect(screen.queryByTestId('pending-create-rail-far-kb')).toBeNull();
+  });
+
+  // NON-REGRESSION, not coverage of the fix: this passes without the
+  // re-read too, because PendingCreateSettings asks /repos itself and hands
+  // over on its own. It pins that the re-read does not break that path: the
+  // pending row goes, the auto-unpin effect has no `pending` case so the pin
+  // stays, and the pinned page still hands over to the repository.
+  it('a pinned pending create that registers elsewhere still hands over to its repository', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    m.listRepoCreates.mockResolvedValue([job()]);
+    await mountApp();
+    fireEvent.click(await screen.findByTestId('pending-create-rail-far-kb'));
+    await screen.findByTestId('pending-create-settings');
+
+    m.repos.mockResolvedValue(WITH_FAR);
+    m.listRepoCreates.mockResolvedValue([job({ step: 'index', phase: 'index', index_state: 'indexing', repo: { name: 'far-kb', uid: 'u-far' } })]);
+    await act(async () => { await refreshRepoCreates(); });
+
+    await waitFor(() => expect(screen.getByTestId('rail-repo-far-kb')).toHaveAttribute('aria-current', 'true'));
+    expect(screen.queryByTestId('pending-create-settings')).toBeNull();
+    expect(tabNames()).toEqual(['Settings']);
+    expect(screen.getByTestId('target-label-chip')).toHaveTextContent(/^creating$/);
+  });
+
+  // The cap: "registered and not listed" can hold on every poll (the list
+  // lags the job, or an older server still lists a done job whose repo is
+  // gone), and each poll must not become a /repos read.
+  it('a done job whose repo stays unlisted costs one re-read, not one per poll', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    await mountApp();
+    await waitFor(() => expect(m.repos).toHaveBeenCalled());
+    // Let boot's reads settle before counting.
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    const before = m.repos.mock.calls.length;
+
+    // Every answer is a NEW array, as a real poll's is: a mock that returned
+    // one instance would publish nothing new, and no effect would re-run.
+    m.repos.mockImplementation(async () => [...BASE]);
+    m.listRepoCreates.mockImplementation(async () => [job({ state: 'done', step: 'done', phase: 'done', index_state: 'ready', repo: { name: 'far-kb', uid: 'u-far' } })]);
+    await act(async () => { await refreshRepoCreates(); });
+    await waitFor(() => expect(m.repos.mock.calls.length).toBe(before + 1));
+    for (let i = 0; i < 3; i++) {
+      await act(async () => { await refreshRepoCreates(); });
+    }
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(m.repos.mock.calls.length).toBe(before + 1);
+  });
+
+  // The done point is the retry: a registered-point read that failed must not
+  // leave the repo out of the list for good.
+  it('a failed read at registration is retried when the job is done', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    m.listRepoCreates.mockResolvedValue([job()]);
+    await mountApp();
+    await screen.findByTestId('pending-create-rail-far-kb');
+    const before = m.repos.mock.calls.length;
+
+    m.repos.mockRejectedValueOnce(new Error('blip'));
+    m.repos.mockResolvedValue(WITH_FAR);
+    m.listRepoCreates.mockImplementation(async () => [job({ step: 'index', phase: 'index', index_state: 'indexing', repo: { name: 'far-kb', uid: 'u-far' } })]);
+    await act(async () => { await refreshRepoCreates(); });
+    await waitFor(() => expect(m.repos.mock.calls.length).toBe(before + 1));
+    // Still indexing: the registered point is spent, so no second read.
+    await act(async () => { await refreshRepoCreates(); });
+    expect(m.repos.mock.calls.length).toBe(before + 1);
+    expect(screen.queryByTestId('rail-repo-far-kb')).toBeNull();
+
+    m.listRepoCreates.mockImplementation(async () => [job({ state: 'done', step: 'done', phase: 'done', index_state: 'ready', repo: { name: 'far-kb', uid: 'u-far' } })]);
+    await act(async () => { await refreshRepoCreates(); });
+    expect(await screen.findByTestId('rail-repo-far-kb')).toBeInTheDocument();
+    expect(m.repos.mock.calls.length).toBe(before + 2);
+  });
+
+  it('a cancelled or failed job never triggers a re-read', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    await mountApp();
+    await waitFor(() => expect(m.repos).toHaveBeenCalled());
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    const before = m.repos.mock.calls.length;
+
+    // Both look registered (index_state, a repo uid) and neither is listed.
+    m.listRepoCreates.mockImplementation(async () => [
+      job({ create_id: 'c-x', name: 'x-kb', state: 'cancelled', step: 'index', index_state: 'indexing', repo: { name: 'x-kb', uid: 'u-x' } }),
+      job({ create_id: 'c-y', name: 'y-kb', state: 'failed', step: 'index', index_state: 'indexing', repo: { name: 'y-kb', uid: 'u-y' } }),
+    ]);
+    for (let i = 0; i < 3; i++) {
+      await act(async () => { await refreshRepoCreates(); });
+    }
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(m.repos.mock.calls.length).toBe(before);
+  });
+
+  // Review of #755, reproduced: the effect can fire while boot is still
+  // awaiting the remembered repo's details, after reposLoaded but before boot's
+  // SET_CONTEXT. A re-read that re-synced the context (refreshLists) then
+  // dispatched SET_REPO for the first readable repo, which landed after boot's
+  // SET_CONTEXT and replaced the remembered context, in localStorage too.
+  it('a registered job seen during boot does not move the remembered context', async () => {
+    const { m } = await primeApi();
+    const later = <T,>(v: T, ms: number) => new Promise<T>(r => setTimeout(() => r(v), ms));
+    m.getRepo.mockImplementation((name: string) => later({ name, description: DESCRIPTIONS[name] ?? '' }, 40));
+    m.repos.mockResolvedValueOnce(BASE);
+    m.repos.mockImplementation(() => later(WITH_FAR, 120));
+    m.listRepoCreates.mockResolvedValue([job({ step: 'index', phase: 'index', index_state: 'indexing', repo: { name: 'far-kb', uid: 'u-far' } })]);
+    await mountApp();
+
+    await screen.findByTestId('rail-repo-far-kb', {}, { timeout: 2000 });
+    await act(async () => { await new Promise(r => setTimeout(r, 200)); });
+    expect(screen.getByTestId('target-label').textContent).toBe('ops-kb');
+    expect(JSON.parse(localStorage.getItem('knomit.context') ?? 'null')).toEqual({ kind: 'repo', repo: 'ops-kb' });
+  });
+
+  // An event that lands while the re-read is in flight is newer than its
+  // snapshot: the answer may add the new repo, never undo the event.
+  it('an event during the re-read survives its answer, and the new repo is still added', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    await mountApp();
+    await waitFor(() => expect(latestStream('/api/v1/repo-events')).toBeDefined());
+    let answer: (v: unknown) => void = () => {};
+    m.repos.mockImplementation(() => new Promise(r => { answer = r; }));
+    const before = m.repos.mock.calls.length;
+    m.listRepoCreates.mockResolvedValue([job({ step: 'index', phase: 'index', index_state: 'indexing', repo: { name: 'far-kb', uid: 'u-far' } })]);
+    await act(async () => { await refreshRepoCreates(); });
+    await waitFor(() => expect(m.repos.mock.calls.length).toBe(before + 1));
+
+    act(() => { latestStream('/api/v1/repo-events')!.emit('remote', { repo: 'core-kb', sync: 'ok', push: 'error' }); });
+    expect(await screen.findByTestId('rail-health-core-kb')).toBeInTheDocument();
+    // The snapshot was taken before the event: core-kb has no failing remote in it.
+    await act(async () => { answer(WITH_FAR); });
+
+    expect(await screen.findByTestId('rail-repo-far-kb')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-health-core-kb')).toBeInTheDocument();
+  });
+
+  // Re-review of #755, reproduced: a held answer still carries a repo that a
+  // NEWER whole list (here the stream's reconnect read) has since dropped. It
+  // must not bring that repo back, not even as "a row the list lacks".
+  it('a held answer cannot bring back a repo a newer whole list removed', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    const GONE = [...BASE, { name: 'gone-kb', uid: 'u-gone' }];
+    m.repos.mockResolvedValue(GONE);
+    await mountApp();
+    await screen.findByTestId('rail-repo-gone-kb');
+    await waitFor(() => expect(latestStream('/api/v1/repo-events')).toBeDefined());
+
+    let answer: (v: unknown) => void = () => {};
+    m.repos.mockImplementationOnce(() => new Promise(r => { answer = r; }));
+    const before = m.repos.mock.calls.length;
+    m.listRepoCreates.mockResolvedValue([job({ step: 'index', phase: 'index', index_state: 'indexing', repo: { name: 'far-kb', uid: 'u-far' } })]);
+    await act(async () => { await refreshRepoCreates(); });
+    await waitFor(() => expect(m.repos.mock.calls.length).toBe(before + 1));
+
+    // The stream reconnects and re-reads: gone-kb was deleted meanwhile.
+    m.repos.mockResolvedValue(WITH_FAR);
+    act(() => { latestStream('/api/v1/repo-events')!.emit('ready', {}); });
+    await waitFor(() => expect(screen.queryByTestId('rail-repo-gone-kb')).toBeNull());
+    expect(screen.getByTestId('rail-repo-far-kb')).toBeInTheDocument();
+
+    // The held answer lands, still listing gone-kb.
+    await act(async () => { answer([...GONE, { name: 'far-kb', uid: 'u-far' }]); });
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(screen.queryByTestId('rail-repo-gone-kb')).toBeNull();
+    expect(screen.getByTestId('rail-repo-far-kb')).toBeInTheDocument();
+  });
+
+  // The same hole through this tab's own whole-list write: a rename's
+  // refreshLists lands while the read is held, and the held answer still has
+  // the old name. It must neither revert the rename nor add the old name as a
+  // second row for the same repository.
+  it('a rename landing during a held read is neither reverted nor doubled', async () => {
+    const { m } = await primeApi();
+    const { refreshRepoCreates } = await import('./useRepoCreates');
+    await mountApp();
+    await waitFor(() => expect(m.repos).toHaveBeenCalled());
+
+    let answer: (v: unknown) => void = () => {};
+    m.repos.mockImplementationOnce(() => new Promise(r => { answer = r; }));
+    const before = m.repos.mock.calls.length;
+    m.listRepoCreates.mockResolvedValue([job({ step: 'index', phase: 'index', index_state: 'indexing', repo: { name: 'far-kb', uid: 'u-far' } })]);
+    await act(async () => { await refreshRepoCreates(); });
+    await waitFor(() => expect(m.repos.mock.calls.length).toBe(before + 1));
+
+    // ops-kb is renamed to ops-new from its Settings.
+    const RENAMED = [{ name: 'core-kb', uid: 'u-core' }, { name: 'ops-new', uid: 'u-ops' }, { name: 'far-kb', uid: 'u-far' }];
+    m.repos.mockResolvedValue(RENAMED);
+    m.renameRepo.mockResolvedValue({ name: 'ops-new' });
+    fireEvent.click(screen.getByTestId('facet-tab-settings'));
+    fireEvent.change(await screen.findByTestId('repo-rename-input'), { target: { value: 'ops-new' } });
+    fireEvent.change(screen.getByTestId('repo-rename-confirm'), { target: { value: 'ops-kb' } });
+    fireEvent.click(screen.getByTestId('repo-rename-submit'));
+    await screen.findByTestId('rail-repo-ops-new');
+    await waitFor(() => expect(screen.queryByTestId('rail-repo-ops-kb')).toBeNull());
+
+    // The held answer lands with the name from before the rename.
+    await act(async () => { answer([...WITH_FAR]); });
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(screen.queryByTestId('rail-repo-ops-kb')).toBeNull();
+    expect(screen.getByTestId('rail-repo-ops-new')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-repo-far-kb')).toBeInTheDocument();
   });
 });
 

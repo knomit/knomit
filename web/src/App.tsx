@@ -15,7 +15,7 @@ import { openEventStream, streamErrorSuffix } from './eventStream';
 import { adoptAPIBase, isDesktopBooting, pollBootStatus } from './bootStatus';
 import { pickRepo, loadLastContext, saveLastContext, browsableRepo } from './repoSelection';
 import { useListUrl } from './listUrl';
-import { useRepoCreates, activeCreateByRepo, refreshRepoCreates } from './useRepoCreates';
+import { useRepoCreates, activeCreateByRepo, refreshRepoCreates, createRepoIsRegistered, createListedIn } from './useRepoCreates';
 import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable, serverPagesFor, accessTabsFor, railShown, FLEET_FACETS } from './facets';
 import type { Facet, PinnedTarget, DraftKind, ServerPage } from './facets';
 import { TopBar } from './TopBar';
@@ -297,6 +297,33 @@ function statusAction(s: Status): Action {
   };
 }
 
+// mergeMissingRepos adds to `prev` the rows of `next` it does not hold, and
+// changes nothing else: every row `prev` has stays exactly as it is.
+//
+// For a read whose answer is older than an event patch it must not undo (the
+// foreign-create read, when only the event counter moved). A row is "held"
+// by name OR uid, createListedIn's rule, so a repo renamed since the read was
+// asked is not added a second time under its old name.
+//
+// Rows come out in `next`'s order, not appended, because order in this list
+// is not cosmetic: pickRepo falls back to the first readable repo, and an
+// added row at the end would make that fallback depend on which read
+// happened to land first. Rows `prev` holds that `next` lacks are kept, after
+// the others: this merge only adds, and deciding a row is gone belongs to a
+// whole-list write.
+function mergeMissingRepos(prev: RepoInfo[], next: RepoInfo[]): RepoInfo[] {
+  const held = (r: RepoInfo) => prev.find(p => p.name === r.name || (!!r.uid && p.uid === r.uid));
+  if (next.every(r => held(r))) return prev;
+  const used = new Set<RepoInfo>();
+  const out = next.map(r => {
+    const p = held(r);
+    if (p) { used.add(p); return p; }
+    return r;
+  });
+  for (const p of prev) if (!used.has(p)) out.push(p);
+  return out;
+}
+
 export default function App() {
   const [state, dispatch] = useReducer(reducer, init);
   // The view state: which page of the shell is on screen. Its own reducer and
@@ -343,6 +370,13 @@ export default function App() {
   const [serverBooting, setServerBooting] = useState(isDesktopBooting);
   const version = useVersion(!serverBooting);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
+  // Bumped by every write of a WHOLE repo list — boot's, refreshLists',
+  // the repo-events reconnect's, and the foreign-create read's when it
+  // replaces — and by nothing that patches rows. A read that was asked before
+  // it moved knows a newer whole list has landed since, and must not write
+  // any of its older one (see the foreign-create effect). Event patches have
+  // their own counter, repoListGen, by the repo-events stream.
+  const repoFullGen = useRef(0);
   const [lenses, setLenses] = useState<Lens[]>([]);
   const [reposLoaded, setReposLoaded] = useState(false);
   // The archived repos: the rail's Archived group, and the pages pinned from
@@ -519,6 +553,7 @@ export default function App() {
     api.repos()
       .then(async list => {
         if (cancelled) return;
+        repoFullGen.current += 1;
         setRepos(list);
         setReposLoaded(true);
         // The URL's context beats the remembered one: localStorage is shared
@@ -862,7 +897,11 @@ export default function App() {
         // Re-read the list once.
         const gen = ++repoListGen.current;
         api.repos()
-          .then(list => { if (gen === repoListGen.current) setRepos(list); })
+          .then(list => {
+            if (gen !== repoListGen.current) return;
+            repoFullGen.current += 1;
+            setRepos(list);
+          })
           .catch(() => {});
         return;
       }
@@ -1315,6 +1354,7 @@ export default function App() {
       .catch(() => { /* best-effort: the group keeps what it had */ });
     try {
       const { lenses: ls, repos: rs } = await refreshContextAfterChange(dispatch, stateRef.current.context, stateRef.current.repo, {}, isCurrentLens, renamed);
+      repoFullGen.current += 1;
       setLenses(ls); setRepos(rs);
       // Harmless on a repo rename: lenses and repos share one namespace, so a repo's old name never matches a brokenLens pin.
       if (renamed) dispatchView({ type: 'RENAME_PINNED_LENS', from: renamed.from, to: renamed.to });
@@ -1509,6 +1549,117 @@ export default function App() {
       dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: name } });
     });
   }, [dispatch, dispatchView, refreshLists]);
+
+  // A create whose repository is registered but NOT in `repos` means the list
+  // is behind, and nothing else will bring it forward (#469).
+  //
+  // The creates poll (useRepoCreates) sees every job on the server, whoever
+  // started it. The repo list does not: it is re-read by refreshLists after
+  // something THIS tab did, by the draft's own callback for a create started
+  // here, and by the repo-events stream's reconnect. The stream itself only
+  // patches rows it already has (index state, remote health) — it never
+  // announces a newly registered repository. So a create started by another
+  // client, or in another tab, reached `done` here while its repo stayed out
+  // of the list: the rail drew it as a "created" pending row until someone
+  // clicked it, and the lens draft could not mount it at all.
+  //
+  // The trigger is REGISTRATION, not only `done`. A create becomes a real,
+  // browsable repository at m.Add, long before its index finishes, and one
+  // started in this tab is listed from that moment (onRepoDraftRegistered).
+  // A foreign one must be too, or the same repository reads as two different
+  // things depending on which window made it. "Not listed" is pendingCreates'
+  // own test (createListedIn, by name or uid), so the effect re-reads exactly
+  // when the rail would otherwise keep drawing a pending row.
+  //
+  // AT MOST ONCE PER (create, point), for two points: first seen registered,
+  // and first seen done. The second is the retry for the first: a read that
+  // failed, or that answered in the window before the repo was listable (the
+  // job's word that it registered can reach us before /repos says so). The
+  // cap exists because "registered and not listed" is a condition this tab
+  // cannot settle by asking again: the list may lag the job, and a server
+  // that predates the done-job pruning (create_job.go drops a done job whose
+  // repo uid is gone) keeps a deleted repo's job listed for an hour. Without
+  // the cap each of those is a re-read every 2 s poll. A job first seen
+  // already done claims both points at once, so it costs one re-read.
+  //
+  // Skipped: a cancelled job (its repo is being, or was, removed, and the
+  // rail draws nothing for it) and a failed one (CreateFailed promises the
+  // repo does not exist). Gated on reposLoaded so boot's own first read is
+  // not raced by a second.
+  //
+  // A pinned `pending` target is not this effect's business. The auto-unpin
+  // effect above has no `pending` case, so the pin survives the re-read; its
+  // page (PendingCreateSettings) checks the list itself and hands over to the
+  // repository through onCreateRegistered.
+  const createRefetchTried = useRef(new Set<string>());
+  useEffect(() => {
+    if (!reposLoaded) return;
+    const listed = createListedIn(repos);
+    const tried = createRefetchTried.current;
+    let refetch = false;
+    for (const c of creates) {
+      if (c.state === 'cancelled' || c.state === 'failed') continue;
+      if (!(createRepoIsRegistered(c) || c.state === 'done') || listed(c)) continue;
+      for (const point of c.state === 'done' ? ['registered', 'done'] : ['registered']) {
+        const key = `${c.create_id}:${point}`;
+        if (tried.has(key)) continue;
+        tried.add(key);
+        refetch = true;
+      }
+    }
+    if (!refetch) return;
+    // A LIST-ONLY re-read: GET /repos and setRepos, nothing else. NOT
+    // refreshLists, which is the re-sync after a mutation this tab made:
+    // refreshContextAfterChange moves the context (during boot, before boot's
+    // own SET_CONTEXT, it dispatches SET_REPO for the first readable repo,
+    // which lands on top of the remembered or URL context and is written to
+    // localStorage), and in a lens context it re-resolves the lens and
+    // dispatches its write branch's status with no guard against the reader
+    // having left it. A create elsewhere changed one thing here, the set of
+    // repos, and nothing about where the reader is.
+    //
+    // Lenses are not re-read either. A create adds no lens, and a late lens
+    // list landing after a rename's refreshLists would put the old name back
+    // and let the auto-unpin effect drop a renamed brokenLens pin (see the
+    // RENAME_PINNED_LENS note on refreshLists). A lens whose broken mount is
+    // this repo is repaired by `repos` alone: brokenLensMember reads repos.
+    //
+    // TWO generations decide what the answer may do, both SNAPSHOT here and
+    // neither bumped, so this read never retires anyone else's.
+    //
+    // repoFullGen moves on every FULL list write (boot, refreshLists, the
+    // stream's reconnect, this read when it replaces). If it moved, a newer
+    // whole list has landed, and this answer is at best as new as that one
+    // and possibly older: an archive, purge or rename this tab made, or a
+    // repo the reconnect found gone. Any write from it, even "add what is
+    // missing", can bring back a row that list removed (a purged repo, or a
+    // renamed one's old name beside the new) — so it is dropped. The done
+    // point is the retry if that list still lacked the new repo.
+    //
+    // repoListGen moves on every stream EVENT (index state, remote health).
+    // If only it moved, the list is still the one this read was asked about,
+    // patched by something newer than the snapshot. Replacing it would put
+    // back the stale chip the event corrected, but throwing the answer away
+    // is no good either: index events for the new repo itself arrive all
+    // through its index and would void nearly every read, while patching
+    // nothing, since the repo is not in the list. So it only ADDS the rows the
+    // list lacks, matched by name OR uid (createListedIn's rule, so a row
+    // renamed by an event-free path is never doubled), and keeps every row
+    // the list holds exactly as the events made it.
+    //
+    // If neither moved, the answer is the newest list there is: it replaces.
+    const fullAt = repoFullGen.current;
+    const eventsAt = repoListGen.current;
+    api.repos().then(rs => {
+      if (repoFullGen.current !== fullAt) return;
+      if (repoListGen.current === eventsAt) {
+        repoFullGen.current += 1;
+        setRepos(rs);
+        return;
+      }
+      setRepos(prev => mergeMissingRepos(prev, rs));
+    }).catch(() => { /* the done point retries; a failed read lists nothing new */ });
+  }, [creates, repos, reposLoaded]);
 
   // The banner's Reconnect lands on the failing repo's Settings, on its
   // Remote block. In a lens context the failing repo is the lens's write repo
