@@ -1528,20 +1528,19 @@ export default function App() {
   // started in this tab is listed from that moment (onRepoDraftRegistered).
   // A foreign one must be too, or the same repository reads as two different
   // things depending on which window made it. "Not listed" is pendingCreates'
-  // own test (createListedIn, by name or uid), so the effect refetches exactly
+  // own test (createListedIn, by name or uid), so the effect re-reads exactly
   // when the rail would otherwise keep drawing a pending row.
   //
   // AT MOST ONCE PER (create, point), for two points: first seen registered,
-  // and first seen done. The second is the retry: refreshLists swallows a
-  // failed read, and a job first seen mid-index whose read went wrong would
-  // otherwise stay pending until something else refetched. The cap exists
-  // because the
-  // condition can stay true for good: a done job outlives its repo by design
-  // (the server keeps it for an hour), so a repo deleted, or renamed past its
-  // uid's reach, by someone else leaves a job that is "registered and not
-  // listed" on every 2 s poll. Without the cap that is a refetch every poll,
-  // for an hour. A job first seen already done claims both points at once, so
-  // it costs one refetch, not two.
+  // and first seen done. The second is the retry for the first: a read that
+  // failed, or that answered in the window before the repo was listable (the
+  // job's word that it registered can reach us before /repos says so). The
+  // cap exists because "registered and not listed" is a condition this tab
+  // cannot settle by asking again: the list may lag the job, and a server
+  // that predates the done-job pruning (create_job.go drops a done job whose
+  // repo uid is gone) keeps a deleted repo's job listed for an hour. Without
+  // the cap each of those is a re-read every 2 s poll. A job first seen
+  // already done claims both points at once, so it costs one re-read.
   //
   // Skipped: a cancelled job (its repo is being, or was, removed, and the
   // rail draws nothing for it) and a failed one (CreateFailed promises the
@@ -1549,11 +1548,9 @@ export default function App() {
   // not raced by a second.
   //
   // A pinned `pending` target is not this effect's business. The auto-unpin
-  // effect above has no `pending` case, so the pin survives the refetch; its
+  // effect above has no `pending` case, so the pin survives the re-read; its
   // page (PendingCreateSettings) checks the list itself and hands over to the
-  // repository through onCreateRegistered, which refetches once more —
-  // harmless, since refreshLists is a re-read with no side effect beyond the
-  // lists it sets.
+  // repository through onCreateRegistered.
   const createRefetchTried = useRef(new Set<string>());
   useEffect(() => {
     if (!reposLoaded) return;
@@ -1570,8 +1567,42 @@ export default function App() {
         refetch = true;
       }
     }
-    if (refetch) void refreshLists();
-  }, [creates, repos, reposLoaded, refreshLists]);
+    if (!refetch) return;
+    // A LIST-ONLY re-read: GET /repos and setRepos, nothing else. NOT
+    // refreshLists, which is the re-sync after a mutation this tab made:
+    // refreshContextAfterChange moves the context (during boot, before boot's
+    // own SET_CONTEXT, it dispatches SET_REPO for the first readable repo,
+    // which lands on top of the remembered or URL context and is written to
+    // localStorage), and in a lens context it re-resolves the lens and
+    // dispatches its write branch's status with no guard against the reader
+    // having left it. A create elsewhere changed one thing here, the set of
+    // repos, and nothing about where the reader is.
+    //
+    // Lenses are not re-read either. A create adds no lens, and a late lens
+    // list landing after a rename's refreshLists would put the old name back
+    // and let the auto-unpin effect drop a renamed brokenLens pin (see the
+    // RENAME_PINNED_LENS note on refreshLists). A lens whose broken mount is
+    // this repo is repaired by `repos` alone: brokenLensMember reads repos.
+    //
+    // Generation-guarded like the stream's reconnect re-read. An index or
+    // remote event that lands while this is in flight is newer than the
+    // snapshot, and writing the snapshot over it would put back the stale
+    // chip the event had just corrected. A retired answer is still not thrown
+    // away whole, though: index events for the new repo itself arrive all
+    // through its index and would retire nearly every read, while patching
+    // nothing, since the repo is not in the list. So a retired answer only
+    // ADDS the rows the list lacks — the reason it was asked — and leaves
+    // every row the list already holds as the events made it.
+    const gen = ++repoListGen.current;
+    api.repos().then(rs => {
+      if (gen === repoListGen.current) { setRepos(rs); return; }
+      setRepos(prev => {
+        const have = new Set(prev.map(r => r.name));
+        const added = rs.filter(r => !have.has(r.name));
+        return added.length ? [...prev, ...added] : prev;
+      });
+    }).catch(() => { /* the done point retries; a failed read lists nothing new */ });
+  }, [creates, repos, reposLoaded]);
 
   // The banner's Reconnect lands on the failing repo's Settings, on its
   // Remote block. In a lens context the failing repo is the lens's write repo
