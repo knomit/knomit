@@ -118,6 +118,9 @@ type LLMConfig struct {
 	APIKey   string `toml:"api_key"`
 	Cache    bool   `toml:"cache"`
 	Batch    bool   `toml:"batch"`
+
+	// Providers are the chat providers, by name ([llm.providers.<name>]).
+	Providers map[string]LLMProviderConfig `toml:"providers"`
 }
 
 // EmbeddingsConfig selects the embedding model (by registry id).
@@ -727,6 +730,7 @@ func Load() (Config, error) {
 		}
 		warnUndecoded(path, md.Undecoded())
 	}
+	cfg.LLM.applyProviderDefaults()
 	// Restore Home — TOML cannot override it since it's the config search root.
 	cfg.Home = homeBefore
 
@@ -903,6 +907,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.OntologyRoot) == "" {
 		return fmt.Errorf("config: ontology_root must not be empty")
+	}
+	if err := c.LLM.validateProviders(); err != nil {
+		return err
 	}
 	if _, err := c.Session.FactSetAnchorWaitDuration(); err != nil {
 		return err

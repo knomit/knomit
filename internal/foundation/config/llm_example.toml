@@ -1,0 +1,62 @@
+# Example chat providers for knomit.toml. Copy what you need into the file.
+# Model ids, context windows and prices live here, never in code: check them
+# against your provider's current price list before relying on the cost figures.
+# Secrets: prefer api_key_file (mode 0600) or the env var; a plaintext api_key
+# also works, but then knomit.toml itself must stay private.
+
+[llm.providers.anthropic]
+kind = "anthropic"
+api_key_env = "ANTHROPIC_API_KEY"
+# api_key_file = "/path/to/key"   # owner-only; wins over the env var
+models = ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]
+# The chat default is the first listed model.
+
+# Haiku 5.5: $0.10 / $0.50 per MTok up to 100K prompt tokens, $0.50 / $2.50 above.
+[llm.providers.anthropic.model.claude-haiku-5-5]
+effort = "medium"
+max_output_tokens = 64000
+thinking_display = "summarized"
+context_window = 1000000
+[llm.providers.anthropic.model.claude-haiku-5-5.price]
+cache_read_mult = 0.1
+cache_write_5m_mult = 1.25
+cache_write_1h_mult = 2.0
+warn_prompt_tokens = 95000
+tiers = [
+  { up_to_prompt_tokens = 100000, input_per_mtok = 0.10, output_per_mtok = 0.50 },
+  { up_to_prompt_tokens = 0, input_per_mtok = 0.50, output_per_mtok = 2.50 },
+]
+
+# Sonnet 5.5: $2 / $10 per MTok, cache reads $0.20 per MTok.
+[llm.providers.anthropic.model.claude-sonnet-5-5]
+effort = "medium"
+max_output_tokens = 64000
+thinking_display = "summarized"
+context_window = 1000000
+[llm.providers.anthropic.model.claude-sonnet-5-5.price]
+cache_read_mult = 0.1
+cache_write_5m_mult = 1.25
+cache_write_1h_mult = 2.0
+tiers = [{ up_to_prompt_tokens = 0, input_per_mtok = 2.0, output_per_mtok = 10.0 }]
+
+# Opus 5.5: $4 / $20 per MTok, cache reads $0.20 per MTok.
+[llm.providers.anthropic.model.claude-opus-5-5]
+effort = "medium"
+max_output_tokens = 64000
+thinking_display = "summarized"
+context_window = 1000000
+[llm.providers.anthropic.model.claude-opus-5-5.price]
+cache_read_mult = 0.05
+cache_write_5m_mult = 1.25
+cache_write_1h_mult = 2.0
+tiers = [{ up_to_prompt_tokens = 0, input_per_mtok = 4.0, output_per_mtok = 20.0 }]
+
+# A local Ollama is the free development option. The model must advertise the
+# "tools" capability; max_output_tokens must stay below min(num_ctx, trained
+# context length).
+# [llm.providers.local]
+# kind = "ollama"
+# host = "http://localhost:11434"
+# models = ["qwen3:14b"]
+# num_ctx = 32768
+# keep_alive = "30m"
