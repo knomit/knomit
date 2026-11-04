@@ -50,7 +50,7 @@ func TestSweepDeadRuns_RemovesOnlyUnlocked(t *testing.T) {
 	if n != 1 {
 		t.Errorf("SweepDeadRuns removed %d runs, want 1", n)
 	}
-	if exists(t, deadDir) || exists(t, deadDir+RunLockSuffix) {
+	if exists(t, deadDir) || exists(t, deadDir+runLockSuffix) {
 		t.Error("the dead run survived the sweep")
 	}
 	if !exists(t, filepath.Join(live, "keep.txt")) {
@@ -58,7 +58,7 @@ func TestSweepDeadRuns_RemovesOnlyUnlocked(t *testing.T) {
 	}
 
 	release()
-	if exists(t, live) || exists(t, live+RunLockSuffix) {
+	if exists(t, live) || exists(t, live+runLockSuffix) {
 		t.Error("release left the run on disk")
 	}
 	release() // idempotent
@@ -163,7 +163,7 @@ func TestReclaimRun_NeverStripsANewRunOfItsLock(t *testing.T) {
 // RemoveChild refuses every path that is not the layout's.
 func TestRemoveChild_StaysInsideTheLayout(t *testing.T) {
 	base := t.TempDir()
-	run := filepath.Join(base, RunPrefix+"x")
+	run := filepath.Join(base, runPrefix+"x")
 	const sessionPrefix = "session-"
 	for _, p := range []string{
 		filepath.Join(run, "keep-me"),
@@ -178,9 +178,9 @@ func TestRemoveChild_StaysInsideTheLayout(t *testing.T) {
 		{run, filepath.Join(run, sessionPrefix+"y", ".."), sessionPrefix, ""}, // cleans to run
 		{run, filepath.Join(run, sessionPrefix+"y", "z"), sessionPrefix, ""},  // a grandchild
 		{run, run, sessionPrefix, ""},
-		{base, run, RunPrefix, RunLockSuffix}, // a run dir is not a lock file
-		{base, filepath.Join(base, RunPrefix), RunPrefix, ""},
-		{"", run, RunPrefix, ""},
+		{base, run, runPrefix, runLockSuffix}, // a run dir is not a lock file
+		{base, filepath.Join(base, runPrefix), runPrefix, ""},
+		{"", run, runPrefix, ""},
 	} {
 		if RemoveChild(c.parent, c.p, c.prefix, c.suffix) {
 			t.Errorf("RemoveChild(%q, %q, %q, %q) removed a path outside the layout", c.parent, c.p, c.prefix, c.suffix)

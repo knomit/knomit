@@ -25,6 +25,15 @@ import (
 //
 // This test pins the data-model contract: writing RemoteBranch on the
 // session and looking it back up via the manager must round-trip the value.
+// The run-directory layout these tests plant by hand (httpx keeps its own
+// constants unexported): a run is run-<id> beside its lock run-<id>.lock. A
+// change to httpx's layout makes the dead-run tests below fail rather than
+// silently follow it.
+const (
+	runPrefix     = "run-"
+	runLockSuffix = ".lock"
+)
+
 func TestOriginSession_RemoteBranchSurvivesGet(t *testing.T) {
 	sm := newTestSessionManager(t)
 
@@ -295,7 +304,7 @@ func TestSessionManager_ReleasedMeansNothingIsHeld(t *testing.T) {
 	// A dead run's lock file for the startup sweep to find. The sweep is held
 	// open, with the file open, on a gate this test controls (not on a timer),
 	// so it is still running when the lifetime ends however slow setup is.
-	if err := os.WriteFile(filepath.Join(base, httpx.RunPrefix+"dead"+httpx.RunLockSuffix), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(base, runPrefix+"dead"+runLockSuffix), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	sweeping, gate := make(chan struct{}), make(chan struct{})
@@ -433,9 +442,9 @@ func TestSessionManager_StartupSweepReclaimsADeadRun(t *testing.T) {
 
 	keep := []string{
 		filepath.Join(base, "keep-me"),
-		filepath.Join(base, httpx.RunPrefix+"nolock"),
+		filepath.Join(base, runPrefix+"nolock"),
 		filepath.Join(base, sessionDirPrefix+"old-layout"),
-		filepath.Join(parent, httpx.RunPrefix+"outside"),
+		filepath.Join(parent, runPrefix+"outside"),
 	}
 	for _, d := range keep {
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -446,7 +455,7 @@ func TestSessionManager_StartupSweepReclaimsADeadRun(t *testing.T) {
 	if err := os.WriteFile(otherLock, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	outsideLock := filepath.Join(parent, httpx.RunPrefix+"outside"+httpx.RunLockSuffix)
+	outsideLock := filepath.Join(parent, runPrefix+"outside"+runLockSuffix)
 	if err := os.WriteFile(outsideLock, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}

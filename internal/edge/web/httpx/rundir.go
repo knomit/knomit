@@ -28,10 +28,10 @@ import (
 // LockFileEx on Windows) on the lock file, never a pid: the kernel drops it
 // when its holder dies. A sweep removes the runs of dead owners, those whose
 // lock it can take, and never one whose lock is held. Every removal checks
-// the path is the layout's (IsChild).
+// the path is the layout's (isChild).
 const (
-	RunPrefix     = "run-"
-	RunLockSuffix = ".lock"
+	runPrefix     = "run-"
+	runLockSuffix = ".lock"
 )
 
 // runLockWait bounds how long ClaimRun waits for its own new lock file, which
@@ -90,11 +90,11 @@ func AcquireRunDir(ctx context.Context, base string) (dir string, release func()
 // removes the lock file. The caller closes whatever it holds in the run first
 // (Windows cannot remove a folder with an open file in it).
 func ReleaseRun(base string, lock *os.File, dir string) {
-	RemoveChild(base, dir, RunPrefix, "")
+	RemoveChild(base, dir, runPrefix, "")
 	lockPath := lock.Name()
 	_ = pki.UnlockFile(lock)
 	_ = lock.Close()
-	RemoveChild(base, lockPath, RunPrefix, RunLockSuffix)
+	RemoveChild(base, lockPath, runPrefix, runLockSuffix)
 }
 
 // SweepDeadRuns removes every run in base whose owner is dead (whose lock file
@@ -116,7 +116,7 @@ func SweepDeadRunsHooked(base string, h *RunHooks) (int, error) {
 	n := 0
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() || !strings.HasPrefix(name, RunPrefix) || !strings.HasSuffix(name, RunLockSuffix) {
+		if e.IsDir() || !strings.HasPrefix(name, runPrefix) || !strings.HasSuffix(name, runLockSuffix) {
 			continue
 		}
 		if reclaimRun(base, filepath.Join(base, name), h) {
@@ -133,7 +133,7 @@ func SweepDeadRunsHooked(base string, h *RunHooks) (int, error) {
 // on an unlinked file and starts over (ClaimRun). It reports whether the run
 // was removed.
 func reclaimRun(base, lockPath string, h *RunHooks) bool {
-	if !IsChild(base, lockPath, RunPrefix, RunLockSuffix) {
+	if !isChild(base, lockPath, runPrefix, runLockSuffix) {
 		return false
 	}
 	f, err := os.OpenFile(lockPath, os.O_RDWR, 0)
@@ -149,8 +149,8 @@ func reclaimRun(base, lockPath string, h *RunHooks) bool {
 		return false
 	}
 	fire(h, hookReclaimLocked, lockPath)
-	dir := strings.TrimSuffix(lockPath, RunLockSuffix)
-	removed := RemoveChild(base, dir, RunPrefix, "")
+	dir := strings.TrimSuffix(lockPath, runLockSuffix)
+	removed := RemoveChild(base, dir, runPrefix, "")
 	// Unlink the lock file WHILE HOLDING its lock. Unlinking after the unlock
 	// would race a claimer that created this file a moment ago (ClaimRun): it
 	// can take the lock in the gap, pass its sameFileAt check and make its run
@@ -169,7 +169,7 @@ func reclaimRun(base, lockPath string, h *RunHooks) bool {
 	// next start retries it.
 	unlinked := false
 	if removed {
-		unlinked = os.Remove(lockPath) == nil // IsChild-checked above
+		unlinked = os.Remove(lockPath) == nil // isChild-checked above
 	}
 	_ = pki.UnlockFile(f)
 	fire(h, hookReclaimUnlocked, lockPath)
@@ -188,7 +188,7 @@ func reclaimRun(base, lockPath string, h *RunHooks) bool {
 // It returns the held lock file and the run directory. h is nil outside tests.
 func ClaimRun(base string, h *RunHooks) (*os.File, string, error) {
 	for attempt := 0; attempt < 3; attempt++ {
-		f, err := os.CreateTemp(base, RunPrefix+"*"+RunLockSuffix)
+		f, err := os.CreateTemp(base, runPrefix+"*"+runLockSuffix)
 		if err != nil {
 			return nil, "", fmt.Errorf("create run lock: %w", err)
 		}
@@ -207,11 +207,11 @@ func ClaimRun(base string, h *RunHooks) (*os.File, string, error) {
 			_ = f.Close()
 			continue
 		}
-		dir := strings.TrimSuffix(f.Name(), RunLockSuffix)
+		dir := strings.TrimSuffix(f.Name(), runLockSuffix)
 		if err := os.Mkdir(dir, 0o700); err != nil {
 			_ = pki.UnlockFile(f)
 			_ = f.Close()
-			RemoveChild(base, f.Name(), RunPrefix, RunLockSuffix)
+			RemoveChild(base, f.Name(), runPrefix, runLockSuffix)
 			return nil, "", fmt.Errorf("create run dir: %w", err)
 		}
 		return f, dir, nil
@@ -225,9 +225,9 @@ func sameFileAt(fi os.FileInfo, path string) bool {
 	return err == nil && os.SameFile(fi, at)
 }
 
-// IsChild reports whether p is a direct child of parent whose name starts
+// isChild reports whether p is a direct child of parent whose name starts
 // with prefix and ends with suffix: the only shape RemoveChild removes.
-func IsChild(parent, p, prefix, suffix string) bool {
+func isChild(parent, p, prefix, suffix string) bool {
 	if parent == "" || p == "" {
 		return false
 	}
@@ -238,10 +238,10 @@ func IsChild(parent, p, prefix, suffix string) bool {
 		len(name) > len(prefix)+len(suffix)
 }
 
-// RemoveChild removes p, and everything in it, if IsChild(parent, p, prefix,
+// RemoveChild removes p, and everything in it, if isChild(parent, p, prefix,
 // suffix); it refuses, and logs, anything else. It reports whether p is gone.
 func RemoveChild(parent, p, prefix, suffix string) bool {
-	if !IsChild(parent, p, prefix, suffix) {
+	if !isChild(parent, p, prefix, suffix) {
 		log.Warn().Str("path", p).Str("parent", parent).Msg("run dirs: refusing to remove a path outside the run layout")
 		return false
 	}
