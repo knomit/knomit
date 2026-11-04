@@ -24,21 +24,30 @@ import (
 // that does not has finished, and then runs beside the other parallel ones
 // only. So the rule is about the parallel set alone: a test may call
 // t.Parallel when nothing it reaches, its helpers included, changes
-// process-wide state. That excludes setHooks and SetMissionTriggerHooksForTest
-// (triggerTestHooks), the sync, consensus and recipe-exec hooks, the other
-// package-level seams (swapCopy, hostPlatform, guidanceWarnHook,
-// templatePresetByID, recipeServerAddrWait, experimentSweepIntervalOverride),
-// captureLogs (log.Logger), t.Setenv, storetest.SetFastDurability and fact's
-// trigger globals. It also excludes a test whose assertion is a latency or a
+// process-wide state. The general rule: any package-level variable that a
+// test assigns, directly or through a setter, is a process-wide seam. So is
+// any global of another package that a test assigns. The list below gives
+// examples and is NOT complete; check what a test reaches, not only this
+// list. Examples: setHooks and SetMissionTriggerHooksForTest
+// (triggerTestHooks); the sync, consensus and recipe-exec hooks; the fleet
+// hooks (fleetTestHooks via setFleetHooks, fleetRenewTestHooks,
+// SetFleetClockForTest); the origin-write seams (beforeCredentialWrite,
+// afterCredentialReread, beforeAttachOriginWrite, beforeDetachOriginWrite,
+// beforeSwapOriginWrite); swapCopy, hostPlatform, guidanceWarnHook
+// (SetGuidanceWarnHookForTest), templatePresetByID, recipeServerAddrWait and
+// experimentSweepIntervalOverride; captureLog/captureLogs (log.Logger);
+// t.Setenv; storetest.SetFastDurability; and fact's trigger globals. It also
+// excludes a test whose assertion is a latency or a
 // short positive deadline (the write-latency gates,
 // EmitReachesStreamWithoutDebounce, a 2 s Eventually): those keep the machine
-// to themselves by staying sequential. And it excludes every test that moves
-// objects over a git transport (clone, subscribe, fetch, push, probe of a
-// remote, a served smart-HTTP clone): under -race, concurrent go-git
-// transfers in one process corrupt packs ("object not found", "checksum
-// mismatch", "final sha1 did not match"), reproduced with go-git's own memory
-// storage and no knomit store, so those tests stay sequential until that is
-// understood. The parallel tests are the slow,
+// to themselves by staying sequential. Moving objects over a git transport
+// (clone, subscribe, fetch, push, probe, a served smart-HTTP clone) is NOT a
+// reason to stay sequential. Those tests were sequential from #445 until #446,
+// because concurrent go-git transfers under -race corrupted packs. The cause
+// was sha1cd v0.6.0's arm64 assembly, which read an uninitialised register and
+// sometimes returned a wrong SHA-1. It was fixed in sha1cd v0.7.0 (go-git
+// v5.19.3). If such corruption comes back, check the sha1cd version before
+// serialising tests. The parallel tests are the slow,
 // self-contained ones from the Windows per-test data (#365 follow-up); a
 // quick test gains nothing from it.
 func TestMain(m *testing.M) {

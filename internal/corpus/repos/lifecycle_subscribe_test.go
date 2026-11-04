@@ -37,6 +37,7 @@ func newSubscribeTestManager(t *testing.T, root string) *Manager {
 }
 
 func TestCreate_SubscribeMode_FollowsUpstreamReadOnly(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := newSubscribeTestManager(t, root)
 	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
@@ -65,6 +66,7 @@ func TestCreate_SubscribeMode_FollowsUpstreamReadOnly(t *testing.T) {
 }
 
 func TestCreate_SubscribeMode_RefusesOntologyAndNonKB(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := newSubscribeTestManager(t, root)
 
@@ -90,6 +92,7 @@ func TestCreate_SubscribeMode_RefusesOntologyAndNonKB(t *testing.T) {
 // machine's agent branch — a remote where only agent/<host> is a knowledge
 // base is not subscribable.
 func TestProbeInitializedOn_InspectsNamedBranch(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := newSubscribeTestManager(t, root)
 	plain := seedBareRemoteNoOntology(t, filepath.Join(root, "plain.git"))
@@ -118,6 +121,7 @@ func TestProbeInitializedOn_InspectsNamedBranch(t *testing.T) {
 // After the upstream advances, one sync moves the read branch and nothing is
 // pushed: the remote's ref set is unchanged.
 func TestSubscription_SyncFollowsUpstreamAndNeverPushes(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := newSubscribeTestManager(t, root)
 	bare := filepath.Join(root, "remote.git")
@@ -212,6 +216,7 @@ func seedBareRemoteHeadIsAgentBranch(t *testing.T, bare string) string {
 // branch is a knowledge base gets a confident, wrong "not a knowledge base" —
 // and the create that follows would have succeeded.
 func TestCreate_SubscribeMode_PreflightResolvesByTheCreateRule(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	m := newSubscribeTestManager(t, root)
 	url := seedBareRemoteHeadIsAgentBranch(t, filepath.Join(root, "headisagent.git"))
@@ -270,6 +275,7 @@ func seedBareRemoteMasterOnly(t *testing.T, bare string) string {
 // comes from subscribeInspectBranch — the same function CreatePreflight calls —
 // so the test cannot pass by re-deriving the rule it is checking.
 func TestSubscribe_PreflightInspectsTheBranchTheCreateAdopts(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		seed     func(*testing.T, string) string

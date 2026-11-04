@@ -227,6 +227,7 @@ func homeWithoutLocalUpstream(t *testing.T) (dir, originTip string) {
 // Under Options.Synchronous the repair runs inline in Sync.Enter, so main is
 // there by the time the mount returns.
 func TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin(t *testing.T) {
+	t.Parallel()
 	dir, originTip := homeWithoutLocalUpstream(t)
 
 	// Reopen the same home: the registry mounts "kb" through the same walk a
