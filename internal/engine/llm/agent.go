@@ -98,12 +98,12 @@ type PriceCard struct {
 	WarnTokens        int // the prompt size that triggers the one warning; 0 disables it
 }
 
-// Cost is an estimate in USD. Usage does not say which cache TTL a write
-// used, so Estimate prices every cache write at the 5m multiplier (the lower
-// bound) and Upper at the 1h multiplier.
+// Cost is one exact figure in USD. Cache writes are priced at the TTL they
+// used: Usage.CacheWrite5m at CacheWrite5mMult and Usage.CacheWrite1h at
+// CacheWrite1hMult. Any part of Usage.CacheWrite the adapter did not split is
+// priced at the 5m multiplier, the API's default TTL.
 type Cost struct {
-	Estimate float64
-	Upper    float64
+	USD float64
 }
 
 // Estimate prices u. A nil card has no prices and returns the zero Cost.
@@ -115,11 +115,13 @@ func (c *PriceCard) Estimate(u Usage) Cost {
 	if c.TierTokens > 0 && promptTokens(u) > int64(c.TierTokens) {
 		in, out = c.HighInputPerMTok, c.HighOutputPerMTok
 	}
-	base := float64(u.Input)*in + float64(u.CacheRead)*in*c.CacheReadMult + float64(u.Output)*out
-	return Cost{
-		Estimate: (base + float64(u.CacheWrite)*in*c.CacheWrite5mMult) / 1e6,
-		Upper:    (base + float64(u.CacheWrite)*in*c.CacheWrite1hMult) / 1e6,
-	}
+	unsplit := max(u.CacheWrite-u.CacheWrite5m-u.CacheWrite1h, 0)
+	usd := float64(u.Input)*in +
+		float64(u.CacheRead)*in*c.CacheReadMult +
+		float64(u.CacheWrite5m+unsplit)*in*c.CacheWrite5mMult +
+		float64(u.CacheWrite1h)*in*c.CacheWrite1hMult +
+		float64(u.Output)*out
+	return Cost{USD: usd / 1e6}
 }
 
 // promptTokens is everything the request sent as input.
@@ -145,7 +147,19 @@ type LoopEvent struct {
 	Result  *ToolResult
 	Usage   *Usage
 	Cost    *Cost // nil when the loop has no price card
-	Warning string
+	Warning *PriceWarning
+}
+
+// PriceWarning is the structured near-the-price-cliff warning: the prompt
+// reached Threshold (PriceCard.WarnTokens). TierTokens is the price tier
+// boundary (0: one tier). BeforeSend says PromptTokens is the pre-send
+// estimate rather than a reported count.
+type PriceWarning struct {
+	Threshold    int
+	PromptTokens int64
+	TierTokens   int
+	Model        string
+	BeforeSend   bool
 }
 
 // RequestLog is one request as the session log records it (plan P23): which
@@ -241,15 +255,21 @@ func (l *Loop) emit(ev LoopEvent) {
 // RunTurn adds text as a user entry and runs the model and its tool calls
 // until the model answers or the turn fails. On every outcome the Builder is
 // left valid: each tool_use has its tool_result, and the turn's entries are in
-// hook 6. The one exception is a turn refused before its first request
-// (ErrContextFull): it is dropped from hook 7 and hook 6 is untouched.
+// hook 6. The one exception is a turn that got no assistant entry (refused
+// before its first request, a first-request error of any kind, a refusal or
+// truncation with no text, a cancel before any reply): it is dropped from hook
+// 7 and hook 6 is untouched, so the user text of a turn the model never
+// answered is never resent. A turn in which tool calls already ran is never
+// dropped: its results stay paired with their calls and are flushed.
 func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 	res := &TurnResult{}
 	user := Entry{ID: l.newID(), Role: RoleUser, Blocks: []Block{{Kind: BlockText, Text: text}}}
+	base := l.baseline()
 	if err := l.addTurn(user); err != nil {
 		return res, err
 	}
 	var runErr error
+	pauses := 0
 
 	maxCalls := l.MaxCalls
 	if maxCalls <= 0 {
@@ -257,14 +277,12 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 	}
 	for {
 		snap := l.Builder.Snapshot()
-		if err := l.checkBudget(snap); err != nil {
-			if res.Requests == 0 {
-				l.dropTurn()
-				return res, err
-			}
+		est := l.estimate(snap)
+		if err := l.checkBudget(snap, est); err != nil {
 			runErr = err
 			break
 		}
+		l.maybeWarn(int64(est), true)
 		var streamed strings.Builder
 		resp, err := l.Model.Stream(ctx, snap, l.Options, func(ev Event) {
 			switch ev.Kind {
@@ -286,16 +304,11 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 				l.keepPartialText(streamed.String())
 				runErr = &turnError{msg: "The turn was cancelled.", err: ErrCancelled}
 			} else if errors.Is(err, ErrContextFull) {
-				if res.Requests == 0 {
-					l.dropTurn()
-					return res, &turnError{msg: contextFullMessage, err: err}
-				}
 				runErr = &turnError{msg: contextFullMessage, err: err}
 			} else {
 				runErr = err
 			}
-			l.flush(res)
-			return res, runErr
+			return res, l.settle(res, base, runErr)
 		}
 
 		res.Requests++
@@ -312,24 +325,29 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 			}
 			if assistant.ID != "" {
 				if err := l.addTurn(assistant); err != nil {
-					return res, err
+					runErr = err
+					break
 				}
 			}
 			res.StopReason = stop.Reason
 			res.Text = blocksText(assistant.Blocks)
-			if stop.Reason == StopRefusal {
+			switch stop.Reason {
+			case StopRefusal:
 				msg := "The model declined this request"
 				if stop.Category != "" {
 					msg += " (category: " + stop.Category + ")"
 				}
 				runErr = &turnError{msg: msg + ".", err: err}
-			} else {
+			case StopContextWindowExceeded:
+				runErr = &turnError{msg: contextFullMessage, err: err}
+			default:
 				runErr = &turnError{msg: "The reply hit the output limit.", err: err}
 			}
 			break
 		}
 		if err := l.addTurn(assistant); err != nil {
-			return res, err
+			runErr = err
+			break
 		}
 		l.lastCount = l.entryCount()
 		res.StopReason = resp.StopReason
@@ -339,20 +357,33 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 		if len(calls) == 0 {
 			if resp.StopReason == StopPauseTurn {
 				// A paused server-side loop: send the conversation again with
-				// this response appended; never a new user message.
+				// this response appended; never a new user message. Each
+				// continuation draws on the same per-turn budget as a tool
+				// call (MaxCalls), so a provider that pauses forever ends the
+				// turn instead of looping.
+				pauses++
+				if res.ToolCalls+pauses > maxCalls {
+					runErr = &turnError{
+						msg: fmt.Sprintf("The turn stopped after %d tool calls, the limit for one turn.", maxCalls),
+						err: ErrTooManyCalls,
+					}
+					break
+				}
 				continue
 			}
 			break
 		}
 		results, approvals, err := l.runCalls(ctx, calls, res, maxCalls)
-		l.finishResults(results, approvals)
+		if ferr := l.finishResults(results, approvals); ferr != nil {
+			runErr = ferr
+			break
+		}
 		if err != nil {
 			runErr = err
 			break
 		}
 	}
-	l.flush(res)
-	return res, runErr
+	return res, l.settle(res, base, runErr)
 }
 
 const contextFullMessage = "This conversation no longer fits the model's context window, so the request was not sent. Start a new chat to continue."
@@ -446,17 +477,19 @@ func (l *Loop) logCall(c ToolUse, content string, isErr bool) {
 
 // finishResults appends the single user entry that answers an assistant
 // entry's tool_use blocks. Anthropic requires all results in one message.
-func (l *Loop) finishResults(results []Block, approvals []Approval) {
+//
+// A failure (a caller-supplied NewID that repeats an id) is returned and ends
+// the turn: the results are not in the history, so settle removes the
+// assistant entry whose tool_use they answer.
+func (l *Loop) finishResults(results []Block, approvals []Approval) error {
 	if len(results) == 0 {
-		return
+		return nil
 	}
 	e := Entry{ID: l.newID(), Role: RoleUser, Blocks: results, Approvals: approvals}
 	if err := l.addTurn(e); err != nil {
-		// Entry ids are generated here and unique; a duplicate means a
-		// caller-supplied NewID repeats. Surfacing it as a panic would kill the
-		// server; the next addTurn reports it as the turn error.
-		return
+		return fmt.Errorf("llm: recording tool results: %w", err)
 	}
+	return nil
 }
 
 // keepPartialText stores text that streamed before a cancellation as an
@@ -480,10 +513,11 @@ func (l *Loop) account(res *TurnResult, snap Snapshot, resp *Response) {
 	res.Usage.Estimated = res.Usage.Estimated || u.Estimated
 
 	ev := LoopEvent{Kind: LoopUsage, Usage: &u}
+	res.Usage.CacheWrite5m += u.CacheWrite5m
+	res.Usage.CacheWrite1h += u.CacheWrite1h
 	if l.Price != nil {
 		c := l.Price.Estimate(u)
-		res.Cost.Estimate += c.Estimate
-		res.Cost.Upper += c.Upper
+		res.Cost.USD += c.USD
 		ev.Cost = &c
 	}
 	if l.Log != nil {
@@ -494,36 +528,35 @@ func (l *Loop) account(res *TurnResult, snap Snapshot, resp *Response) {
 	prompt := promptTokens(u)
 	l.haveUsage = true
 	l.lastTokens = prompt + u.Output
-	if l.Price != nil && l.Price.WarnTokens > 0 && !l.warned && prompt >= int64(l.Price.WarnTokens) {
-		l.warned = true
-		msg := fmt.Sprintf("This chat's prompt has reached %d tokens.", prompt)
-		if l.Price.TierTokens > 0 {
-			msg += fmt.Sprintf(" This model's price per token rises above %d prompt tokens; consider starting a new chat.", l.Price.TierTokens)
-		}
-		l.emit(LoopEvent{Kind: LoopWarning, Warning: msg})
-	}
+	l.maybeWarn(prompt, false)
 }
 
-// checkBudget refuses a request that cannot fit the context window, before
-// anything is sent. The rule:
-//
-//	need = estimated prompt tokens + Caps().MaxOutput
-//	refuse when need > Caps().ContextWindow
-//
-// The estimate is the larger of (a) the whole snapshot at bytes/4
-// (Snapshot.Record) and (b) the last response's reported prompt plus output
-// tokens, plus bytes/4 for the entries added since. (b) is exact up to the new
-// content, (a) covers the first request of a chat and cannot be lower than
-// what is really there by much. MaxOutput is reserved because the window
-// covers input and output together (Ollama's num_ctx does), and it comes from
-// the model's own Caps rather than a constant. A model whose Caps report no
-// ContextWindow is not pre-checked; the adapter's ErrContextFull still ends
-// the request.
-func (l *Loop) checkBudget(snap Snapshot) error {
-	caps := l.Model.Caps()
-	if caps.ContextWindow <= 0 {
-		return nil
+// maybeWarn emits the one structured warning per Loop when a prompt reaches
+// PriceCard.WarnTokens: after a response (the reported prompt) and before a
+// send (the same estimate the budget uses), so a single large tool result
+// cannot carry the chat over the threshold unwarned. The loop carries no
+// wording; the chat layer turns the event into text.
+func (l *Loop) maybeWarn(prompt int64, beforeSend bool) {
+	if l.Price == nil || l.Price.WarnTokens <= 0 || l.warned || prompt < int64(l.Price.WarnTokens) {
+		return
 	}
+	l.warned = true
+	l.emit(LoopEvent{Kind: LoopWarning, Warning: &PriceWarning{
+		Threshold:    l.Price.WarnTokens,
+		PromptTokens: prompt,
+		TierTokens:   l.Price.TierTokens,
+		Model:        l.Model.Model(),
+		BeforeSend:   beforeSend,
+	}})
+}
+
+// estimate is the prompt size, in tokens, the next request will have: the
+// larger of (a) the whole snapshot at bytes/4 (Snapshot.Record) and (b) the
+// last response's reported prompt plus output tokens, plus bytes/4 for the
+// entries added since. (b) is exact up to the new content, (a) covers the
+// first request of a chat and cannot be lower than what is really there by
+// much. The budget and the pre-send warning both use it.
+func (l *Loop) estimate(snap Snapshot) int {
 	rec := snap.Record()
 	est := 0
 	for h := HookTools; h <= HookTurn; h++ {
@@ -539,11 +572,39 @@ func (l *Loop) checkBudget(snap Snapshot) error {
 		}
 		est = max(est, known+extra)
 	}
-	need := est + max(caps.MaxOutput, 0)
-	if need > caps.ContextWindow {
+	return est
+}
+
+// replyReserve is the room the budget keeps for the reply. The window covers
+// input and output together (Ollama's num_ctx does), so the reserve is the
+// model's own Caps().MaxOutput. A model that reports none (Ollama with no
+// cap), or one whose MaxOutput is not below its window (which would refuse
+// every request), reserves a quarter of the window instead.
+func replyReserve(c Caps) int {
+	if c.MaxOutput <= 0 || c.MaxOutput >= c.ContextWindow {
+		return c.ContextWindow / 4
+	}
+	return c.MaxOutput
+}
+
+// checkBudget refuses a request that cannot fit the context window, before
+// anything is sent. The rule:
+//
+//	need = estimated prompt tokens + replyReserve(Caps())
+//	refuse when need > Caps().ContextWindow
+//
+// A model whose Caps report no ContextWindow is not pre-checked; the adapter's
+// ErrContextFull still ends the request.
+func (l *Loop) checkBudget(snap Snapshot, est int) error {
+	caps := l.Model.Caps()
+	if caps.ContextWindow <= 0 {
+		return nil
+	}
+	reserve := replyReserve(caps)
+	if est+reserve > caps.ContextWindow {
 		return &turnError{
 			msg: fmt.Sprintf("%s (about %d prompt tokens plus %d reserved for the reply, window %d)",
-				contextFullMessage, est, caps.MaxOutput, caps.ContextWindow),
+				contextFullMessage, est, reserve, caps.ContextWindow),
 			err: ErrContextFull,
 		}
 	}
@@ -572,16 +633,65 @@ func (l *Loop) dropTurn() {
 	}
 }
 
-// flush moves the finished turn from hook 7 into hook 6: Add to hook 6, then
-// Remove from hook 7. Hook 6 only ever grows.
-func (l *Loop) flush(res *TurnResult) {
+// baselineState is what the budget measures from; settle restores it when a
+// turn is dropped, so the dropped text is not counted again.
+type baselineState struct {
+	haveUsage  bool
+	lastTokens int64
+	lastCount  int
+}
+
+func (l *Loop) baseline() baselineState {
+	return baselineState{l.haveUsage, l.lastTokens, l.lastCount}
+}
+
+// settle ends a turn: it makes hook 7 valid, then flushes it to hook 6, or
+// drops it when the model never answered. Valid means every tool_use has its
+// tool_result, so a trailing assistant entry whose results could not be
+// recorded is removed. A turn left with no assistant entry (refused or failed
+// on its first request, cancelled before any reply) is dropped whole: its user
+// text would otherwise sit in the history and ride along on every later
+// request, which for a refusal resends the very content the provider declined.
+// err is the turn's error; a flush failure is returned in its place only when
+// there is none.
+func (l *Loop) settle(res *TurnResult, base baselineState, err error) error {
+	turn := l.Builder.Snapshot().Hooks[HookTurn]
+	if n := len(turn); n > 0 {
+		if last := turn[n-1].Entry; last != nil && last.Role == RoleAssistant && len(toolUses(last.Blocks)) > 0 {
+			_ = l.Builder.Remove(turn[n-1].ID)
+			turn = turn[:n-1]
+		}
+	}
+	answered := false
+	for _, it := range turn {
+		if it.Entry != nil && it.Entry.Role == RoleAssistant {
+			answered = true
+		}
+	}
+	if !answered {
+		l.dropTurn()
+		l.haveUsage, l.lastTokens, l.lastCount = base.haveUsage, base.lastTokens, base.lastCount
+		return err
+	}
+	if ferr := l.flush(res); ferr != nil && err == nil {
+		return ferr
+	}
+	return err
+}
+
+// flush moves the finished turn from hook 7 into hook 6: Remove from hook 7,
+// then Add to hook 6. Hook 6 only ever grows. The first failure is returned.
+func (l *Loop) flush(res *TurnResult) error {
+	var first error
 	for _, it := range l.Builder.Snapshot().Hooks[HookTurn] {
 		if err := l.Builder.Remove(it.ID); err != nil {
+			first = cmpFirst(first, err)
 			continue
 		}
 		moved := it
 		moved.Hook = HookConversation
 		if err := l.Builder.Add(moved); err != nil {
+			first = cmpFirst(first, err)
 			continue
 		}
 		res.Entries = append(res.Entries, *it.Entry)
@@ -590,6 +700,14 @@ func (l *Loop) flush(res *TurnResult) {
 		}
 	}
 	// lastCount counted hooks 6+7 together, which flushing does not change.
+	return first
+}
+
+func cmpFirst(first, err error) error {
+	if first != nil {
+		return first
+	}
+	return fmt.Errorf("llm: moving the turn into the conversation: %w", err)
 }
 
 func textBlocks(bs []Block) []Block {

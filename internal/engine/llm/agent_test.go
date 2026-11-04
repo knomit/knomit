@@ -315,8 +315,24 @@ func TestLoop_RefusalAndTruncationEndTheTurn(t *testing.T) {
 	if res.Usage.Input != 7 || len(m.snaps) != 1 {
 		t.Fatalf("usage input = %d, requests = %d; want 7 and 1 (no retry)", res.Usage.Input, len(m.snaps))
 	}
-	if got := history(b); len(got) != 1 || got[0].Role != RoleUser {
-		t.Fatalf("history after a refusal = %+v, want only the user entry", got)
+	// A turn refused on its first request is dropped whole: the refused text
+	// is in neither hook, so no later request resends it.
+	if got := history(b); len(got) != 0 {
+		t.Fatalf("history after a first-request refusal = %+v, want empty", got)
+	}
+	if n := len(b.Snapshot().Hooks[HookTurn]); n != 0 || len(res.Entries) != 0 {
+		t.Fatalf("hook 7 holds %d items, result %d entries; want 0 and 0", n, len(res.Entries))
+	}
+	m.steps = []fakeStep{{resp: textResp("fine", Usage{})}}
+	if _, err := l.RunTurn(context.Background(), "a harmless question"); err != nil {
+		t.Fatal(err)
+	}
+	next := conversationItems(m.snaps[1])
+	if len(next) != 1 || next[0].Entry.Blocks[0].Text != "a harmless question" {
+		t.Fatalf("the next request carries %d conversation items %+v; want only the new question, not the refused text", len(next), next)
+	}
+	if got := history(b); len(got) != 2 {
+		t.Fatalf("hook 6 = %+v, want the new question and its answer", got)
 	}
 
 	cut := &StopError{Reason: StopMaxTokens, Response: &Response{
@@ -418,8 +434,13 @@ func TestLoop_LogsRequestsCallsApprovals(t *testing.T) {
 	m3 := &fakeModel{steps: []fakeStep{{resp: toolResp("tu_1", "knomit_learn", `{}`, u)}, {resp: textResp("done", Usage{})}}}
 	l3, _ := newLoop(t, m3, h)
 	l3.Gate = gateFn(allow)
-	if _, err := l3.RunTurn(context.Background(), "write"); err != nil {
+	res3, err := l3.RunTurn(context.Background(), "write")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(h.calls) != 2 || res3.ToolCalls != 1 || len(res3.Entries) != 4 || res3.Text != "done" {
+		t.Fatalf("Log == nil run: host calls %d (1 from the first run + 1), tool calls %d, entries %d, text %q; want 2, 1, 4, done",
+			len(h.calls), res3.ToolCalls, len(res3.Entries), res3.Text)
 	}
 }
 
@@ -442,13 +463,14 @@ func TestLoop_ArgsHookChangesWhatIsSentNotWhatIsStored(t *testing.T) {
 // ---- Task 4.2 ----
 
 func sameTokens(a, b Usage) bool {
-	return a.Input == b.Input && a.CacheRead == b.CacheRead && a.CacheWrite == b.CacheWrite && a.Output == b.Output
+	return a.Input == b.Input && a.CacheRead == b.CacheRead && a.CacheWrite == b.CacheWrite && a.Output == b.Output &&
+		a.CacheWrite5m == b.CacheWrite5m && a.CacheWrite1h == b.CacheWrite1h
 }
 
 func approx(a, b float64) bool { return math.Abs(a-b) < 1e-12 }
 
 func TestLoop_ReportsTurnTokensAndCost(t *testing.T) {
-	u := Usage{Input: 11, CacheRead: 22, CacheWrite: 33, Output: 44}
+	u := Usage{Input: 11, CacheRead: 22, CacheWrite: 33, CacheWrite5m: 20, CacheWrite1h: 13, Output: 44}
 	card := &PriceCard{
 		InputPerMTok: 0.10, OutputPerMTok: 0.50, TierTokens: 100_000, HighInputPerMTok: 0.50, HighOutputPerMTok: 2.50,
 		CacheReadMult: 0.1, CacheWrite5mMult: 1.25, CacheWrite1hMult: 2,
@@ -480,32 +502,46 @@ func TestLoop_ReportsTurnTokensAndCost(t *testing.T) {
 	if !sameTokens(*ev.Usage, u) {
 		t.Fatalf("usage event = %+v, want %+v", *ev.Usage, u)
 	}
-	// (11*0.10 + 22*0.10*0.1 + 44*0.50 + 33*0.10*1.25) / 1e6 USD
-	if !approx(ev.Cost.Estimate, 27.445e-6) || !approx(ev.Cost.Upper, 29.92e-6) {
-		t.Fatalf("cost = %+v, want 27.445e-6 and 29.92e-6", *ev.Cost)
+	// ONE exact figure, each write at its own TTL's rate:
+	// (11*0.10 + 22*0.10*0.1 + 44*0.50 + 20*0.10*1.25 + 13*0.10*2) / 1e6 USD
+	if !approx(ev.Cost.USD, 28.42e-6) {
+		t.Fatalf("cost = %+v, want 28.42e-6", *ev.Cost)
 	}
-	if !approx(res.Cost.Estimate, 27.445e-6) {
-		t.Fatalf("turn cost = %+v", res.Cost)
+	if !approx(res.Cost.USD, 28.42e-6) || res.Usage.CacheWrite5m != 20 || res.Usage.CacheWrite1h != 13 {
+		t.Fatalf("turn cost/usage = %+v / %+v", res.Cost, res.Usage)
+	}
+
+	// A write the adapter did not split is priced at the 5m multiplier.
+	_, evs = run(card, Usage{Input: 11, CacheRead: 22, CacheWrite: 33, Output: 44})
+	// (1.1 + 0.22 + 22 + 33*0.10*1.25) / 1e6
+	if c := usageEv(evs).Cost; !approx(c.USD, 27.445e-6) {
+		t.Fatalf("unsplit write cost = %+v, want 27.445e-6", *c)
+	}
+	// Part split, part not: 7 at 1h, the other 26 at 5m.
+	_, evs = run(card, Usage{Input: 11, CacheRead: 22, CacheWrite: 33, CacheWrite1h: 7, Output: 44})
+	// 1.1 + 0.22 + 22 + 26*0.10*1.25 + 7*0.10*2
+	if c := usageEv(evs).Cost; !approx(c.USD, 27.97e-6) {
+		t.Fatalf("part-split write cost = %+v, want 27.97e-6", *c)
 	}
 
 	// The Sonnet/Opus card: cache read at 0.05x.
 	card2 := *card
 	card2.CacheReadMult = 0.05
 	_, evs = run(&card2, u)
-	if c := usageEv(evs).Cost; !approx(c.Estimate, 27.335e-6) {
-		t.Fatalf("0.05x cache-read cost = %+v, want 27.335e-6", *c)
+	if c := usageEv(evs).Cost; !approx(c.USD, 28.31e-6) {
+		t.Fatalf("0.05x cache-read cost = %+v, want 28.31e-6", *c)
 	}
 
 	// Above the tier the High rates apply, on ALL prompt tokens (cache included).
 	big := Usage{Input: 1000, CacheRead: 99_001, Output: 10}
 	_, evs = run(card, big)
 	// 1000*0.50 + 99001*0.50*0.1 + 10*2.50 = 500 + 4950.05 + 25
-	if c := usageEv(evs).Cost; !approx(c.Estimate, 5475.05e-6) {
+	if c := usageEv(evs).Cost; !approx(c.USD, 5475.05e-6) {
 		t.Fatalf("tiered cost = %+v, want 5475.05e-6", *c)
 	}
 	at := Usage{Input: 100_000, Output: 10} // exactly the tier: still the base rate
 	_, evs = run(card, at)
-	if c := usageEv(evs).Cost; !approx(c.Estimate, (100_000*0.10+10*0.50)/1e6) {
+	if c := usageEv(evs).Cost; !approx(c.USD, (100_000*0.10+10*0.50)/1e6) {
 		t.Fatalf("cost at the tier = %+v, want base rates", *c)
 	}
 
@@ -526,10 +562,10 @@ func TestLoop_WarnsNearPriceCliff(t *testing.T) {
 	m := &fakeModel{steps: steps}
 	l, _ := newLoop(t, m, &fakeHost{})
 	l.Price = card
-	var warnings []string
+	var warnings []PriceWarning
 	l.Sink = func(e LoopEvent) {
 		if e.Kind == LoopWarning {
-			warnings = append(warnings, e.Warning)
+			warnings = append(warnings, *e.Warning)
 		}
 	}
 	var perTurn []int
@@ -543,8 +579,8 @@ func TestLoop_WarnsNearPriceCliff(t *testing.T) {
 	if fmt.Sprint(perTurn) != "[0 1 0 0]" {
 		t.Fatalf("warnings per turn = %v, want [0 1 0 0]: none at 94,999, one at 95,000, never again", perTurn)
 	}
-	if !strings.Contains(warnings[0], "95000") {
-		t.Fatalf("warning = %q, want it to name the 95000-token prompt", warnings[0])
+	if w := warnings[0]; w.Threshold != 95_000 || w.TierTokens != 100_000 || w.Model != "claude-test-x" || w.PromptTokens < 95_000 || w.PromptTokens > 95_100 {
+		t.Fatalf("warning = %+v, want threshold 95000, tier 100000, model claude-test-x, prompt about 95000", w)
 	}
 
 	// Cache tokens count toward the prompt; and without a card there is no warning.
@@ -560,6 +596,32 @@ func TestLoop_WarnsNearPriceCliff(t *testing.T) {
 	if _, err := l2.RunTurn(context.Background(), "q"); err != nil || n != 1 {
 		t.Fatalf("err %v, warnings %d: want 1 for a 95,000-token prompt made of input + cache read + cache write", err, n)
 	}
+	// Before sending: one large tool result takes the prompt from 90K to well
+	// past 95K inside a single turn. The warning comes BEFORE the request that
+	// carries it, with the pre-send estimate, and only once.
+	huge := strings.Repeat("z", 40_000*4) // about 40,000 tokens
+	m4 := &fakeModel{steps: []fakeStep{
+		{resp: toolResp("tu_1", "knomit_repos", `{}`, Usage{Input: 90_000, Output: 10})},
+		{resp: textResp("done", Usage{Input: 131_000, Output: 5})},
+	}}
+	h4 := &fakeHost{out: map[string]ToolOutcome{"knomit_repos": {Content: huge}}}
+	l4, _ := newLoop(t, m4, h4)
+	l4.Price = card
+	var pre []PriceWarning
+	var requestsAtWarning []int
+	l4.Sink = func(e LoopEvent) {
+		if e.Kind == LoopWarning {
+			pre = append(pre, *e.Warning)
+			requestsAtWarning = append(requestsAtWarning, len(m4.snaps))
+		}
+	}
+	if _, err := l4.RunTurn(context.Background(), "q"); err != nil {
+		t.Fatal(err)
+	}
+	if len(pre) != 1 || requestsAtWarning[0] != 1 || !pre[0].BeforeSend || pre[0].PromptTokens < 130_000 || pre[0].PromptTokens > 131_000 {
+		t.Fatalf("warnings = %+v at requests %v; want exactly one, before the second request, BeforeSend, prompt about 130,010", pre, requestsAtWarning)
+	}
+
 	m3 := &fakeModel{steps: []fakeStep{{resp: textResp("a", Usage{Input: 200_000})}}}
 	l3, _ := newLoop(t, m3, &fakeHost{})
 	l3.Sink = func(e LoopEvent) {
@@ -632,8 +694,12 @@ func TestLoop_RefusalUsesReportedUsage(t *testing.T) {
 	// No ContextWindow in the caps: no pre-check at all.
 	m2 := &fakeModel{caps: Caps{MaxOutput: 1 << 30}, steps: []fakeStep{{resp: textResp("ok", Usage{})}}}
 	l2, _ := newLoop(t, m2, &fakeHost{})
-	if _, err := l2.RunTurn(context.Background(), "hi"); err != nil {
+	res2, err := l2.RunTurn(context.Background(), "hi")
+	if err != nil {
 		t.Fatalf("a model with no reported window must not be pre-checked: %v", err)
+	}
+	if len(m2.snaps) != 1 || res2.Text != "ok" || res2.Requests != 1 {
+		t.Fatalf("requests %d, text %q; want the one request sent and answered", len(m2.snaps), res2.Text)
 	}
 }
 
@@ -646,5 +712,210 @@ func TestLoop_AdapterContextFullEndsTurn(t *testing.T) {
 	}
 	if got := history(b); len(got) != 0 {
 		t.Fatalf("hook 6 = %+v after a first request the provider refused, want empty", got)
+	}
+}
+
+// ---- PR #760 follow-up ----
+
+// text of about n tokens (4 bytes per token, the loop's estimate).
+func tokensOfText(n int) string { return strings.Repeat("x", n*4) }
+
+func TestLoop_ReplyReserve(t *testing.T) {
+	type tc struct {
+		name    string
+		caps    Caps
+		textTok int
+		refused bool
+	}
+	// The snapshot's own tools and system prompt are well under 200 tokens.
+	for _, c := range []tc{
+		// MaxOutput unset: the loop reserves window/4 = 1000.
+		{"unset reserves a quarter: fits", Caps{ContextWindow: 4000}, 2700, false},
+		{"unset reserves a quarter: does not fit", Caps{ContextWindow: 4000}, 3000, true},
+		{"negative is unset too", Caps{ContextWindow: 4000, MaxOutput: -1}, 3000, true},
+		// A configured MaxOutput is honoured, whatever a quarter would be.
+		{"configured reserve: fits", Caps{ContextWindow: 4000, MaxOutput: 500}, 3300, false},
+		{"configured reserve: does not fit", Caps{ContextWindow: 4000, MaxOutput: 2500}, 1700, true},
+		// MaxOutput >= window would refuse every request: clamp to window/4.
+		{"equal to the window clamps: fits", Caps{ContextWindow: 4000, MaxOutput: 4000}, 2700, false},
+		{"above the window clamps: fits", Caps{ContextWindow: 4000, MaxOutput: 9000}, 2700, false},
+		{"above the window clamps: still refuses a full prompt", Caps{ContextWindow: 4000, MaxOutput: 9000}, 3000, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := &fakeModel{caps: c.caps, steps: []fakeStep{{resp: textResp("ok", Usage{})}}}
+			l, _ := newLoop(t, m, &fakeHost{})
+			_, err := l.RunTurn(context.Background(), tokensOfText(c.textTok))
+			if c.refused {
+				if !errors.Is(err, ErrContextFull) || len(m.snaps) != 0 {
+					t.Fatalf("err = %v, requests = %d; want ErrContextFull and no request", err, len(m.snaps))
+				}
+				return
+			}
+			if err != nil || len(m.snaps) != 1 {
+				t.Fatalf("err = %v, requests = %d; want the request sent", err, len(m.snaps))
+			}
+		})
+	}
+	// The refusal names the reserve it used.
+	m := &fakeModel{caps: Caps{ContextWindow: 4000, MaxOutput: 9000}}
+	l, _ := newLoop(t, m, &fakeHost{})
+	_, err := l.RunTurn(context.Background(), tokensOfText(3000))
+	if err == nil || !strings.Contains(err.Error(), "1000 reserved for the reply, window 4000") {
+		t.Fatalf("err = %v, want the clamped 1000 reserve in the message", err)
+	}
+}
+
+func TestLoop_FirstRequestErrorDropsTheTurn(t *testing.T) {
+	for name, step := range map[string]fakeStep{
+		"server error":       {err: errors.New("ollama: server error 500")},
+		"truncated no text":  {err: &StopError{Reason: StopMaxTokens, Response: &Response{StopReason: StopMaxTokens}}},
+		"cancelled, no text": {block: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := &fakeModel{steps: []fakeStep{step, {resp: textResp("fine", Usage{})}}}
+			l, b := newLoop(t, m, &fakeHost{})
+			ctx, cancel := context.WithCancel(context.Background())
+			if step.block {
+				go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+			}
+			_, err := l.RunTurn(ctx, "the failed question")
+			cancel()
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			if got := history(b); len(got) != 0 || len(b.Snapshot().Hooks[HookTurn]) != 0 {
+				t.Fatalf("history %+v after a failed first request, want none", got)
+			}
+			if _, err := l.RunTurn(context.Background(), "the next question"); err != nil {
+				t.Fatal(err)
+			}
+			// N5: no two user entries with text in a row, so the Ollama render
+			// (which does not merge) never sends consecutive user messages.
+			got := history(b)
+			if len(got) != 2 || got[0].Blocks[0].Text != "the next question" {
+				t.Fatalf("history = %+v, want the next question and its answer only", got)
+			}
+		})
+	}
+}
+
+// N5: the conversation never holds two text user entries in a row, whichever
+// way an earlier turn ended. A user entry that follows tool results is not a
+// problem for Ollama (results render as tool messages).
+func TestLoop_NoConsecutiveUserTextEntries(t *testing.T) {
+	refusal := &StopError{Reason: StopRefusal, Response: &Response{StopReason: StopRefusal}}
+	m := &fakeModel{steps: []fakeStep{
+		{err: refusal},                  // dropped
+		{err: errors.New("boom")},       // dropped
+		{resp: textResp("a1", Usage{})}, // answered
+		{resp: toolResp("tu_1", "knomit_repos", `{}`, Usage{})},
+		{err: refusal}, // after a tool call: kept, ends with results
+		{resp: textResp("a3", Usage{})},
+	}}
+	h := &fakeHost{out: map[string]ToolOutcome{"knomit_repos": {Content: "r"}}}
+	l, b := newLoop(t, m, h)
+	for _, q := range []string{"q1", "q2", "q3", "q4", "q5"} {
+		_, _ = l.RunTurn(context.Background(), q)
+	}
+	var prevText bool
+	for i, e := range history(b) {
+		isText := e.Role == RoleUser && len(e.Blocks) > 0 && e.Blocks[0].Kind == BlockText
+		if isText && prevText {
+			t.Fatalf("entries %d and %d are both user text: %+v", i-1, i, history(b))
+		}
+		prevText = isText
+	}
+	// q4 ran a tool before the refusal, so it stays (paired); q1 and q2 do not.
+	var texts []string
+	for _, e := range history(b) {
+		if e.Role == RoleUser && e.Blocks[0].Kind == BlockText {
+			texts = append(texts, e.Blocks[0].Text)
+		}
+	}
+	if fmt.Sprint(texts) != "[q3 q4 q5]" {
+		t.Fatalf("user texts kept = %v, want [q3 q4 q5]", texts)
+	}
+}
+
+func TestLoop_RefusalAfterToolCallsKeepsPairedResults(t *testing.T) {
+	refusal := &StopError{Reason: StopRefusal, Response: &Response{StopReason: StopRefusal}}
+	m := &fakeModel{steps: []fakeStep{{resp: toolResp("tu_1", "knomit_repos", `{}`, Usage{})}, {err: refusal}}}
+	h := &fakeHost{out: map[string]ToolOutcome{"knomit_repos": {Content: "r"}}}
+	l, b := newLoop(t, m, h)
+	_, err := l.RunTurn(context.Background(), "look")
+	if !errors.Is(err, ErrRefused) {
+		t.Fatalf("err = %v", err)
+	}
+	got := history(b)
+	if len(got) != 3 || got[0].Blocks[0].Text != "look" || toolUses(got[1].Blocks)[0].ID != "tu_1" || got[2].Blocks[0].ToolResult.ToolUseID != "tu_1" {
+		t.Fatalf("history = %+v, want user, tool_use, its result (the side effect stays visible)", got)
+	}
+}
+
+func TestLoop_PauseTurnIsBounded(t *testing.T) {
+	pause := &Response{Blocks: []Block{{Kind: BlockText, Text: "working"}}, StopReason: StopPauseTurn}
+	var steps []fakeStep
+	for i := 0; i < 50; i++ {
+		steps = append(steps, fakeStep{resp: pause})
+	}
+	m := &fakeModel{steps: steps}
+	l, b := newLoop(t, m, &fakeHost{})
+	l.MaxCalls = 3
+	res, err := l.RunTurn(context.Background(), "forever")
+	if !errors.Is(err, ErrTooManyCalls) {
+		t.Fatalf("err = %v, want ErrTooManyCalls", err)
+	}
+	if len(m.snaps) != 4 || res.Requests != 4 {
+		t.Fatalf("requests = %d / %d, want 4: the first plus MaxCalls (3) continuations", len(m.snaps), res.Requests)
+	}
+	if got := history(b); len(got) != 5 {
+		t.Fatalf("history has %d entries, want the user entry and 4 pause replies", len(got))
+	}
+	// Pauses and tool calls draw on one budget.
+	m2 := &fakeModel{steps: []fakeStep{
+		{resp: toolResp("tu_1", "knomit_repos", `{}`, Usage{})}, {resp: pause}, {resp: pause}, {resp: pause},
+	}}
+	h := &fakeHost{out: map[string]ToolOutcome{"knomit_repos": {Content: "r"}}}
+	l2, _ := newLoop(t, m2, h)
+	l2.MaxCalls = 2
+	if _, err := l2.RunTurn(context.Background(), "x"); !errors.Is(err, ErrTooManyCalls) || len(m2.snaps) != 3 {
+		t.Fatalf("err = %v, requests = %d; want ErrTooManyCalls after 1 call + 2 pauses = 3 requests", err, len(m2.snaps))
+	}
+}
+
+func TestLoop_ContextWindowExceededStopKeepsTextAndEndsTurn(t *testing.T) {
+	se := &StopError{Reason: StopContextWindowExceeded, Response: &Response{
+		Blocks: []Block{{Kind: BlockText, Text: "cut at the window"}}, StopReason: StopContextWindowExceeded, Usage: Usage{Input: 7, Output: 3},
+	}}
+	m := &fakeModel{steps: []fakeStep{{err: se}}}
+	l, b := newLoop(t, m, &fakeHost{})
+	res, err := l.RunTurn(context.Background(), "q")
+	if !errors.Is(err, ErrContextFull) || !strings.Contains(err.Error(), "no longer fits the model's context window") {
+		t.Fatalf("err = %v, want the context-full sentence wrapping ErrContextFull", err)
+	}
+	got := history(b)
+	if len(got) != 2 || got[1].Blocks[0].Text != "cut at the window" || res.Usage.Input != 7 {
+		t.Fatalf("history %+v, usage %+v; want the partial text kept and the usage counted", got, res.Usage)
+	}
+}
+
+func TestLoop_DuplicateEntryIDIsATurnErrorNotASilentDrop(t *testing.T) {
+	// The results entry repeats the assistant entry's id: it cannot be added.
+	ids := []string{"e_user", "e_dup", "e_dup", "e_next"}
+	n := 0
+	m := &fakeModel{steps: []fakeStep{{resp: toolResp("tu_1", "knomit_repos", `{}`, Usage{})}, {resp: textResp("never", Usage{})}}}
+	h := &fakeHost{out: map[string]ToolOutcome{"knomit_repos": {Content: "r"}}}
+	l, b := newLoop(t, m, h)
+	l.NewID = func() string { id := ids[n%len(ids)]; n++; return id }
+	_, err := l.RunTurn(context.Background(), "q")
+	if !errors.Is(err, ErrDuplicateItem) {
+		t.Fatalf("err = %v, want ErrDuplicateItem", err)
+	}
+	if len(m.snaps) != 1 {
+		t.Fatalf("requests = %d, want 1 (the turn ends at the failed record)", len(m.snaps))
+	}
+	// The tool_use whose result could not be recorded must not reach hook 6.
+	if got := history(b); len(got) != 0 || len(b.Snapshot().Hooks[HookTurn]) != 0 {
+		t.Fatalf("history = %+v, hook 7 = %d; want both empty (no unpaired tool_use)", got, len(b.Snapshot().Hooks[HookTurn]))
 	}
 }

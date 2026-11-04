@@ -3,7 +3,9 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -367,7 +369,12 @@ func (a *AnthropicChat) Stream(ctx context.Context, s Snapshot, o StreamOptions,
 		switch ev.Type {
 		case "message_start":
 			u := ev.Message.Usage
-			resp.Usage = Usage{Input: u.InputTokens, CacheRead: u.CacheReadInputTokens, CacheWrite: u.CacheCreationInputTokens, Output: u.OutputTokens}
+			// cache_creation splits the write by TTL; only message_start
+			// carries it (writes happen while the prompt is read).
+			resp.Usage = Usage{
+				Input: u.InputTokens, CacheRead: u.CacheReadInputTokens, CacheWrite: u.CacheCreationInputTokens, Output: u.OutputTokens,
+				CacheWrite5m: u.CacheCreation.Ephemeral5mInputTokens, CacheWrite1h: u.CacheCreation.Ephemeral1hInputTokens,
+			}
 		case "content_block_start":
 			cb := ev.ContentBlock
 			pb := &pendingBlock{typ: cb.Type, id: cb.ID, name: cb.Name, data: cb.Data}
@@ -418,14 +425,28 @@ func (a *AnthropicChat) Stream(ctx context.Context, s Snapshot, o StreamOptions,
 		}
 	}
 	if err := stream.Err(); err != nil {
+		if anthropicPromptTooLong(err) {
+			return nil, fmt.Errorf("anthropic: %w: %w", err, ErrContextFull)
+		}
 		return nil, fmt.Errorf("anthropic: %w", err)
 	}
 	switch resp.StopReason {
-	case StopMaxTokens, StopRefusal:
+	case StopMaxTokens, StopRefusal, StopContextWindowExceeded:
 		return nil, &StopError{Reason: resp.StopReason, Category: refusalCategory, Response: resp}
 	}
 	sink(Event{Kind: EventDone})
 	return resp, nil
+}
+
+// anthropicPromptTooLong recognises the API's context-overflow error: HTTP 400
+// invalid_request_error "prompt is too long: N tokens > M maximum", returned on
+// every model when the input alone exceeds the window. (When input plus
+// max_tokens exceeds it the API accepts the request on current models and the
+// reply ends with stop_reason model_context_window_exceeded instead.)
+func anthropicPromptTooLong(err error) bool {
+	var apiErr *anthropic.Error
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusBadRequest &&
+		strings.Contains(strings.ToLower(apiErr.Error()), "prompt is too long")
 }
 
 // stopDetailsCategory reads delta.stop_details.category from a raw

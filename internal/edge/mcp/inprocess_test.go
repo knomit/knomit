@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/engine/llm"
@@ -260,4 +262,55 @@ func TestInProcessSession_RefusesDuplicateIDAndImplementsToolHost(t *testing.T) 
 	_, err = s.CallTool(context.Background(), "knomit_nonesuch", json.RawMessage(`{}`))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "knomit_nonesuch")
+}
+
+// A call that finishes after Close must not record: Touch clears ended_at, so
+// recording would resurrect the ended row.
+func TestInProcessSession_CallFinishingAfterCloseLeavesTheRowEnded(t *testing.T) {
+	m, st, srv := bindFixture(t)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	srv.AddTool(mcpgo.NewTool("test_block"), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		close(entered)
+		<-release
+		return mcpgo.NewToolResultText("late"), nil
+	})
+	s, _, _, err := OpenInProcessSession(context.Background(), srv, m, chatOpts(chatIDA))
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	var out llm.ToolOutcome
+	var callErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		out, callErr = s.CallTool(context.Background(), "test_block", json.RawMessage(`{}`))
+	}()
+	<-entered
+	before := listSessions(t, st)[0].RequestCount
+
+	require.NoError(t, s.Close(context.Background()))
+	ended := listSessions(t, st)[0].Ended
+	require.NotNil(t, ended)
+
+	close(release)
+	wg.Wait()
+	require.NoError(t, callErr)
+	require.Equal(t, "late", out.Content, "the in-flight call still completes")
+
+	rows := listSessions(t, st)
+	require.NotNil(t, rows[0].Ended, "a late request must not bring the ended row back")
+	require.True(t, ended.Equal(*rows[0].Ended), "ended_at is untouched")
+	require.Equal(t, before, rows[0].RequestCount, "and it recorded nothing")
+}
+
+func TestOpenInProcessSession_RefusesAZeroPrincipal(t *testing.T) {
+	m, st, srv := bindFixture(t)
+	o := chatOpts(chatIDA)
+	o.Principal = auth.Principal{}
+	s, _, _, err := OpenInProcessSession(context.Background(), srv, m, o)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no principal")
+	require.Nil(t, s)
+	require.Empty(t, listSessions(t, st), "nothing was registered or recorded")
 }

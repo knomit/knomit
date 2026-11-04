@@ -134,9 +134,14 @@ type Usage struct {
 	Input      int64 `json:"input"`
 	CacheRead  int64 `json:"cache_read"`
 	CacheWrite int64 `json:"cache_write"`
-	Output     int64 `json:"output"`
-	PromptEval int64 `json:"prompt_eval,omitempty"`
-	Estimated  bool  `json:"estimated,omitempty"`
+	// CacheWrite5m and CacheWrite1h split CacheWrite by the TTL it used, when
+	// the provider says (Anthropic's cache_creation). They sum to CacheWrite
+	// or to less of it; the rest is unsplit. Ollama has no cache writes.
+	CacheWrite5m int64 `json:"cache_write_5m,omitempty"`
+	CacheWrite1h int64 `json:"cache_write_1h,omitempty"`
+	Output       int64 `json:"output"`
+	PromptEval   int64 `json:"prompt_eval,omitempty"`
+	Estimated    bool  `json:"estimated,omitempty"`
 
 	EstimatedFields []string `json:"estimated_fields,omitempty"`
 }

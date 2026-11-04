@@ -79,6 +79,10 @@ func OpenInProcessSession(ctx context.Context, srv *server.MCPServer, mgr *repos
 		return nil, "", nil, errors.New("in-process mcp session: no session id")
 	case o.Endpoint == "":
 		return nil, "", nil, errors.New("in-process mcp session: no endpoint")
+	case o.Principal.IsZero():
+		// requestContext attaches the principal to every call; a zero one
+		// would let the permission gate see an empty identity.
+		return nil, "", nil, errors.New("in-process mcp session: no principal")
 	}
 	t := &inProcessTransport{srv: srv, mgr: mgr, o: o}
 	s := &InProcessSession{t: t, client: client.NewClient(t), id: o.SessionID}
@@ -147,10 +151,13 @@ func (s *InProcessSession) TargetPin(ctx context.Context, args map[string]any) (
 }
 
 // Close ends the session row and unregisters the server-side session. Safe to
-// call more than once.
+// call more than once. A call still in flight finishes, but it records
+// nothing once Close has begun: clientsessions.Store.Touch clears ended_at, so
+// a late record would bring the ended row back to life.
 func (s *InProcessSession) Close(ctx context.Context) error {
 	var err error
 	s.closed.Do(func() {
+		s.t.stopRecording()
 		if s.store != nil {
 			err = s.store.End(context.WithoutCancel(ctx), s.id, time.Now())
 		}
@@ -169,6 +176,13 @@ type inProcessTransport struct {
 
 	mu      sync.Mutex
 	session *server.InProcessSession
+
+	// recMu orders record against stopRecording: record holds the read lock
+	// across the store write, stopRecording takes the write lock, so once it
+	// returns no record is running and none will start. Close calls it before
+	// store.End.
+	recMu     sync.RWMutex
+	noRecords bool
 }
 
 var _ transport.Interface = (*inProcessTransport)(nil)
@@ -270,6 +284,11 @@ func (t *inProcessTransport) record(ctx context.Context, rec *repos.PinRecorder)
 	if t.mgr == nil {
 		return
 	}
+	t.recMu.RLock()
+	defer t.recMu.RUnlock()
+	if t.noRecords {
+		return
+	}
 	store := t.mgr.ClientSessions()
 	if store == nil {
 		return
@@ -286,6 +305,17 @@ func (t *inProcessTransport) record(ctx context.Context, rec *repos.PinRecorder)
 	}
 }
 
+// stopRecording makes every later record a no-op and waits for one in progress.
+func (t *inProcessTransport) stopRecording() {
+	t.recMu.Lock()
+	t.noRecords = true
+	t.recMu.Unlock()
+}
+
+// SetNotificationHandler is deliberately a no-op: server-to-client
+// notifications (task status broadcasts and the like) are discarded. The
+// server's non-blocking send to a full session channel drops them too, as
+// mcp-go's own transport does; a chat has nothing that consumes them.
 func (t *inProcessTransport) SetNotificationHandler(func(mcpgo.JSONRPCNotification)) {}
 
 func (t *inProcessTransport) Close() error {
