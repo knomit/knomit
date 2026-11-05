@@ -39,12 +39,11 @@ export const CHAT_NO_GRANTS = 'Nothing has been allowed for this session.';
 
 /** The chat Settings line for the model's context window. `how` is what the
  *  server reports: "config", "memory", or "trained" (derived, and the model's
- *  own trained length was the smaller; this third wording is not in the
- *  approved set and is flagged in the PR). */
+ *  own trained length was the smaller). */
 export const CHAT_CONTEXT_HOW: Record<string, string> = {
   config: 'set in config',
   memory: "limited to fit this machine's memory",
-  trained: "set to the model's trained context length",
+  trained: "the model's trained length",
 };
 export function chatContextLine(window: number, how: string): string {
   const h = CHAT_CONTEXT_HOW[how];
