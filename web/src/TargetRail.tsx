@@ -378,11 +378,13 @@ export function TargetRail({
                   onClick={locked ? undefined : () => pin({ kind: 'chat', id: c.id })}
                   style={row(selected ? 'chat' : null, false)}
                 >
-                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: CHAT_ACCENT, flexShrink: 0 }} />
-                  <span style={rowName}>{c.model}</span>
-                  <span style={badges}>
-                    <ProviderIcon kind={chatProviders.find(p => p.name === c.provider)?.kind} name={c.provider} color="#999" size={14} />
+                  {/* The provider's mark stands in for the dot. Its slot is the
+                      dot's 7px: the mark overflows it evenly (negative margins),
+                      so the name column stays aligned with the repo and lens rows. */}
+                  <span data-testid={`rail-chat-mark-${c.id}`} style={chatMarkSlot}>
+                    <ProviderIcon kind={chatProviders.find(p => p.name === c.provider)?.kind} name={c.provider} color={CHAT_ACCENT} size={13} />
                   </span>
+                  <span style={rowName}>{c.model}</span>
                 </button>
               );
             })}
@@ -569,6 +571,10 @@ const plusBtn = (disabled: boolean, active: boolean): CSSProperties => ({
 // The name is the one element that shrinks; the badges never do.
 const rowName: CSSProperties = {
   flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+};
+const chatMarkSlot: CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  width: 7, height: 13, margin: '0 -3px', flexShrink: 0, overflow: 'visible',
 };
 const badges: CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 'auto',

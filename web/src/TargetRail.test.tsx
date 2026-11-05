@@ -567,11 +567,25 @@ describe('TargetRail — chats', () => {
       expect(mark('c2', 'prov-b').querySelector('path')?.getAttribute('d')).toMatch(/^M16\.361/);
     });
 
+    it('puts the mark first in the row, before the label, with no dot and no second mark', () => {
+      renderRail({ chats: rows, chatProviders: providers, chatsAvailable: true });
+      for (const [id, name, d, model] of [['c1', 'prov-a', /^M17\.3041/, 'model-1'], ['c2', 'prov-b', /^M16\.361/, 'model-2']] as const) {
+        const row = screen.getByTestId(`rail-chat-${id}`);
+        const first = row.firstElementChild as HTMLElement;
+        expect(first).toBe(screen.getByTestId(`rail-chat-mark-${id}`));
+        expect(first.querySelector('svg')).toBe(within(row).getByRole('img', { name }));
+        expect(first.querySelector('path')?.getAttribute('d')).toMatch(d);
+        expect(first.nextElementSibling).toHaveTextContent(model);
+        expect(row.querySelectorAll('svg')).toHaveLength(1);
+        expect(Array.from(row.querySelectorAll<HTMLElement>('span')).filter(sp => sp.style.borderRadius === '50%')).toHaveLength(0);
+        expect(row.lastElementChild).not.toContainElement(row.querySelector('svg'));
+      }
+    });
+
     it('renders no text badge for the provider', () => {
       renderRail({ chats: rows, chatProviders: providers, chatsAvailable: true });
       for (const [id, name] of [['c1', 'prov-a'], ['c2', 'prov-b'], ['c3', 'prov-c']]) {
         const row = screen.getByTestId(`rail-chat-${id}`);
-        // Own text nodes only: the mark's <title> is the accessible name, not a badge.
         const own = Array.from(row.querySelectorAll('span')).map(sp => Array.from(sp.childNodes).filter(n => n.nodeType === 3).map(n => n.textContent).join(''));
         expect(own).not.toContain(name);
       }
@@ -582,8 +596,16 @@ describe('TargetRail — chats', () => {
       for (const id of ['c3', 'c4']) {
         const row = screen.getByTestId(`rail-chat-${id}`);
         expect(within(row).queryByRole('img')).toBeNull();
+        expect(row.firstElementChild).toBe(screen.getByTestId(`rail-chat-mark-${id}`));
         expect(row.querySelector('svg path')?.getAttribute('d')).toMatch(/^M21 12a8/);
       }
     });
+  });
+
+  it('repo and lens rows keep their dots', () => {
+    renderRail({ chats, chatsAvailable: true });
+    const dot = (el: HTMLElement) => Array.from(el.querySelectorAll<HTMLElement>('span')).filter(sp => sp.style.borderRadius === '50%');
+    const repoRow = screen.getAllByTestId(/^rail-repo-[^n]/)[0];
+    expect(dot(repoRow).length + repoRow.querySelectorAll('[data-testid^="repo-dot"]').length).toBeGreaterThan(0);
   });
 });
