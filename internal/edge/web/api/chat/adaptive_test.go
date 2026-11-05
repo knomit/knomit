@@ -632,7 +632,8 @@ func TestSessionLog_PreloadHitAtTurnEnd(t *testing.T) {
 	h := newHarness(t)
 	h.useOllama()
 	names := h.toolNames(writer, "chat-00000000000000000000000000000a08")
-	h.mgr.emb = newFakeEmb(t, names, "knomit_explain")
+	emb := newFakeEmb(t, names, "knomit_explain")
+	h.mgr.emb = emb
 
 	h.queueAdaptive("o1", 40000,
 		toolStep("tu_x", "knomit_explain", map[string]any{"path": "kb/none"}, usage), // calls the pick
@@ -643,6 +644,10 @@ func TestSessionLog_PreloadHitAtTurnEnd(t *testing.T) {
 	s := h.attach("uid:501", id)
 	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "one"))
 	s.until("turn_done")
+	// Turn two's message points at another tool, which the model then ignores.
+	emb.mu.Lock()
+	emb.query = e1hot(names, "knomit_repos")
+	emb.mu.Unlock()
 	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "two"))
 	s.until("turn_done")
 
@@ -656,12 +661,64 @@ func TestSessionLog_PreloadHitAtTurnEnd(t *testing.T) {
 	require.EqualValues(t, 1, first["picked"])
 	require.EqualValues(t, 1, first["called"])
 
-	// Turn two: the pick is already loaded, so nothing new is picked; and a pick
-	// the model did not call is no hit.
+	// Turn two picked another tool and the model called nothing: a pick the
+	// model did not call is no hit.
 	second := pre[1]
-	require.Empty(t, second["loaded"])
+	require.Equal(t, []string{"knomit_repos"}, strs(second["loaded"]))
 	require.Empty(t, second["hits"])
-	require.EqualValues(t, 0, second["picked"])
+	require.EqualValues(t, 1, second["picked"])
+	require.EqualValues(t, 0, second["called"])
+}
+
+// A turn that changes nothing still shows the loaded set it ran with: its user
+// item and its turn_done carry the window's state, with this turn's counts at 0.
+//
+// SABOTAGE: chat.go startTurn, leave Tools off the user item -> the quiet turn
+// has no tools and this fails.
+func TestChat_TurnWithNoChangeStillShowsTheLoadedSet(t *testing.T) {
+	h := newHarness(t)
+	h.useOllama()
+	total := len(h.toolNames(writer, "chat-00000000000000000000000000000a12"))
+	m := h.queueAdaptive("o1", 40000,
+		loadStep("tu_load", llm.Usage{Input: 50}, "knomit_query"),
+		textStep("one", llm.Usage{Input: 100}),
+		textStep("two", llm.Usage{Input: 120}),
+	)
+	id := h.createAdaptive("uid:501")
+	s := h.attach("uid:501", id)
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, blankMessage))
+	s.until("turn_done")
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, blankMessage))
+	second := s.until("turn_done")
+
+	tokens := toolTokens(t, m.requests()[1], "knomit_query")
+	want := turnTools{Loaded: 0, Evicted: 0, LoadedNow: 1, Total: total, Tokens: tokens}
+	var d struct {
+		Tools *turnTools `json:"tools"`
+	}
+	require.NoError(t, json.Unmarshal(second[len(second)-1].Data, &d))
+	require.NotNil(t, d.Tools)
+	require.Equal(t, want, *d.Tools)
+	for _, e := range second {
+		require.NotEqual(t, "tools", e.Name, "nothing changed in the second turn")
+	}
+	_, body := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
+	var snap struct {
+		Items []struct {
+			Kind  string     `json:"kind"`
+			Tools *turnTools `json:"tools"`
+		} `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(body, &snap))
+	var users []*turnTools
+	for _, it := range snap.Items {
+		if it.Kind == "user" {
+			users = append(users, it.Tools)
+		}
+	}
+	require.Len(t, users, 2)
+	require.NotNil(t, users[1])
+	require.Equal(t, want, *users[1])
 }
 
 // The loader's call is logged with decision "auto", raises no approval event and
