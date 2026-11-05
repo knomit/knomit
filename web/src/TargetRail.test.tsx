@@ -605,7 +605,12 @@ describe('TargetRail — chats', () => {
   it('repo and lens rows keep their dots', () => {
     renderRail({ chats, chatsAvailable: true });
     const dot = (el: HTMLElement) => Array.from(el.querySelectorAll<HTMLElement>('span')).filter(sp => sp.style.borderRadius === '50%');
-    const repoRow = screen.getAllByTestId(/^rail-repo-[^n]/)[0];
-    expect(dot(repoRow).length + repoRow.querySelectorAll('[data-testid^="repo-dot"]').length).toBeGreaterThan(0);
+    for (const id of ['rail-repo-core-kb', 'rail-lens-ops-desk']) {
+      const row = screen.getByTestId(id);
+      expect(dot(row)).toHaveLength(1);
+      // The repo dot sits in a wrapper span (health state); the lens dot is the child itself.
+      expect(row.firstElementChild === dot(row)[0] || row.firstElementChild?.firstElementChild === dot(row)[0]).toBe(true);
+      expect(row.querySelector('svg')).toBeNull();
+    }
   });
 });
