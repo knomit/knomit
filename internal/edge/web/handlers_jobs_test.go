@@ -9,55 +9,7 @@ import (
 
 	"knomit/internal/corpus/repos"
 	"knomit/internal/corpus/repos/events"
-	"knomit/internal/engine/llm"
 )
-
-// stubLLMAdapter satisfies llm.LLMAdapter for tests that need a non-nil adapter
-// to reach code paths past the availability guard.
-type stubLLMAdapter struct{}
-
-func (s *stubLLMAdapter) Complete(_ context.Context, _ string, _ []llm.Message, _ llm.CompletionOptions, _ func(string)) (string, error) {
-	return "", nil
-}
-func (s *stubLLMAdapter) Model() string { return "stub" }
-
-func TestHandleStartSynthesis_NoLLM_Returns503(t *testing.T) {
-	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		LLMAdapter: nil, // no LLM configured
-	}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost,
-		"/repos/alpha/branches/main/synthesis-runs", nil))
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("status: got %d, want 503", rec.Code)
-	}
-}
-
-func TestHandleStartSynthesis_UnknownRepo_Returns404(t *testing.T) {
-	// RepoMiddleware resolves {repo} before the handler runs, so the 404 no
-	// longer depends on LLM availability — see
-	// TestAnchor_StartSynthesis_UnknownRepoNoLLM_Returns404 for the nil-adapter
-	// case. The adapter here keeps this test about the repo lookup alone.
-	s := &Server{
-		Manager:    newTestManagerWithRepos(t),
-		LLMAdapter: &stubLLMAdapter{},
-	}
-	r := s.NewAPIRouter()
-
-	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost,
-		"/repos/missing/branches/main/synthesis-runs", nil))
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("status: got %d, want 404", rec.Code)
-	}
-}
 
 func TestHandleStartRebuild_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t)}
@@ -135,5 +87,30 @@ func TestHandleStartRebuild_WithStub_Returns201(t *testing.T) {
 	var body map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Errorf("response is not valid JSON: %v, body=%s", err, rec.Body.String())
+	}
+}
+
+// TestJobs_SynthesisRoutesGone pins that the synthesis-runs routes were
+// removed with the CLI adapters and RunAll: the job mount still answers the
+// index-rebuilds list, so a 404 here means "no such route", not "no mount".
+func TestJobs_SynthesisRoutesGone(t *testing.T) {
+	hub, _ := events.NewTaskHub(context.Background())
+	m := newTestManagerWithRepos(t)
+	m.Set("alpha", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "alpha", Hub: hub}))
+	r := (&Server{Manager: m}).NewAPIRouter()
+
+	do := func(method, path string) int {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(method, path, nil)))
+		return rec.Code
+	}
+	const base = "/repos/alpha/branches/agent:test/"
+	if got := do(http.MethodGet, base+"index-rebuilds"); got != http.StatusOK {
+		t.Fatalf("GET index-rebuilds = %d, want 200 (the jobs mount must still be reached)", got)
+	}
+	for _, method := range []string{http.MethodPost, http.MethodGet} {
+		if got := do(method, base+"synthesis-runs"); got != http.StatusNotFound {
+			t.Errorf("%s synthesis-runs = %d, want 404", method, got)
+		}
 	}
 }

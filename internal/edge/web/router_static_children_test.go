@@ -93,7 +93,6 @@ var paramClass = map[string]struct {
 	"/repo-creates":       {false, "{id}: a server-minted job id"},
 	"/repos/{repo}/branches/{branch}/commits":        {false, "{sha}: a commit hash"},
 	"/repos/{repo}/branches/{branch}/index-rebuilds": {false, "{id}: a server-minted job id"},
-	"/repos/{repo}/branches/{branch}/synthesis-runs": {false, "{id}: a server-minted job id"},
 	"/repos/{repo}/origin-sessions":                  {false, "{sessionID}: comes from the origin, not from a name chosen here"},
 	"/chats":                                         {false, "{id}: a server-minted chat id (chat- and 32 random hex digits); the user picks a provider and model, never an id"},
 	"/chats/{id}/approvals":                          {false, "{callId}: the loop's tool-call id (tu_<n>), minted by knomit, never typed by a user"},

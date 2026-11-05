@@ -183,7 +183,7 @@ func TestStoreUnavailableAnswers_AreOne(t *testing.T) {
 	m.Set("alpha", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "alpha", AgentBranch: "agent/test", Hub: testHub(),
 	}))
-	s := &Server{Manager: m, OntologyRoot: "kb", LLMAdapter: &stubLLMAdapter{}}
+	s := &Server{Manager: m, OntologyRoot: "kb"}
 	const tip = "0123456789abcdef0123456789abcdef01234567"
 
 	for _, tc := range []struct{ name, method, url, body string }{
@@ -192,7 +192,6 @@ func TestStoreUnavailableAnswers_AreOne(t *testing.T) {
 		{"experiment rollback", http.MethodDelete, "/repos/alpha/experiments/probe", ""},
 		{"experiment commit with resolutions", http.MethodPost, "/repos/alpha/experiments/probe/commit", `{"resolutions":{"kb/ai/x.md":"ours"}}`},
 		{"pushed-branch merge", http.MethodPost, "/repos/alpha/branches/agent:test/merge", `{"expected_tip":"` + tip + `"}`},
-		{"synthesis run (Pin)", http.MethodPost, "/repos/alpha/branches/agent:test/synthesis-runs", ""},
 		{"index rebuild (ErrNotOpen)", http.MethodPost, "/repos/alpha/branches/agent:test/index-rebuilds", ""},
 		{"origin PUT (getOrigin)", http.MethodPut, "/repos/alpha/origin", `{"url":"https://x.test/kb.git","auth_method":"none"}`},
 	} {

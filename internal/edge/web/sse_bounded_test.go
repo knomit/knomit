@@ -107,7 +107,7 @@ func TestJobEvents_BoundsItsWrites(t *testing.T) {
 	// nothing: this handler filters by job id, so it would never attempt a
 	// write at all.
 	fire := make(chan struct{})
-	id, err := hub.Start("synth", func(ctx context.Context, emit func(events.TaskEvent)) {
+	id, err := hub.Start("rebuild", func(ctx context.Context, emit func(events.TaskEvent)) {
 		emit(events.TaskEvent{Status: "running"})
 		select {
 		case <-fire:
@@ -128,7 +128,7 @@ func TestJobEvents_BoundsItsWrites(t *testing.T) {
 	go func() {
 		defer close(done)
 		s.NewAPIRouter().ServeHTTP(rec,
-			httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/agent:test/synthesis-runs/"+id+"/events", nil).WithContext(ctx))
+			httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/agent:test/index-rebuilds/"+id+"/events", nil).WithContext(ctx))
 	}()
 	rec.waitFor(t, "the snapshot replay", func(b string) bool { return strings.Contains(b, "event: task") })
 

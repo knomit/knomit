@@ -117,7 +117,7 @@ func TestHandleHALBranch_ReturnsStatusAndFullLinkMap(t *testing.T) {
 	// Full link set per design spec §3 branch-root example.
 	wantRels := []string{
 		"self", "facts", "topics", "commits", "search",
-		"domains", "stats", "events", "synthesis-runs",
+		"domains", "stats", "events",
 		"index-rebuilds", "mcp", "repo",
 	}
 	for _, rel := range wantRels {

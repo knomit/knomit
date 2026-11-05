@@ -40,7 +40,6 @@ import (
 	"knomit/internal/corpus/synthesize/step"
 	"knomit/internal/domain/fact"
 	"knomit/internal/domain/fact/textnorm"
-	"knomit/internal/engine/llm"
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/facts"
 
@@ -501,39 +500,11 @@ func (p *Pipeline) ContinueSessionForItem(ctx context.Context, sessionID, respon
 	return p.ContinueSessionForItemPaged(ctx, sessionID, response, itemID, "")
 }
 
-// itemDelivery records HOW the caller answering a work item received it. It is
-// the only thing that decides whether the accumulate-then-respond guard below
-// applies, because the hazard the guard exists for is a property of the
-// DELIVERY, not of the item.
-//
-// The MCP wire splits an oversized item into pages, so an answer arriving over
-// it is only trustworthy with proof the agent read every one. RunAll's
-// in-process consumer is handed the whole item in a single Go value: there are
-// no pages for it to miss, nothing on that path ever issues a token, and
-// demanding one would make every multi-page item permanently unanswerable —
-// which is precisely what it did.
-//
-// Deliberately unexported, and deliberately not a parameter on any exported
-// method: if the wire could select deliveredWhole, the guard would be advisory
-// again, which is the failure the guard was written to end.
-type itemDelivery int
-
-const (
-	// deliveredByPage: the caller may have been served a slice of the item.
-	deliveredByPage itemDelivery = iota
-	// deliveredWhole: the caller holds every fact of the item by construction.
-	deliveredWhole
-)
-
 // ContinueSessionForItemPaged is ContinueSessionForItem plus the
 // accumulate-then-respond guard for multi-page items. completionToken is the
 // value the agent read off the item's final page; it is ignored for items that
 // fit one page.
 func (p *Pipeline) ContinueSessionForItemPaged(ctx context.Context, sessionID, response string, itemID int64, completionToken string) (*step.PipelineResult, error) {
-	return p.continueSessionForItem(ctx, sessionID, response, itemID, completionToken, deliveredByPage)
-}
-
-func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, response string, itemID int64, completionToken string, delivery itemDelivery) (*step.PipelineResult, error) {
 	tool := p.strategy.Tool()
 	d := p.deps()
 
@@ -580,10 +551,8 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 	// meant nothing because no code probed for it.
 	//
 	// Asked of the strategy, not assumed: only strategies that ship a payload
-	// beside the prompt can page, and hypothesize does not. Asked only of a
-	// paged DELIVERY: see itemDelivery for why a caller holding the whole item
-	// has nothing to prove.
-	if ps, ok := p.strategy.(step.PagedStrategy); ok && delivery == deliveredByPage {
+	// beside the prompt can page, and hypothesize does not.
+	if ps, ok := p.strategy.(step.PagedStrategy); ok {
 		if err := ps.RequireCompletion(item, completionToken); err != nil {
 			return nil, step.Wrapf(tool, err, "answer item %d", item.ID)
 		}
@@ -684,55 +653,6 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 	// replay of the planning block, which rides StartSession's result instead.
 	res.Health = append(res.Health, sess.Health...)
 	return res, nil
-}
-
-// RunAll drives the session to completion using an LLM adapter: start, then
-// loop render prompt → LLM call → apply response until the queue drains.
-func (p *Pipeline) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
-	result, err := p.StartSession(ctx)
-	if err != nil {
-		return fmt.Errorf("RunAll: start: %w", err)
-	}
-	if result.Done {
-		return nil
-	}
-
-	sessionID := result.SessionID
-	for result.Item != nil {
-		p.onProgress(step.ProgressEvent{
-			Phase:   "llm",
-			Message: fmt.Sprintf("processing %s work item", result.Item.Type),
-		})
-
-		// A step type that ships its payload beside the prompt (rather than
-		// interpolated into it) must have the two recombined here: an LLM
-		// adapter takes one message, and there is no second channel to put
-		// facts on. Omitting this would hand the model instructions about
-		// facts it was never shown — a silent, total loss of the item's
-		// content that no error surfaces.
-		//
-		// This is also what makes the answer below a deliveredWhole one: the
-		// model is shown every fact of the item in one message, so there is no
-		// page it could have missed.
-		content := result.Item.Prompt
-		if result.Item.Facts != "" {
-			content += "\n\nFacts in scope:\n" + result.Item.Facts
-		}
-
-		opts := llm.CompletionOptions{ForceJSON: true}
-		response, err := adapter.Complete(ctx, "", []llm.Message{
-			{Role: "user", Content: content},
-		}, opts, nil)
-		if err != nil {
-			return fmt.Errorf("RunAll: LLM %s: %w", result.Item.Type, err)
-		}
-
-		result, err = p.continueSessionForItem(ctx, sessionID, response, 0, "", deliveredWhole)
-		if err != nil {
-			return fmt.Errorf("RunAll: continue: %w", err)
-		}
-	}
-	return nil
 }
 
 // ── seed scan ─────────────────────────────────────────────────────────────
@@ -1329,8 +1249,9 @@ type LiveSessionError struct {
 	SessionID string
 	CreatedBy string
 	LastUsed  time.Time
-	// InProcess marks a session opened without a resume policy (RunAll, the
-	// web synthesis job): no agent can continue it, so its id is not offered.
+	// InProcess marks a session opened without a resume policy (legacy rows
+	// with start_key='' and StartSession): no agent can continue it, so its id
+	// is not offered.
 	InProcess bool
 }
 

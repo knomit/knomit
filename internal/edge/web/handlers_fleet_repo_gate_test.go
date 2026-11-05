@@ -98,7 +98,7 @@ func TestFleetRepo_EveryGenericMutationIsRefused(t *testing.T) {
 		"DELETE " + base + "/origin", "PATCH " + base + "/origin/upstream", "POST " + base + "/origin-sessions/",
 		"POST " + base + "/origin-sessions/s1/commit", "POST " + base + agent + "/merge", "POST " + base + agent + "/facts",
 		"PUT " + base + agent + "/facts/kb/x.md", "DELETE " + base + agent + "/facts/kb/x.md", "POST " + base + "/experiments",
-		"POST " + base + "/index:cancel", "POST " + base + agent + "/index-rebuilds", "POST " + base + agent + "/synthesis-runs",
+		"POST " + base + "/index:cancel", "POST " + base + agent + "/index-rebuilds",
 	} {
 		require.True(t, have[want], "the walk found %s (it found %v)", want, routes)
 	}

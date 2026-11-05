@@ -216,8 +216,8 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	// the other reads, and a lens's federated reads.
 	kb.Mount(branch, lensBound, s.OntologyRoot, s.Embedder, s.Manager)
 
-	// Synthesis-run and index-rebuild jobs (api/jobs).
-	jobs.Mount(branch, s.Manager, s.LLMAdapter)
+	// Index-rebuild jobs (api/jobs).
+	jobs.Mount(branch, s.Manager)
 
 	// ONLY the MCP mount is marked as one where a binding handle may
 	// choose the branch. The REST routes above name their branch in the
