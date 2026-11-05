@@ -104,6 +104,11 @@ export async function listChatGrants(id: string): Promise<ChatGrant[]> {
   return data._embedded?.grants ?? [];
 }
 
+/** Take back one session grant, named as listChatGrants returned it. */
+export function revokeChatGrant(id: string, grant: ChatGrant): Promise<void> {
+  return noContent(`${chatUrl(id)}/grants`, { method: 'DELETE', headers: JSON_HEADERS, body: JSON.stringify(grant) });
+}
+
 export function getChatCall(id: string, callId: string): Promise<ChatCall> {
   return fetchJSON<ChatCall>(`${chatUrl(id)}/calls/${encodeURIComponent(callId)}`);
 }

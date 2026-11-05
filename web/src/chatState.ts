@@ -7,9 +7,11 @@
 //
 // `ready` is the first event of every connect. It carries no state of its own:
 // the page refetches GET /chats/{id} and hands the snapshot to the reducer,
-// which replaces everything (there is no replay, so a reconnect restarts from
-// the server's view). The snapshot has no usage, so a refetch loses the usage
-// lines of earlier turns; later turns get theirs from the events.
+// which replaces the transcript with the server's view (there is no replay).
+// The snapshot has no usage, error or warning, so the reducer carries those
+// over from the state it replaces, turn by turn (a turn matches when its user
+// message does). The page also refetches when a turn ends, so an end that
+// arrives while a snapshot is in flight cannot leave the chat running.
 import type { ChatApproval, ChatSnapshot, ChatViewItem } from './chatApi';
 
 export interface ToolCall { id: string; name: string; state: 'running' | 'done'; isError: boolean }
@@ -36,6 +38,9 @@ export interface ChatState {
   /** The server's price-tier warning, verbatim. */
   warning: string | null;
   ended: boolean;
+  /** The `seq` of every usage event already counted: the server numbers a
+   *  chat's requests, so a repeat of one is not added twice. */
+  seenUsage: Record<number, true>;
   /** A snapshot has been applied. */
   loaded: boolean;
 }
@@ -51,13 +56,15 @@ export type ChatEvent =
   | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean }
   | { kind: 'approval'; approval: ChatApproval }
   | { kind: 'approval_answered'; callId: string }
-  | { kind: 'usage'; usage: UsagePayload; cost_usd?: number }
+  | { kind: 'usage'; usage: UsagePayload; cost_usd?: number; seq?: number }
   | { kind: 'warning'; message: string }
   | { kind: 'turn_done' }
+  /** The person pressed Stop: the turn is over here whatever the stream says. */
+  | { kind: 'stopped' }
   | { kind: 'turn_error'; message: string; cancelled?: boolean }
   | { kind: 'chat_end' };
 
-export const initialChatState: ChatState = { turns: [], running: false, approvals: {}, warning: null, ended: false, loaded: false };
+export const initialChatState: ChatState = { turns: [], running: false, approvals: {}, warning: null, ended: false, seenUsage: {}, loaded: false };
 
 const newTurn = (user = ''): ChatTurn => ({ user, parts: [], usage: null, costUsd: null, error: null });
 
@@ -79,19 +86,25 @@ function addItem(turns: ChatTurn[], item: ChatViewItem): void {
   if (last?.kind === 'group') last.calls.push(c); else t.parts.push({ kind: 'group', calls: [c] });
 }
 
-/** snapshotState is the state GET /chats/{id} describes. */
-export function snapshotState(snap: ChatSnapshot): ChatState {
+/** snapshotState is the state GET /chats/{id} describes. `prev` is the state it
+ *  replaces: what only the page knows (usage, a turn's error, the warning) is
+ *  carried over onto the turns that are still the same. */
+export function snapshotState(snap: ChatSnapshot, prev: ChatState = initialChatState): ChatState {
   const turns: ChatTurn[] = [];
   for (const it of snap.items) addItem(turns, it);
+  turns.forEach((t, i) => {
+    const old = prev.turns[i];
+    if (old && old.user === t.user) { t.usage = old.usage; t.costUsd = old.costUsd; t.error = old.error; }
+  });
   const approvals: Record<string, ChatApproval> = {};
   for (const a of snap.pending_approvals ?? []) approvals[a.call_id] = a;
-  return { turns, running: snap.running, approvals, warning: null, ended: false, loaded: true };
+  return { turns, running: snap.running, approvals, warning: prev.warning, ended: false, seenUsage: prev.seenUsage, loaded: true };
 }
 
 export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
   switch (e.kind) {
     case 'ready':
-      return snapshotState(e.snapshot);
+      return snapshotState(e.snapshot, s);
     case 'user':
       return { ...s, turns: [...s.turns, newTurn(e.text)], running: true };
     case 'text_delta':
@@ -106,10 +119,15 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
       return withLastTurn({ ...s, running: true }, t => {
         const existing = t.parts.some(p => p.kind === 'group' && p.calls.some(c => c.id === e.id));
         if (existing) {
+          // A call only moves forward: a repeat of `running` after `done` (a
+          // duplicate or a late frame) leaves it done.
           return {
             ...t,
             parts: t.parts.map(p => p.kind === 'group'
-              ? { ...p, calls: p.calls.map(c => c.id === e.id ? { ...c, state: e.state, isError: !!e.is_error } : c) }
+              ? {
+                ...p,
+                calls: p.calls.map(c => c.id !== e.id || c.state === 'done' ? c : { ...c, state: e.state, isError: !!e.is_error }),
+              }
               : p),
           };
         }
@@ -127,8 +145,10 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
       void _gone;
       return { ...s, approvals: rest };
     }
-    case 'usage':
-      return withLastTurn(s, t => {
+    case 'usage': {
+      if (e.seq !== undefined && s.seenUsage[e.seq]) return s;
+      const seen = e.seq === undefined ? s.seenUsage : { ...s.seenUsage, [e.seq]: true as const };
+      return withLastTurn({ ...s, seenUsage: seen }, t => {
         const u = t.usage ?? { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
         return {
           ...t,
@@ -139,11 +159,16 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
           costUsd: e.cost_usd === undefined ? t.costUsd : (t.costUsd ?? 0) + e.cost_usd,
         };
       });
+    }
     case 'warning':
       return { ...s, warning: e.message };
     case 'turn_done':
+    case 'stopped':
       return { ...s, running: false, approvals: {} };
     case 'turn_error':
+      // A cancelled turn is the person's own Stop, not a failure: it ends
+      // quietly with the text it had.
+      if (e.cancelled) return { ...s, running: false, approvals: {} };
       return withLastTurn({ ...s, running: false, approvals: {} }, t => ({ ...t, error: e.message }));
     case 'chat_end':
       return { ...s, running: false, ended: true };

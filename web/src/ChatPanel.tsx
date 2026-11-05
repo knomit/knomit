@@ -6,7 +6,7 @@ import { ChatToolGroup } from './ChatToolGroup';
 import { usageLine } from './chatState';
 import type { ChatState, ChatTurn, ToolCall } from './chatState';
 import type { ApprovalDecision } from './chatApi';
-import { CHAT_INPUT_PLACEHOLDER_DRAFT, CHAT_SEND_DRAFT, CHAT_STOP_DRAFT } from './chatCopy';
+import { CHAT_INPUT_PLACEHOLDER, CHAT_SEND, CHAT_STOP } from './chatCopy';
 
 /** How a turn is drawn: its work (runs of tool calls, each with the text that
  *  led into it) and the final text below. Text before a group is interstitial
@@ -84,15 +84,15 @@ export function ChatPanel({ state, selectedId, actionError, onSend, onStop, onSe
           data-testid="chat-input"
           value={draft}
           rows={2}
-          placeholder={CHAT_INPUT_PLACEHOLDER_DRAFT}
-          aria-label={CHAT_INPUT_PLACEHOLDER_DRAFT}
+          placeholder={CHAT_INPUT_PLACEHOLDER}
+          aria-label={CHAT_INPUT_PLACEHOLDER}
           onChange={e => setDraft(e.target.value)}
           onKeyDown={onKey}
           style={input}
         />
         {state.running
-          ? <button type="button" data-testid="chat-stop" onClick={onStop} style={sendBtn(false)}>{CHAT_STOP_DRAFT}</button>
-          : <button type="button" data-testid="chat-send" disabled={!draft.trim()} onClick={submit} style={sendBtn(!draft.trim())}>{CHAT_SEND_DRAFT}</button>}
+          ? <button type="button" data-testid="chat-stop" onClick={onStop} style={sendBtn(false)}>{CHAT_STOP}</button>
+          : <button type="button" data-testid="chat-send" disabled={!draft.trim()} onClick={submit} style={sendBtn(!draft.trim())}>{CHAT_SEND}</button>}
       </div>
     </div>
   );

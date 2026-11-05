@@ -16,7 +16,7 @@ import { adoptAPIBase, isDesktopBooting, pollBootStatus } from './bootStatus';
 import { pickRepo, loadLastContext, saveLastContext, browsableRepo } from './repoSelection';
 import { useListUrl } from './listUrl';
 import { useRepoCreates, activeCreateByRepo, refreshRepoCreates, createRepoIsRegistered, createListedIn } from './useRepoCreates';
-import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable, serverPagesFor, accessTabsFor, railShown, FLEET_FACETS, CHAT_FACETS } from './facets';
+import { useViewState, facetsFor, remoteFailing, displayedTarget, targetLabelFor, draftCancellable, serverPagesFor, accessTabsFor, railShown, FLEET_FACETS } from './facets';
 import type { Facet, PinnedTarget, DraftKind, ServerPage } from './facets';
 import { TopBar } from './TopBar';
 import { isMatFocus } from './matFocus';
@@ -1437,8 +1437,8 @@ export default function App() {
     if (v.draft !== 'chat') return;
     const shown = v.draftShown;
     dispatchView({ type: 'DRAFT_REGISTERED', kind: 'chat', facet: 'chat' });
-    if (shown) dispatchView({ type: 'SELECT_PINNED', target: { kind: 'chat', id: chat.id }, available: CHAT_FACETS });
-  }, [addChat, dispatchView]);
+    if (shown) dispatchView({ type: 'SELECT_PINNED', target: { kind: 'chat', id: chat.id }, available: facetsFor({ kind: 'chat', id: chat.id }, repos, lenses, creates) });
+  }, [addChat, dispatchView, repos, lenses, creates]);
   // A chat ended (the server said so, or it is gone): it leaves the list, and
   // the auto-unpin effect leaves it.
   const onChatGone = useCallback((id: string) => removeChat(id), [removeChat]);

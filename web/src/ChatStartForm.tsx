@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react';
 import { createChat } from './chatApi';
 import type { ChatInfo, ChatProvider } from './chatApi';
 import { DRAFT_NAME } from './facets';
-import { CHAT_NO_MODELS_DRAFT } from './chatCopy';
+import { CHAT_NO_MODELS } from './chatCopy';
 
 // The body of the chat DRAFT (the rail's "New chat" row): the configured
 // providers, and for each only the models the server lists as available. A
@@ -39,7 +39,7 @@ export function ChatStartForm({ providers, onCreated, onCancel }: {
   return (
     <div data-testid="chat-start-form" style={page}>
       <h2 style={heading}>{DRAFT_NAME.chat}</h2>
-      {shown.length === 0 && <div data-testid="chat-no-models" style={{ color: '#888', fontSize: 13 }}>{CHAT_NO_MODELS_DRAFT}</div>}
+      {shown.length === 0 && <div data-testid="chat-no-models" style={{ color: '#888', fontSize: 13 }}>{CHAT_NO_MODELS}</div>}
       {shown.map(p => (
         <section key={p.name} data-testid={`chat-provider-${p.name}`} style={{ marginBottom: 18 }}>
           <div style={providerName}>{p.name}</div>

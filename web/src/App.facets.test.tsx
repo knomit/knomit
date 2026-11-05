@@ -1294,7 +1294,7 @@ describe('a chat target', () => {
     server.chats = [];
     act(() => { window.dispatchEvent(new Event('focus')); });
     await waitFor(() => expect(screen.queryByTestId('rail-chat-chat-a')).toBeNull());
-    expect(screen.getByTestId('target-label').textContent).toBe('ops-kb');
+    await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('ops-kb'));
     expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']);
   });
 
@@ -1325,7 +1325,7 @@ describe('a chat target', () => {
     });
     act(() => { es.emit('chat_end', { reason: 'deleted' }); });
     await waitFor(() => expect(screen.queryByTestId('rail-chat-chat-a')).toBeNull());
-    expect(screen.getByTestId('target-label').textContent).toBe('ops-kb');
+    await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('ops-kb'));
     expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']);
     expect(screen.queryByTestId('chat-body-chat-a')).toBeNull();
   });

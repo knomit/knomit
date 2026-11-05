@@ -5,7 +5,7 @@ import { ChatToolGroup } from './ChatToolGroup';
 import { installFakeEventSource, uninstallFakeEventSource, latestStream } from './testEventSource';
 import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatApproval, ChatSnapshot } from './chatApi';
-import { APPROVAL_TARGET_UNRESOLVED_DRAFT } from './chatCopy';
+import { APPROVAL_TARGET_UNRESOLVED } from './chatCopy';
 
 const CHAT = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
 const BASE = '/api/v1/chats/chat-a';
@@ -88,8 +88,8 @@ describe('approvals in a tool row', () => {
     stubFleetFetch({ [`GET ${BASE}`]: { body: snap([unresolved]) } });
     render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} />);
     await screen.findByTestId('chat-approval-tu_2');
-    expect(screen.getByTestId('chat-approval-target').textContent).toBe(APPROVAL_TARGET_UNRESOLVED_DRAFT);
-    expect(APPROVAL_TARGET_UNRESOLVED_DRAFT).not.toBe('');
+    expect(screen.getByTestId('chat-approval-target').textContent).toBe(APPROVAL_TARGET_UNRESOLVED);
+    expect(APPROVAL_TARGET_UNRESOLVED).not.toBe('');
     // The server will not grant it either, so the page does not offer to.
     expect(screen.queryByTestId('chat-approval-allow-session')).toBeNull();
     expect(screen.getByTestId('chat-approval-allow')).toBeInTheDocument();

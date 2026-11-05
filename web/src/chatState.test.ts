@@ -71,8 +71,70 @@ describe('chatReducer', () => {
     expect(s.turns[0].parts.map(p => p.kind)).toEqual(['text', 'group']);
     expect(s.running).toBe(true);
     expect(Object.keys(s.approvals)).toEqual(['tu_1']);
-    expect(s.warning).toBeNull();
+    // Only the page knows the warning (the snapshot has none): it is kept.
+    expect(s.warning).toBe('w');
     expect(s.loaded).toBe(true);
+  });
+
+  it('ready carries usage and a turn error over onto the turns that are still the same', () => {
+    const usage = { input: 1, cache_read: 2, cache_write: 3, output: 4 };
+    const before = run([
+      { kind: 'user', text: 'one' }, { kind: 'usage', usage, cost_usd: 0.5, seq: 1 }, { kind: 'turn_error', message: 'boom' },
+      { kind: 'user', text: 'two' },
+    ]);
+    const snap = (users: string[]): ChatEvent => ({
+      kind: 'ready',
+      snapshot: { id: 'c', provider: 'p', model: 'm', running: false, grants: [], pending_approvals: [], items: users.map(text => ({ kind: 'user' as const, text })) },
+    });
+    const same = chatReducer(before, snap(['one', 'two']));
+    expect(same.turns[0].usage).toEqual({ input: 1, cacheRead: 2, cacheWrite: 3, output: 4 });
+    expect(same.turns[0].costUsd).toBe(0.5);
+    expect(same.turns[0].error).toBe('boom');
+    expect(same.turns[1].usage).toBeNull();
+    // A different first message is a different turn: nothing is carried onto it.
+    const other = chatReducer(before, snap(['something else']));
+    expect(other.turns[0].usage).toBeNull();
+    expect(other.turns[0].error).toBeNull();
+    // And a request already counted is not counted again after the reset.
+    const again = chatReducer(same, { kind: 'usage', usage, seq: 1 });
+    expect(again.turns[0].usage).toEqual({ input: 1, cacheRead: 2, cacheWrite: 3, output: 4 });
+  });
+
+  it('a cancelled turn ends quietly: no error, the partial text kept, not running', () => {
+    const s = run([{ kind: 'user', text: 'q' }, { kind: 'text_delta', text: 'partial' }, { kind: 'turn_error', message: 'llm: the turn was cancelled', cancelled: true }]);
+    expect(s.running).toBe(false);
+    expect(s.turns[0].error).toBeNull();
+    expect(s.turns[0].parts).toEqual([{ kind: 'text', text: 'partial' }]);
+    // A turn error that is not a cancel still records its message.
+    expect(run([{ kind: 'user', text: 'q' }, { kind: 'turn_error', message: 'real failure', cancelled: false }]).turns[0].error).toBe('real failure');
+  });
+
+  it('stopped ends the turn and drops its approvals, whatever the stream says', () => {
+    const ap = { call_id: 'tu_1', tool: 'knomit_learn', action: 'learn', destructive: false, grantable: true };
+    const s = run([{ kind: 'user', text: 'q' }, { kind: 'approval', approval: ap }, { kind: 'stopped' }]);
+    expect(s.running).toBe(false);
+    expect(s.approvals).toEqual({});
+  });
+
+  it('a repeated running event does not move a done call back; the error flag stays', () => {
+    const s = run([
+      call('tu_1', 'knomit_repos'),
+      { kind: 'tool_call', id: 'tu_1', name: 'knomit_repos', state: 'done', is_error: true },
+      call('tu_1', 'knomit_repos'),
+    ]);
+    const g = s.turns[0].parts[0];
+    expect(g.kind === 'group' && g.calls).toEqual([{ id: 'tu_1', name: 'knomit_repos', state: 'done', isError: true }]);
+    expect(s.turns[0].parts).toHaveLength(1);
+  });
+
+  it('a usage event seen twice (same seq) is counted once; a different seq is another request', () => {
+    const u = { input: 10, cache_read: 0, cache_write: 0, output: 5 };
+    const once = run([{ kind: 'user', text: 'q' }, { kind: 'usage', usage: u, cost_usd: 1, seq: 7 }, { kind: 'usage', usage: u, cost_usd: 1, seq: 7 }]);
+    expect(once.turns[0].usage?.input).toBe(10);
+    expect(once.turns[0].costUsd).toBe(1);
+    const two = chatReducer(once, { kind: 'usage', usage: u, cost_usd: 1, seq: 8 });
+    expect(two.turns[0].usage?.input).toBe(20);
+    expect(two.turns[0].costUsd).toBe(2);
   });
 
   it('an approval is keyed by its call, and answering it removes it', () => {

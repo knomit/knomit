@@ -6,7 +6,7 @@ import type { ChatApproval, ApprovalDecision } from './chatApi';
 import type { ToolCall } from './chatState';
 import { toolRowLabel } from './chatState';
 import {
-  TOOL_GROUP_HEADER, APPROVAL_ALLOW, APPROVAL_DECLINE, APPROVAL_ALLOW_SESSION, APPROVAL_TARGET_UNRESOLVED_DRAFT,
+  TOOL_GROUP_HEADER, APPROVAL_ALLOW, APPROVAL_DECLINE, APPROVAL_ALLOW_SESSION, APPROVAL_TARGET_UNRESOLVED,
 } from './chatCopy';
 
 /** The compact JSON of a call's arguments, bounded so a large call stays a card. */
@@ -74,7 +74,7 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, onSelect, on
  *  answers. "Allow for session" is offered only for a call the server can
  *  grant (an unknown tool or an unresolved handle cannot be). */
 function ApprovalCard({ approval, onAnswer }: { approval: ChatApproval; onAnswer: (d: ApprovalDecision) => void }) {
-  const target = approval.target || APPROVAL_TARGET_UNRESOLVED_DRAFT;
+  const target = approval.target || APPROVAL_TARGET_UNRESOLVED;
   const args = argsText(approval.arguments);
   return (
     <div data-testid={`chat-approval-${approval.call_id}`} data-destructive={approval.destructive || undefined} style={card(approval.destructive)}>

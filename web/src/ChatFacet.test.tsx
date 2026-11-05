@@ -230,3 +230,85 @@ describe('ChatFacet', () => {
     expect(screen.getByTestId('chat-input')).toHaveValue('draft kept');
   });
 });
+
+// The reviewer's N1, N2 and N4 at the page: a turn end that races a snapshot
+// read, Stop, a cancel, and repeated frames.
+describe('ChatFacet: turn ends and repeats', () => {
+  it('N1: a turn_done that arrives while the ready snapshot is in flight cannot leave the chat running', async () => {
+    // The snapshot read the server cut while the turn was still running.
+    const stale = JSON.stringify(snapshot({ running: true, items: [{ kind: 'user', text: 'q' }, { kind: 'assistant', text: 'part' }] }));
+    const settled = snapshot({ running: false, items: [{ kind: 'user', text: 'q' }, { kind: 'assistant', text: 'part and the rest' }] });
+    const fx = stubFleetFetch({ [`GET ${BASE}`]: { body: settled } });
+    const inner = globalThis.fetch;
+    let release!: () => void;
+    let firstHeld = false;
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url === BASE && !init?.method && !firstHeld) {
+        firstHeld = true;
+        return new Promise<Response>(res => { release = () => res(new Response(stale, { status: 200 })); });
+      }
+      return inner(input, init);
+    }));
+    render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} />);
+    await waitFor(() => expect(firstHeld).toBe(true));
+
+    // The turn ends while that read is still out.
+    act(() => { latestStream('/chats/chat-a/events')!.emit('turn_done', {}); });
+    await waitFor(() => expect(screen.getByTestId('chat-text')).toHaveTextContent('part and the rest'));
+    // Now the stale read answers: it must not undo the end.
+    await act(async () => { release(); });
+    expect(screen.getByTestId('chat-text')).toHaveTextContent('part and the rest');
+    expect(screen.queryByTestId('chat-stop')).toBeNull();
+    expect(screen.getByTestId('chat-send')).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'next' } });
+    expect(screen.getByTestId('chat-send')).toBeEnabled();
+    expect(fx.calls.filter(c => c.route === `GET ${BASE}`)).toHaveLength(1); // the second read went through the stub
+  });
+
+  it('N1: Stop clears the running state here, even when the stream never reports an end', async () => {
+    const { fx } = mount(snapshot({ running: true, items: [{ kind: 'user', text: 'q' }] }), { [`POST ${BASE}/cancel`]: { status: 204 } });
+    await screen.findByTestId('chat-stop');
+    fireEvent.click(screen.getByTestId('chat-stop'));
+    await waitFor(() => expect(screen.getByTestId('chat-send')).toBeInTheDocument());
+    expect(screen.queryByTestId('chat-stop')).toBeNull();
+    expect(callsTo(fx, '/cancel')).toHaveLength(1);
+  });
+
+  it('N1: Stop clears it even when the cancel request fails', async () => {
+    mount(snapshot({ running: true, items: [{ kind: 'user', text: 'q' }] }), { [`POST ${BASE}/cancel`]: { status: 500, body: { detail: 'boom' } } });
+    fireEvent.click(await screen.findByTestId('chat-stop'));
+    await waitFor(() => expect(screen.getByTestId('chat-send')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('chat-action-error')).toHaveTextContent('boom'));
+  });
+
+  it('N2: a cancelled turn shows no error and keeps its partial text', async () => {
+    mount(snapshot({ running: true, items: [{ kind: 'user', text: 'q' }] }));
+    await screen.findByTestId('chat-turn-0');
+    act(() => {
+      const es = latestStream('/chats/chat-a/events')!;
+      es.emit('text_delta', { text: 'partial' });
+      es.emit('turn_error', { message: 'llm: the turn was cancelled', cancelled: true });
+    });
+    expect(screen.queryByTestId('chat-turn-error')).toBeNull();
+    expect(screen.queryByText(/cancelled/)).toBeNull();
+    expect(screen.getByTestId('chat-text')).toHaveTextContent('partial');
+    expect(screen.getByTestId('chat-send')).toBeInTheDocument();
+  });
+
+  it('N4: a repeated usage frame is counted once, and a repeated running frame leaves a done call done', async () => {
+    mount(snapshot({ running: true, items: [{ kind: 'user', text: 'q' }, { kind: 'tool_call', id: 'tu_1', name: 'knomit_repos', state: 'done' }] }));
+    await screen.findByTestId('chat-turn-0');
+    const es = latestStream('/chats/chat-a/events')!;
+    const u = { usage: { input: 11, cache_read: 22, cache_write: 33, output: 44 }, cost_usd: 0.5, seq: 3 };
+    act(() => {
+      es.emit('usage', u);
+      es.emit('usage', u);
+      es.emit('tool_call', { id: 'tu_1', name: 'knomit_repos', state: 'running' });
+    });
+    expect(screen.getByTestId('chat-usage').textContent).toBe('input 11 · cache read 22 · cache write 33 · output 44 · $0.5000');
+    fireEvent.click(screen.getByTestId('chat-tool-group-toggle'));
+    expect(screen.getByTestId('chat-tool-row-tu_1')).toHaveAttribute('data-state', 'done');
+    expect(screen.getByTestId('chat-tool-select-tu_1')).toBeEnabled();
+  });
+});

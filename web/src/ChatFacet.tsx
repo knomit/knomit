@@ -31,6 +31,17 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
   useEffect(() => {
     const es = openChatEvents(chatId);
     let closed = false;
+    // Snapshot reads are numbered and only the LATEST one started is applied.
+    // A turn can end while an earlier read is in flight; that read's answer
+    // (cut before the end, so running:true) must not land after, and wedge the
+    // chat on a turn that is over. The read started at the end supersedes it.
+    let reads = 0;
+    const refresh = () => {
+      const mine = ++reads;
+      getChat(chatId)
+        .then(snapshot => { if (!closed && mine === reads) dispatch({ kind: 'ready', snapshot }); })
+        .catch(e => { if (statusOf(e) === 404) gone(); else if (!closed && mine === reads) setActionError(errText(e)); });
+    };
     const gone = () => { if (!closed) goneRef.current(chatId); };
     const on = (name: string, fn: (data: Record<string, unknown>) => void) => {
       es.addEventListener(name, (e: MessageEvent) => {
@@ -39,22 +50,26 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
         fn(data);
       });
     };
-    on('ready', () => {
-      getChat(chatId)
-        .then(snapshot => { if (!closed) dispatch({ kind: 'ready', snapshot }); })
-        .catch(e => { if (statusOf(e) === 404) gone(); else if (!closed) setActionError(errText(e)); });
-    });
+    on('ready', refresh);
     on('text_delta', d => dispatch({ kind: 'text_delta', text: String(d.text ?? '') }));
     on('tool_call', d => dispatch({
       kind: 'tool_call', id: String(d.id), name: String(d.name), state: d.state === 'done' ? 'done' : 'running', is_error: d.is_error === true,
     }));
     on('approval', d => dispatch({ kind: 'approval', approval: d as unknown as ChatApproval }));
     on('usage', d => dispatch({
-      kind: 'usage', usage: d.usage as UsagePayload, ...(typeof d.cost_usd === 'number' ? { cost_usd: d.cost_usd } : {}),
+      kind: 'usage', usage: d.usage as UsagePayload,
+      ...(typeof d.cost_usd === 'number' ? { cost_usd: d.cost_usd } : {}),
+      ...(typeof d.seq === 'number' ? { seq: d.seq } : {}),
     }));
     on('warning', d => dispatch({ kind: 'warning', message: String(d.message ?? '') }));
-    on('turn_done', () => dispatch({ kind: 'turn_done' }));
-    on('turn_error', d => dispatch({ kind: 'turn_error', message: String(d.message ?? ''), cancelled: d.cancelled === true }));
+    // A turn's end is shown at once, and the transcript is read again: the
+    // server's view is complete by now, and it settles anything a read in
+    // flight at this moment got wrong.
+    on('turn_done', () => { dispatch({ kind: 'turn_done' }); refresh(); });
+    on('turn_error', d => {
+      dispatch({ kind: 'turn_error', message: String(d.message ?? ''), cancelled: d.cancelled === true });
+      refresh();
+    });
     on('chat_end', () => { dispatch({ kind: 'chat_end' }); gone(); });
     // A refused subscription is the server saying the chat is not there
     // (404). A plain connection loss is retried by the stream itself, and the
@@ -79,7 +94,10 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
     });
   }, [chatId]);
   const stop = useCallback(() => {
+    // Stop ends the turn here whatever the stream says: a turn end that never
+    // arrives must not leave the chat unable to send.
     cancelChatTurn(chatId).catch(e => setActionError(errText(e)));
+    dispatch({ kind: 'stopped' });
   }, [chatId]);
   const answer = useCallback((callId: string, decision: ApprovalDecision) => {
     setActionError('');

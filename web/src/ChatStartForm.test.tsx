@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { ChatStartForm } from './ChatStartForm';
 import type { ChatProvider } from './chatApi';
-import { CHAT_NO_MODELS_DRAFT } from './chatCopy';
+import { CHAT_NO_MODELS } from './chatCopy';
 
 const providers: ChatProvider[] = [
   { name: 'anthropic', kind: 'anthropic', models: [
@@ -61,7 +61,7 @@ describe('ChatStartForm', () => {
 
   it('says so when no provider offers a model', () => {
     render(<ChatStartForm providers={[{ name: 'anthropic', kind: 'anthropic', models: [{ id: 'a2', available: false, tools: true }] }]} onCreated={vi.fn()} />);
-    expect(screen.getByTestId('chat-no-models')).toHaveTextContent(CHAT_NO_MODELS_DRAFT);
+    expect(screen.getByTestId('chat-no-models')).toHaveTextContent(CHAT_NO_MODELS);
   });
 
   it('Cancel is offered only when the caller gives one', () => {

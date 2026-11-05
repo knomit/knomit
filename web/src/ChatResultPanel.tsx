@@ -5,7 +5,7 @@ import { markdownPlugins, markdownComponents } from './markdown';
 import { getChatCall } from './chatApi';
 import type { ChatCall } from './chatApi';
 import { toolRowLabel, materializedMarkdown } from './chatState';
-import { CHAT_RESULT_LOADING_DRAFT } from './chatCopy';
+import { CHAT_RESULT_LOADING } from './chatCopy';
 
 /**
  * ChatResultPanel is where a selected tool call's result is shown, on the
@@ -29,7 +29,7 @@ export function ChatResultPanel({ chatId, callId }: { chatId: string; callId: st
   const call = shown?.call;
   return (
     <div data-testid="chat-result-panel" style={panel}>
-      {!shown && <div data-testid="chat-result-loading" style={{ color: '#777', fontSize: 13 }}>{CHAT_RESULT_LOADING_DRAFT}</div>}
+      {!shown && <div data-testid="chat-result-loading" style={{ color: '#777', fontSize: 13 }}>{CHAT_RESULT_LOADING}</div>}
       {shown?.error && <div role="alert" data-testid="chat-result-error" style={{ color: '#e0a0a0', fontSize: 13 }}>{shown.error}</div>}
       {call && (
         <>

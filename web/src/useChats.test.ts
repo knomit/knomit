@@ -36,6 +36,26 @@ describe('useChats', () => {
     expect(result.current.chats.map(c => c.id).sort()).toEqual(['chat-a', 'chat-b']);
   });
 
+  it('N3: a chat removed while a list read is in flight stays gone when the read answers', async () => {
+    let release!: () => void;
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>()
+      .mockResolvedValueOnce(listBody(A, B))
+      .mockImplementationOnce(() => new Promise<Response>(res => { release = () => res(listBody(A, B)); }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useChats());
+    await waitFor(() => expect(result.current.chats.map(c => c.id)).toEqual(['chat-a', 'chat-b']));
+
+    // A second read goes out (focus), cut while chat-b still exists...
+    act(() => { window.dispatchEvent(new Event('focus')); });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    // ...and chat-b ends (chat_end) before it answers.
+    act(() => { result.current.remove('chat-b'); });
+    expect(result.current.chats.map(c => c.id)).toEqual(['chat-a']);
+    await act(async () => { release(); });
+    // The late answer still lists chat-b; it must not come back.
+    expect(result.current.chats.map(c => c.id)).toEqual(['chat-a']);
+  });
+
   it('reads the list again on window focus: a chat the server dropped leaves, one it gained joins', async () => {
     let body = listBody(A, B);
     const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => body.clone());
