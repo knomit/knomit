@@ -233,6 +233,7 @@ func (t *inProcessTransport) requestContext(ctx context.Context) (context.Contex
 	}
 	ctx = WithEndpoint(ctx, t.o.Endpoint)
 	ctx = repos.WithSessionScoped(ctx)
+	ctx = WithInstructionsHeld(ctx)
 	rec := &repos.PinRecorder{}
 	ctx = repos.WithPinRecorder(ctx, rec)
 	t.mu.Lock()

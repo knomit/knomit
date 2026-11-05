@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -146,24 +147,26 @@ const motifInstructionsSection = "### Motifs\n" +
 	"retrieval, not summaries. They are consumed only by synthesis (bridging and\n" +
 	"discovery); a wrong motif costs a wasted discovery candidate, nothing more.\n"
 
+// topicListText renders the ontology's topics as the instructions list them.
+func topicListText(ontology *fact.Ontology) string {
+	if ontology == nil {
+		return "  (no ontology loaded)"
+	}
+	var lines []string
+	for _, name := range ontology.TopicNames() {
+		node := ontology.Topics[name]
+		if node.Description != "" {
+			lines = append(lines, fmt.Sprintf("  %s — %s", name, node.Description))
+		} else {
+			lines = append(lines, fmt.Sprintf("  %s", name))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // baseInstructionsText returns the base MCP server instructions with the given ontology root.
 func baseInstructionsText(ontologyRoot string, ontology *fact.Ontology) string {
-	// Build dynamic topic list from ontology.
-	var topicList string
-	if ontology != nil {
-		var lines []string
-		for _, name := range ontology.TopicNames() {
-			node := ontology.Topics[name]
-			if node.Description != "" {
-				lines = append(lines, fmt.Sprintf("  %s — %s", name, node.Description))
-			} else {
-				lines = append(lines, fmt.Sprintf("  %s", name))
-			}
-		}
-		topicList = strings.Join(lines, "\n")
-	} else {
-		topicList = "  (no ontology loaded)"
-	}
+	topicList := topicListText(ontology)
 	return fmt.Sprintf(`You are connected to a knomit knowledge base. Use the available tools to learn, query, and manage knowledge.
 
 ## Ontology Structure
@@ -324,11 +327,49 @@ func BindingInstructions(b *repos.Binding, profile string) string {
 // ProfileInstructions returns the MCP server instructions for the given profile.
 // Valid profiles: "code", "chat", "generic". Unknown profiles fall back to "code".
 func ProfileInstructions(profile, ontologyRoot string, ontology *fact.Ontology) string {
+	return baseInstructionsText(ontologyRoot, ontology) + "\n\n" + profileAddendum(profile)
+}
+
+// initializeProfile is the profile the initialize instructions are built with
+// (server.go), before any binding exists.
+const initializeProfile = "code"
+
+func profileAddendum(profile string) string {
 	addendum, ok := profileAddenda[profile]
 	if !ok {
 		addendum = profileAddenda["code"]
 	}
-	return baseInstructionsText(ontologyRoot, ontology) + "\n\n" + addendum
+	return addendum
+}
+
+// bindDeltaHeader frames
+// the per-binding delta that knomit_bind returns to a client that already holds
+// the server instructions (the in-process chat puts them in its system prompt).
+const bindDeltaHeader = "## This knowledge base\n\n" +
+	"The server instructions you already hold (tools, fact fields, motifs) apply unchanged and are not repeated. " +
+	"Only what is specific to this binding follows; where it differs from those instructions, this wins.\n\n"
+
+// BindingInstructionsDelta is BindingInstructions for a client that already
+// holds the server-wide instructions: only what the initialize instructions
+// could not know. Those were built from the DEFAULT ontology (no topic list)
+// and the "code" profile, so the new parts are the write repo's ontology root,
+// its topic list, its profile addendum and, for a federated binding, the lens
+// addendum.
+func BindingInstructionsDelta(b *repos.Binding, profile string) string {
+	w := b.Write()
+	root := w.OntologyRoot()
+	var sb strings.Builder
+	sb.WriteString(bindDeltaHeader)
+	sb.WriteString(fmt.Sprintf("Facts live under %s/<topic>/<category>/<uuid>.md; wherever the instructions you hold name the facts root, it is %s/ here. "+
+		"Artifacts live under %s/<area>/; %s/ is the system.\n\n", root, root, fact.ArtifactsRoot, fact.PrivateRoot))
+	sb.WriteString("Available topics:\n" + topicListText(w.Ontology()) + "\n\n")
+	// The initialize text already carries the initializeProfile addendum; a
+	// repeat of it is exactly the duplication the delta exists to avoid.
+	if a := profileAddendum(profile); a != profileAddendum(initializeProfile) {
+		sb.WriteString(a)
+	}
+	sb.WriteString(lensInstructions(b))
+	return sb.String()
 }
 
 var profileAddenda = map[string]string{
@@ -353,3 +394,22 @@ const unboundAddendum = "\n\n## No repo bound yet\n\nThis connection is to the u
 // learn from the tool list alone: that `binding` is optional here, and what a
 // handle is for when several agents share the connection.
 const scopedBindAddendum = "\n\n## Binding on this connection\n\nThis connection is fixed to one repo or lens by its URL, and every tool works without a `binding` argument — always on the default branch (the agent branch). That default NEVER moves: opening an experiment does not move it, because every agent sharing this connection would move with it. `knomit_experiment {action: \"open\"}` returns a `binding` handle inside the experiment (the handle you passed, or a new one); pass that handle as `binding` on EVERY call that should read or write the experiment, and on commit, rollback and sync. Never rely on the connection default for experiment work. `knomit_bind` (no arguments, or `experiment` to resume an existing one, e.g. after a reconnect) mints further handles. A handle changes only the branch, never the repo or lens, and works on this endpoint (this same --repo or --lens URL) and nowhere else."
+
+type instructionsHeldKey struct{}
+
+// WithInstructionsHeld marks ctx as served to a client that already holds the
+// server-wide initialize instructions in its prompt, so knomit_bind returns
+// only the per-binding delta. Only the in-process chat sets it: an external
+// MCP client may ignore initialize instructions, and the unscoped addendum
+// tells it to treat the bind result as the instructions, so it keeps the full
+// text.
+func WithInstructionsHeld(ctx context.Context) context.Context {
+	return context.WithValue(ctx, instructionsHeldKey{}, true)
+}
+
+// InstructionsHeld reports whether ctx came from a client marked by
+// WithInstructionsHeld.
+func InstructionsHeld(ctx context.Context) bool {
+	v, _ := ctx.Value(instructionsHeldKey{}).(bool)
+	return v
+}

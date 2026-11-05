@@ -182,9 +182,17 @@ func BindHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest
 		// ontology, and MCP cannot re-send instructions mid-session, so the
 		// bound base's own instructions have to ride back here — behind the
 		// handle banner, which has to be the first thing read.
+		//
+		// A client that already holds the server-wide instructions (the
+		// in-process chat, whose system prompt carries them) gets only the
+		// per-binding delta; re-sending the rest costs ~4.8K tokens a bind.
+		profile := profileFor(mgr, b.Write())
+		if InstructionsHeld(ctx) {
+			return mcpgo.NewToolResultText(
+				string(out) + "\n\n" + handleBanner(handle) + BindingInstructionsDelta(b, profile)), nil
+		}
 		return mcpgo.NewToolResultText(
-			string(out) + "\n\n" + handleBanner(handle) +
-				BindingInstructions(b, profileFor(mgr, b.Write()))), nil
+			string(out) + "\n\n" + handleBanner(handle) + BindingInstructions(b, profile)), nil
 	}
 }
 

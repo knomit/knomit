@@ -314,3 +314,84 @@ func TestScopedBindTarget_RefusesWhenTheNameNowNamesAnotherBase(t *testing.T) {
 	require.True(t, res.IsError, "knomit_bind must refuse, got %s", resultText(t, res))
 	require.Equal(t, "lens eng was renamed or replaced while binding; call knomit_bind again", resultText(t, res))
 }
+
+// serverWideSentence is distinctive text of the server-wide instructions (the
+// "Writing Fact Bodies" section): present in the initialize instructions, which
+// the chat already carries in its system prompt.
+const serverWideSentence = "Consumers act on the slogan they compress a fact into"
+
+// The chat holds the server-wide instructions already (hook 3), so knomit_bind
+// must not repeat them; what the initialize text could not know (this base's
+// topics, profile, mount table) must still arrive. External clients keep the
+// full text.
+func TestBind_ChatGetsOnlyThePerBindingDelta(t *testing.T) {
+	m, _, srv := bindFixture(t)
+	_, err := m.CreateLens(context.Background(), control.Lens{
+		Name: "all", WriteUID: "uid-alpha",
+		Reads: []control.LensRead{{RepoUID: "uid-beta"}, {RepoUID: "uid-followed"}},
+	})
+	require.NoError(t, err)
+
+	external := resultText(t, callBind(t, m, srv, "sid-ext", map[string]any{"lens": "all"}))
+	require.Contains(t, external, serverWideSentence, "an external client keeps the full instructions")
+
+	s, held, _, err := OpenInProcessSession(context.Background(), srv, m, chatOpts(chatIDA))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+	require.Contains(t, held, serverWideSentence, "the chat's initialize instructions carry it")
+
+	chat, isErr := callJSON(t, s, "knomit_bind", map[string]any{"lens": "all"})
+	require.False(t, isErr, chat)
+	require.NotContains(t, chat, serverWideSentence)
+	require.NotContains(t, chat, "## Tools", "no server-wide section is repeated")
+
+	// What is new for this binding is still there.
+	require.Contains(t, chat, "## Your binding handle")
+	require.Contains(t, chat, "### Mounts", "the lens mount table")
+	require.Contains(t, chat, "Available topics:")
+	for _, topic := range fact.CodeOntology().TopicNames() {
+		require.Contains(t, chat, "  "+topic, "topic list of the bound write repo")
+	}
+	require.Contains(t, chat, "kb/<topic>/<category>/<uuid>.md", "the bound ontology root")
+	require.NotContains(t, chat, "You are assisting with software development",
+		"the chat's initialize text was built with the same profile, so its addendum is not repeated")
+
+	t.Logf("knomit_bind lens=all: external %d bytes, chat %d bytes", len(external), len(chat))
+}
+
+// A write repo whose profile differs from the one the initialize text was
+// built with gets its own addendum; the same profile gets none.
+func TestBindingInstructionsDelta_ProfileAddendumOnlyWhenItDiffers(t *testing.T) {
+	m, _, _ := bindFixture(t)
+	b, _, err := bindTarget(m, "alpha", "")
+	require.NoError(t, err)
+
+	same := BindingInstructionsDelta(b, initializeProfile)
+	require.NotContains(t, same, profileAddenda["code"])
+
+	chatProfile := BindingInstructionsDelta(b, "chat")
+	require.Contains(t, chatProfile, profileAddenda["chat"])
+	require.NotContains(t, chatProfile, profileAddenda["code"])
+}
+
+// Golden composition: the external knomit_bind text is the write repo's
+// profile instructions followed by the lens addendum, as before the delta
+// refactor split topicListText and profileAddendum out of it.
+func TestBindingInstructions_Composition(t *testing.T) {
+	m, _, _ := bindFixture(t)
+	for _, name := range []string{"alpha", "eng"} {
+		var b *repos.Binding
+		var err error
+		if name == "eng" {
+			b, _, err = bindTarget(m, "", name)
+		} else {
+			b, _, err = bindTarget(m, name, "")
+		}
+		require.NoError(t, err)
+		for _, profile := range []string{"code", "chat", "generic"} {
+			w := b.Write()
+			want := baseInstructionsText(w.OntologyRoot(), w.Ontology()) + "\n\n" + profileAddenda[profile] + lensInstructions(b)
+			require.Equal(t, want, BindingInstructions(b, profile), "%s/%s", name, profile)
+		}
+	}
+}

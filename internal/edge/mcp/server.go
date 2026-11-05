@@ -73,12 +73,12 @@ func newServer(extra []server.ServerOption, defaultOntologyRoot string, mgr *rep
 		// never given — refuses. That was a live bug under session-keyed
 		// binding; keeping the branch absolute is what stops it returning.
 		if repos.SessionScoped(ctx) {
-			result.Instructions = ProfileInstructions("code", defaultOntologyRoot, nil) + unboundAddendum
+			result.Instructions = ProfileInstructions(initializeProfile, defaultOntologyRoot, nil) + unboundAddendum
 			return
 		}
 		_, ok := repos.RepoFromContextOpt(ctx)
 		if !ok {
-			result.Instructions = ProfileInstructions("code", defaultOntologyRoot, nil)
+			result.Instructions = ProfileInstructions(initializeProfile, defaultOntologyRoot, nil)
 			return
 		}
 		b := repos.BindingFromContext(ctx) // safe: ri present ⇒ never panics
