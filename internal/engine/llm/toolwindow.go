@@ -99,6 +99,7 @@ type ToolWindow struct {
 	turnLoaded  Pinned // loaded since BeginTurn: never evicted in this turn
 	batchLoaded Pinned // loaded since BeginBatch: a call to them in this batch is not run
 	sizes       map[string]int
+	bytes       map[string]int // definition bytes, for preload's rounding
 	changes     []ToolsChange
 	ranker      ToolRanker
 	picks       []string // tools preloaded this turn, in rank order
@@ -137,7 +138,7 @@ func NewToolWindow(spec ToolWindowSpec) (*ToolWindow, error) {
 	w := &ToolWindow{
 		loader: spec.Loader, inCat: map[string]bool{},
 		loaded: map[string]bool{}, last: map[string]int{},
-		turnLoaded: Pinned{}, batchLoaded: Pinned{}, sizes: map[string]int{},
+		turnLoaded: Pinned{}, batchLoaded: Pinned{}, sizes: map[string]int{}, bytes: map[string]int{},
 		ranker: spec.Ranker,
 	}
 	for _, n := range spec.Names {
@@ -210,6 +211,7 @@ func (w *ToolWindow) observe(snap Snapshot) {
 	for _, it := range snap.Hooks[HookTools] {
 		if it.Tool != nil {
 			w.sizes[it.Tool.Name] = itemBytes(it) / 4
+			w.bytes[it.Tool.Name] = itemBytes(it)
 		}
 	}
 }
@@ -238,7 +240,9 @@ func (w *ToolWindow) Project(snap Snapshot) Snapshot {
 
 // evictOrder lists the loaded tools that may be evicted, best victim first:
 // least recently used, ties to the larger definition, then by name. Tools in
-// pinned, tools loaded this turn and the loader are never listed.
+// pinned, tools the model loaded this turn and the loader are never listed.
+// Preloaded picks are not pinned until called (the caller's pinned set holds
+// the called ones), and unused picks are the first victims.
 func (w *ToolWindow) evictOrder(pinned Pinned) []string {
 	var cand []string
 	for n := range w.loaded {
@@ -246,8 +250,17 @@ func (w *ToolWindow) evictOrder(pinned Pinned) []string {
 			cand = append(cand, n)
 		}
 	}
+	guess := map[string]bool{}
+	for _, n := range w.picks {
+		guess[n] = true
+	}
 	sort.Slice(cand, func(i, j int) bool {
 		a, b := cand[i], cand[j]
+		// A preloaded pick the model has not called (a called one is in
+		// pinned) is a guess: it goes before any tool the model asked for.
+		if guess[a] != guess[b] {
+			return guess[a]
+		}
 		if w.last[a] != w.last[b] {
 			return w.last[a] < w.last[b]
 		}
@@ -447,8 +460,9 @@ func (w *ToolWindow) Picks() []string { return append([]string(nil), w.picks...)
 // PreloadBudget(usable); the first tool that does not fit ends it (a cheap
 // low-ranked tool never jumps a big high-ranked one). Loaded tools cost
 // nothing and are skipped. Preload only adds: it never evicts, so it cannot
-// push a request over budget, and when nothing fits it loads nothing. Loaded
-// picks are pinned for the turn like any tool loaded in it.
+// push a request over budget, and when nothing fits it loads nothing. A pick is
+// pinned only once the model calls it this turn; until then it is the first
+// thing pressure evicts (a wrong guess must not cost the turn).
 //
 // Tools tied with the lowest score carry no evidence (a message naming
 // nothing scores every tool alike) and are not candidates; this is relative to
@@ -480,7 +494,7 @@ func (w *ToolWindow) Preload(ctx context.Context, message string, snap Snapshot,
 			break
 		}
 		name := s.Name
-		size, known := w.sizes[name]
+		_, known := w.sizes[name]
 		if !w.inCat[name] || !known || seen[name] {
 			continue
 		}
@@ -488,6 +502,9 @@ func (w *ToolWindow) Preload(ctx context.Context, message string, snap Snapshot,
 		if w.loaded[name] {
 			continue
 		}
+		// Round up per tool: Snapshot.Record() floors the whole hook, so the
+		// real growth of the estimate is at most the sum of the ceilings.
+		size := (w.bytes[name] + 3) / 4
 		if size > budget {
 			break
 		}
@@ -495,7 +512,6 @@ func (w *ToolWindow) Preload(ctx context.Context, message string, snap Snapshot,
 		w.clock++
 		w.loaded[name] = true
 		w.last[name] = w.clock
-		w.turnLoaded[name] = true
 		loaded = append(loaded, name)
 	}
 	if len(loaded) > 0 {

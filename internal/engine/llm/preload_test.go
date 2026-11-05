@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -99,7 +100,67 @@ func TestPreload_BudgetIsAnEighthOfUsableRoom(t *testing.T) {
 	}
 }
 
-func TestPreload_SkipsLoadedAndPinsForTheTurn(t *testing.T) {
+func TestPreload_CalledPickIsPinnedUnusedPickIsNot(t *testing.T) {
+	p1, p2, p3 := winTool("p1", 1000), winTool("p2", 1000), winTool("p3", 1000)
+	filler := winTool("filler", 10)
+	w, snap := newRankedWin(t, &fakeRanker{out: ranked("p1", "p2", "p3", "filler")}, p1, p2, p3, filler)
+	require.Equal(t, []string{"p1", "p2", "p3"}, w.Preload(context.Background(), "m", snap, 32768*3/4, plenty()))
+	pinned := Pinned{"p1": true} // the model called p1
+	var evicted []string
+	for {
+		n, ok := w.EvictOne(pinned)
+		if !ok {
+			break
+		}
+		evicted = append(evicted, n)
+	}
+	require.ElementsMatch(t, []string{"p2", "p3"}, evicted)
+	require.Equal(t, []string{"p1"}, w.Loaded())
+}
+
+// The reviewer's scenario at 32K: about 3K of unused picks, then the model
+// loads a 3.7K tool. Without preload it fits; with unused picks pinned it
+// would be refused.
+func TestPreload_UnusedPicksDoNotBlockALaterLoad(t *testing.T) {
+	p1, p2, p3 := winTool("p1", 1000), winTool("p2", 1000), winTool("p3", 1000)
+	learn, filler := winTool("learn", 3700), winTool("filler", 10)
+	w, snap := newRankedWin(t, &fakeRanker{out: ranked("p1", "p2", "p3", "filler")}, p1, p2, p3, learn, filler)
+	usable := 32768 - 32768/4
+	require.Equal(t, []string{"p1", "p2", "p3"}, w.Preload(context.Background(), "m", snap, usable, plenty()))
+	w.TakeChanges()
+
+	out := w.Run(loadCall("learn"), snap, func() int { return 800 }, nil)
+	require.False(t, out.IsError, out.Content)
+	require.Equal(t, []string{"learn"}, w.Loaded(), "the unused picks made room")
+	ch := w.TakeChanges()
+	require.Len(t, ch, 1)
+	require.ElementsMatch(t, []string{"p1", "p2", "p3"}, ch[0].Evicted)
+}
+
+func TestPreload_SizeSumMatchesTheEstimatorsRounding(t *testing.T) {
+	// Record() floors the whole tools hook, not each tool. For every byte
+	// remainder, the estimate may grow by no more than the room preload was
+	// given, even with the room filled to the token.
+	for r := 1; r <= 3; r++ {
+		a, b, filler := winToolBytes("a", 4*100+r), winToolBytes("b", 4*100+r), winToolBytes("filler", 40)
+		w, snap := newRankedWin(t, &fakeRanker{out: ranked("a", "b", "filler")}, a, b, filler)
+		before := w.Project(snap).Record().Tokens[HookTools]
+		free := 2 * 100 // the floors sum to exactly this; the ceilings to 202, and the hook floor can add 1 more
+		w.Preload(context.Background(), "m", snap, 32768*3/4, free)
+		after := w.Project(snap).Record().Tokens[HookTools]
+		require.LessOrEqual(t, after-before, free, "remainder %d: loaded %v", r, w.Loaded())
+	}
+}
+
+// winToolBytes is a catalogue tool whose canonical definition is n bytes.
+func winToolBytes(name string, n int) *ToolDef {
+	d := &ToolDef{Name: name, Schema: json.RawMessage(`{"type":"object"}`)}
+	base, _ := encodeCanonical(d)
+	d.Description = strings.Repeat("x", max(n-len(base), 0))
+	return d
+}
+
+func TestPreload_SkipsLoadedAndEvictsUnusedPicksFirst(t *testing.T) {
 	old, a, b := winTool("old", 100), winTool("a", 100), winTool("b", 100)
 	rk := &fakeRanker{out: ranked("old", "a", "b")}
 	w, snap := newRankedWin(t, rk, old, a, b)
@@ -113,10 +174,10 @@ func TestPreload_SkipsLoadedAndPinsForTheTurn(t *testing.T) {
 
 	name, ok := w.EvictOne(nil)
 	require.True(t, ok)
-	require.Equal(t, "old", name, "pressure takes the tool loaded earlier")
-	_, ok = w.EvictOne(nil)
-	require.False(t, ok, "the preloaded tool is pinned for the turn")
-	require.Equal(t, []string{"a"}, w.Loaded())
+	require.Equal(t, "a", name, "an unused pick goes before an older tool")
+	name, ok = w.EvictOne(nil)
+	require.True(t, ok)
+	require.Equal(t, "old", name)
 }
 
 func TestPreload_NoSignalLoadsNothing(t *testing.T) {
