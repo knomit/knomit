@@ -4,9 +4,9 @@ import ReactMarkdown from 'react-markdown';
 import { markdownPlugins, markdownComponents } from './markdown';
 import type { ChatApproval, ApprovalDecision } from './chatApi';
 import type { ToolCall } from './chatState';
-import { toolRowLabel } from './chatState';
+import { LOADER_TOOL, toolRowLabel } from './chatState';
 import {
-  TOOL_GROUP_HEADER, APPROVAL_ALLOW, APPROVAL_DECLINE, APPROVAL_ALLOW_SESSION, APPROVAL_TARGET_UNRESOLVED,
+  TOOL_GROUP_HEADER, loadedToolsRow, APPROVAL_ALLOW, APPROVAL_DECLINE, APPROVAL_ALLOW_SESSION, APPROVAL_TARGET_UNRESOLVED,
 } from './chatCopy';
 
 /** The compact JSON of a call's arguments, bounded so a large call stays a card. */
@@ -57,7 +57,7 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, onSelect, on
               <div key={c.id} data-testid={`chat-tool-row-${c.id}`} data-state={c.state} data-error={c.isError || undefined}>
                 <button type="button" data-testid={`chat-tool-select-${c.id}`} disabled={!canOpen}
                   aria-pressed={selected} onClick={() => onSelect(c)} style={rowBtn(selected, c.isError)}>
-                  <span>{toolRowLabel(c.name)}</span>
+                  <span>{c.name === LOADER_TOOL && c.loaded?.length ? loadedToolsRow(c.loaded) : toolRowLabel(c.name)}</span>
                   {canOpen && <span aria-hidden="true">{' ▸'}</span>}
                 </button>
                 {ap && <ApprovalCard approval={ap} onAnswer={d => onAnswer(c.id, d)} />}

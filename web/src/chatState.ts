@@ -26,11 +26,18 @@
 // POST, so a snapshot started after the POST was answered 2xx lists it; until
 // then the local turn is kept after the snapshot's turns. A POST that fails
 // takes its local turn out outright.
-import type { ChatApproval, ChatSnapshot, ChatViewItem } from './chatApi';
+import type { ChatApproval, ChatSnapshot, ChatTurnTools, ChatViewItem } from './chatApi';
 
-export interface ToolCall { id: string; name: string; state: 'running' | 'done'; isError: boolean }
+/** The loader tool's name (llm.LoadToolsName): its calls get their own row. */
+export const LOADER_TOOL = 'load_tools';
+
+/** loaded: the tools a call to the loader loaded (only on that call). */
+export interface ToolCall { id: string; name: string; state: 'running' | 'done'; isError: boolean; loaded?: string[] }
 export type ChatPart = { kind: 'text'; text: string } | { kind: 'group'; calls: ToolCall[] };
 export interface TurnUsage { input: number; cacheRead: number; cacheWrite: number; output: number }
+/** The loaded tools after a turn: how many of the catalogue's `total`, and
+ *  their definitions' size in tokens (an estimate). */
+export interface TurnTools { loadedNow: number; total: number; tokens: number }
 
 export interface ChatTurn {
   /** The person's message; empty for a turn the page joined mid-way. */
@@ -41,6 +48,9 @@ export interface ChatTurn {
   parts: ChatPart[];
   /** Summed over the turn's requests; null until the first usage event. */
   usage: TurnUsage | null;
+  /** The loaded tools after the turn; null on a chat that keeps every tool in
+   *  every request. */
+  tools: TurnTools | null;
   /** Estimated USD; null when no request of the turn was priced (no price card). */
   costUsd: number | null;
   /** The loop's message when the turn ended in an error (a refusal, a limit). */
@@ -85,12 +95,14 @@ export type ChatEvent =
    *  never started, so it is taken back out whatever it holds. */
   | { kind: 'send_failed'; sendId: number }
   | { kind: 'text_delta'; text: string; turn: number }
-  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; turn: number }
+  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; loaded?: string[]; turn: number }
+  /** The loaded tools changed (a load or an eviction). */
+  | { kind: 'tools'; turn: number; loaded_now: number; total: number; tokens: number }
   | { kind: 'approval'; approval: ChatApproval }
   | { kind: 'approval_answered'; callId: string }
   | { kind: 'usage'; usage: UsagePayload; cost_usd?: number; seq?: number; turn: number }
   | { kind: 'warning'; message: string; turn: number }
-  | { kind: 'turn_done'; turn: number }
+  | { kind: 'turn_done'; turn: number; tools?: ChatTurnTools }
   /** The person pressed Stop: the turn is over here whatever the stream says. */
   | { kind: 'stopped' }
   | { kind: 'turn_error'; message: string; cancelled?: boolean; turn: number }
@@ -98,7 +110,7 @@ export type ChatEvent =
 
 export const initialChatState: ChatState = { turns: [], running: false, approvals: {}, ended: false, lastUsageSeq: 0, staleSeq: 0, loaded: false };
 
-const newTurn = (user = ''): ChatTurn => ({ user, parts: [], usage: null, costUsd: null, error: null, warning: null });
+const newTurn = (user = ''): ChatTurn => ({ user, parts: [], usage: null, tools: null, costUsd: null, error: null, warning: null });
 
 /** route finds the turn a live event names. A turn index the page has no turn
  *  for is the local unconfirmed turn's (the server's next turn), which learns
@@ -130,11 +142,15 @@ function onTurn(s: ChatState, turn: number, edit: (t: ChatTurn) => ChatTurn): Ch
  *  run (a late end from an older turn does not). */
 const isLatest = (s: ChatState, index: number): boolean => index === s.turns.length - 1;
 
+const toolsOf = (t?: ChatTurnTools): TurnTools | null =>
+  t ? { loadedNow: t.loaded_now, total: t.total, tokens: t.tokens } : null;
+
 function addItem(turns: ChatTurn[], item: ChatViewItem, at: number): void {
   if (item.kind === 'user') {
     const t = newTurn(item.text ?? '');
     t.at = at;
     if (item.usage) t.usage = { input: item.usage.input, cacheRead: item.usage.cache_read, cacheWrite: item.usage.cache_write, output: item.usage.output };
+    t.tools = toolsOf(item.tools);
     t.costUsd = item.cost_usd ?? null;
     t.warning = item.warning || null;
     // A cancelled turn is the person's own Stop: it ends quietly.
@@ -145,7 +161,7 @@ function addItem(turns: ChatTurn[], item: ChatViewItem, at: number): void {
   if (!turns.length) turns.push(newTurn());
   const t = turns[turns.length - 1];
   if (item.kind === 'assistant') { t.parts.push({ kind: 'text', text: item.text ?? '' }); return; }
-  const c: ToolCall = { id: item.id ?? '', name: item.name ?? '', state: item.state ?? 'done', isError: !!item.is_error };
+  const c: ToolCall = { id: item.id ?? '', name: item.name ?? '', state: item.state ?? 'done', isError: !!item.is_error, ...(item.loaded?.length ? { loaded: item.loaded } : {}) };
   const last = t.parts[t.parts.length - 1];
   if (last?.kind === 'group') last.calls.push(c); else t.parts.push({ kind: 'group', calls: [c] });
 }
@@ -207,18 +223,20 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
             parts: t.parts.map(p => p.kind === 'group'
               ? {
                 ...p,
-                calls: p.calls.map(c => c.id !== e.id || c.state === 'done' ? c : { ...c, state: e.state, isError: !!e.is_error }),
+                calls: p.calls.map(c => c.id !== e.id || c.state === 'done' ? c : { ...c, state: e.state, isError: !!e.is_error, ...(e.loaded?.length ? { loaded: e.loaded } : {}) }),
               }
               : p),
           };
         }
-        const c: ToolCall = { id: e.id, name: e.name, state: e.state, isError: !!e.is_error };
+        const c: ToolCall = { id: e.id, name: e.name, state: e.state, isError: !!e.is_error, ...(e.loaded?.length ? { loaded: e.loaded } : {}) };
         const last = t.parts[t.parts.length - 1];
         const parts = last?.kind === 'group'
           ? [...t.parts.slice(0, -1), { kind: 'group' as const, calls: [...last.calls, c] }]
           : [...t.parts, { kind: 'group' as const, calls: [c] }];
         return { ...t, parts };
       });
+    case 'tools':
+      return onTurn(s, e.turn, t => ({ ...t, tools: { loadedNow: e.loaded_now, total: e.total, tokens: e.tokens } }));
     case 'approval': {
       // The card shows in its call's row, so the turn must be one the page has
       // (route learns a local turn's index, or asks for a snapshot).
@@ -252,6 +270,13 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
     case 'turn_error': {
       const r = route(s, e.turn);
       let st = r.state;
+      // A turn's end carries its tools line: the snapshot read that follows
+      // says the same, this is for the moment before it arrives.
+      if (e.kind === 'turn_done' && e.tools && r.index >= 0) {
+        const turns = st.turns.slice();
+        turns[r.index] = { ...turns[r.index], tools: toolsOf(e.tools) };
+        st = { ...st, turns };
+      }
       // A turn_error names its turn's failure; a cancelled one is the person's
       // own Stop and ends quietly.
       if (e.kind === 'turn_error' && !e.cancelled && r.index >= 0) {

@@ -5,7 +5,7 @@ import { installFakeEventSource, uninstallFakeEventSource, streamsMatching, late
 import { stubFleetFetch } from './fleetTestFetch';
 import { SEND_TIMEOUT_MS } from './chatApi';
 import type { ChatSnapshot } from './chatApi';
-import { CHAT_SEND_TIMEOUT } from './chatCopy';
+import { CHAT_SEND_TIMEOUT, toolsInContextLine } from './chatCopy';
 
 const CHAT = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
 const BASE = '/api/v1/chats/chat-a';
@@ -145,6 +145,26 @@ describe('ChatFacet', () => {
     expect(screen.getByTestId('chat-text')).toHaveTextContent('hi there');
     expect(screen.getByTestId('chat-usage').textContent).toBe('input 11 · cache read 22 · cache write 33 · output 44 · $0.0123');
     expect(screen.getByTestId('chat-send')).toBeInTheDocument();
+  });
+
+  it('shows the tools line of an adaptive chat from the events, then from the snapshot', async () => {
+    const withTools = snapshot({ items: [{ kind: 'user', text: 'q', tools: { loaded: 1, evicted: 0, loaded_now: 3, total: 13, tokens: 4100 } }] });
+    mount(withTools);
+    await screen.findByTestId('chat-turn-0');
+    expect(screen.getByTestId('chat-tools-line').textContent).toBe(toolsInContextLine(3, 13, 4100));
+    expect(screen.getByTestId('chat-tools-line').textContent).toBe('Tools in context: 3 of 13 (about 4.1K tokens)');
+
+    // A live change before the turn ends updates it at once.
+    act(() => { latestStream('/chats/chat-a/events')!.emit('tools', { turn: 0, reason: 'pressure', loaded: [], evicted: ['knomit_query'], loaded_now: ['a', 'b'], total: 13, tokens: 950 }); });
+    expect(screen.getByTestId('chat-tools-line').textContent).toBe('Tools in context: 2 of 13 (about 950 tokens)');
+  });
+
+  it('a chat that keeps every tool shows no tools line', async () => {
+    mount(snapshot({ items: [{ kind: 'user', text: 'q' }] }));
+    await screen.findByTestId('chat-turn-0');
+    act(() => { latestStream('/chats/chat-a/events')!.emit('usage', { usage: { input: 1, cache_read: 0, cache_write: 0, output: 1 }, turn: 0 }); });
+    expect(screen.getByTestId('chat-usage')).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-tools-line')).toBeNull();
   });
 
   it('a model without a price card shows "cost unknown"', async () => {

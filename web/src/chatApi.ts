@@ -24,7 +24,16 @@ export interface ChatViewItem {
   /** On a user item: how the turn it opens went (see chat.go viewItem). */
   usage?: { input: number; cache_read: number; cache_write: number; output: number };
   cost_usd?: number; warning?: string; error?: string; cancelled?: boolean;
+  /** On a user item of an adaptive chat: the loaded tools at the turn's end. */
+  tools?: ChatTurnTools;
+  /** On the call to the loader tool: the tools that call loaded. */
+  loaded?: string[];
 }
+
+/** An adaptive chat's loaded tools for one turn (chat.go turnTools): this
+ *  turn's changes, and the window's state after them. Absent on a chat whose
+ *  provider keeps every tool in every request. */
+export interface ChatTurnTools { loaded: number; evicted: number; loaded_now: number; total: number; tokens: number }
 
 /** A tool call waiting for the person. `target` is empty when the server could
  *  not resolve the call's repo or lens. */
@@ -149,7 +158,7 @@ export function getChatCall(id: string, callId: string): Promise<ChatCall> {
 
 /** The server's SSE event names (internal/edge/web/api/chat/chat.go). */
 export const CHAT_EVENT_NAMES = [
-  'ready', 'text_delta', 'reasoning', 'tool_call', 'approval', 'usage', 'warning', 'turn_done', 'turn_error', 'chat_end',
+  'ready', 'text_delta', 'reasoning', 'tool_call', 'tools', 'approval', 'usage', 'warning', 'turn_done', 'turn_error', 'chat_end',
 ] as const;
 export type ChatEventName = typeof CHAT_EVENT_NAMES[number];
 

@@ -6,7 +6,7 @@ import { ChatSettings } from './ChatSettings';
 import {
   answerChatApproval, cancelChatTurn, endChatOnPageHide, getChat, openChatEvents, sendChatTurn,
 } from './chatApi';
-import type { ApprovalDecision, ChatApproval, ChatInfo } from './chatApi';
+import type { ApprovalDecision, ChatApproval, ChatInfo, ChatTurnTools } from './chatApi';
 import { chatReducer, initialChatState } from './chatState';
 import type { ToolCall, UsagePayload } from './chatState';
 
@@ -77,6 +77,11 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
     on('text_delta', d => dispatch({ kind: 'text_delta', text: String(d.text ?? ''), turn: turnOf(d) }));
     on('tool_call', d => dispatch({
       kind: 'tool_call', id: String(d.id), name: String(d.name), state: d.state === 'done' ? 'done' : 'running', is_error: d.is_error === true, turn: turnOf(d),
+      ...(Array.isArray(d.loaded) ? { loaded: d.loaded.map(String) } : {}),
+    }));
+    on('tools', d => dispatch({
+      kind: 'tools', turn: turnOf(d), loaded_now: Array.isArray(d.loaded_now) ? d.loaded_now.length : 0,
+      total: Number(d.total ?? 0), tokens: Number(d.tokens ?? 0),
     }));
     on('approval', d => dispatch({ kind: 'approval', approval: d as unknown as ChatApproval }));
     on('usage', d => dispatch({
@@ -89,7 +94,7 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
     // A turn's end is shown at once, and the transcript is read again: the
     // server's view is complete by now, and it settles anything a read in
     // flight at this moment got wrong.
-    on('turn_done', d => { dispatch({ kind: 'turn_done', turn: turnOf(d) }); refresh(); });
+    on('turn_done', d => { dispatch({ kind: 'turn_done', turn: turnOf(d), ...(d.tools ? { tools: d.tools as ChatTurnTools } : {}) }); refresh(); });
     on('turn_error', d => {
       dispatch({ kind: 'turn_error', message: String(d.message ?? ''), cancelled: d.cancelled === true, turn: turnOf(d) });
       refresh();

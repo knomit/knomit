@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { chatReducer, initialChatState, toolRowLabel, usageLine, formatCost, snapshotState } from './chatState';
 import type { ChatEvent, ChatState } from './chatState';
+import { toolsInContextLine } from './chatCopy';
 import type { ChatApproval, ChatSnapshot, ChatViewItem } from './chatApi';
 
 const run = (events: ChatEvent[], from: ChatState = initialChatState): ChatState => events.reduce(chatReducer, from);
@@ -17,6 +18,49 @@ const u = (msg: string): ChatViewItem => ({ kind: 'user', text: msg });
 const approval = (callId: string, turn: number): ChatApproval =>
   ({ call_id: callId, tool: 'knomit_learn', action: 'learn', target: 'alpha', target_kind: 'repo', destructive: false, grantable: true, turn });
 const usage1 = { input: 1, cache_read: 2, cache_write: 3, output: 4 };
+
+describe('the approved tools line', () => {
+  it('words the counts, with thousands of tokens as K', () => {
+    expect(toolsInContextLine(0, 13, 0)).toBe('Tools in context: 0 of 13 (about 0 tokens)');
+    expect(toolsInContextLine(1, 13, 999)).toBe('Tools in context: 1 of 13 (about 999 tokens)');
+    expect(toolsInContextLine(3, 13, 4100)).toBe('Tools in context: 3 of 13 (about 4.1K tokens)');
+  });
+});
+
+describe('adaptive chats: the loaded tools of a turn', () => {
+  const t0 = { loaded: 1, evicted: 0, loaded_now: 3, total: 13, tokens: 4100 };
+
+  it('a tools event sets the turn\'s tools; turn_done and the snapshot say the same', () => {
+    let s = run([...sent('q', 1, 0), { kind: 'tools', turn: 0, loaded_now: 2, total: 13, tokens: 900 }]);
+    expect(s.turns[0].tools).toEqual({ loadedNow: 2, total: 13, tokens: 900 });
+    s = run([{ kind: 'turn_done', turn: 0, tools: t0 }], s);
+    expect(s.turns[0].tools).toEqual({ loadedNow: 3, total: 13, tokens: 4100 });
+    // The snapshot is authoritative: it replaces the turn verbatim.
+    s = run([ready([{ ...u('q'), tools: { ...t0, loaded_now: 5, tokens: 7 } }])], s);
+    expect(s.turns[0].tools).toEqual({ loadedNow: 5, total: 13, tokens: 7 });
+  });
+
+  it('a chat that keeps every tool has none', () => {
+    const s = run([...sent('q', 1, 0), { kind: 'turn_done', turn: 0 }]);
+    expect(s.turns[0].tools).toBeNull();
+    expect(run([ready([u('q')])]).turns[0].tools).toBeNull();
+  });
+
+  it('a tools event for a turn the page does not know asks for a snapshot', () => {
+    const s = run([{ kind: 'tools', turn: 7, loaded_now: 1, total: 13, tokens: 5 }]);
+    expect(s.staleSeq).toBe(1);
+  });
+
+  it('the loader call keeps the tools it loaded, from the event and from the snapshot', () => {
+    const live = run([...sent('q', 1, 0), call('tu_1', 'load_tools', 0),
+      { kind: 'tool_call', id: 'tu_1', name: 'load_tools', state: 'done', loaded: ['knomit_query', 'knomit_explain'], turn: 0 }]);
+    const g = live.turns[0].parts[0];
+    expect(g.kind === 'group' && g.calls[0].loaded).toEqual(['knomit_query', 'knomit_explain']);
+    const fromSnap = run([ready([u('q'), { kind: 'tool_call', id: 'tu_1', name: 'load_tools', state: 'done', loaded: ['knomit_query'] }])]);
+    const g2 = fromSnap.turns[0].parts[0];
+    expect(g2.kind === 'group' && g2.calls[0].loaded).toEqual(['knomit_query']);
+  });
+});
 
 describe('chatReducer: live events are routed by the turn index they name', () => {
   it('groups consecutive tool calls into one group', () => {

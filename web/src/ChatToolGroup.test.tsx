@@ -5,7 +5,8 @@ import { ChatToolGroup } from './ChatToolGroup';
 import { installFakeEventSource, uninstallFakeEventSource, latestStream } from './testEventSource';
 import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatApproval, ChatSnapshot } from './chatApi';
-import { APPROVAL_TARGET_UNRESOLVED } from './chatCopy';
+import { APPROVAL_TARGET_UNRESOLVED, loadedToolsRow } from './chatCopy';
+import type { ToolCall } from './chatState';
 
 const CHAT = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
 const BASE = '/api/v1/chats/chat-a';
@@ -103,6 +104,29 @@ describe('approvals in a tool row', () => {
     render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} />);
     fireEvent.click(await screen.findByTestId('chat-approval-decline'));
     await waitFor(() => expect(screen.queryByTestId('chat-approval-tu_2')).toBeNull());
+  });
+});
+
+describe('the loader row', () => {
+  const group = (calls: ToolCall[]) => render(<ChatToolGroup lead={[]} approvals={{}} selectedId={null} onSelect={vi.fn()} onAnswer={vi.fn()} calls={calls} />);
+
+  it('words a call to the loader as the tools it loaded, and every other call as before', () => {
+    group([
+      { id: 'tu_1', name: 'load_tools', state: 'done', isError: false, loaded: ['knomit_query', 'knomit_explain'] },
+      { id: 'tu_2', name: 'knomit_query', state: 'done', isError: false },
+    ]);
+    fireEvent.click(screen.getByTestId('chat-tool-group-toggle'));
+    expect(screen.getByTestId('chat-tool-row-tu_1')).toHaveTextContent('Loaded tools: knomit_query, knomit_explain');
+    expect(screen.getByTestId('chat-tool-row-tu_1')).toHaveTextContent(loadedToolsRow(['knomit_query', 'knomit_explain']));
+    expect(screen.getByTestId('chat-tool-row-tu_2')).toHaveTextContent('knomit: Knomit query');
+    expect(screen.getByTestId('chat-tool-row-tu_2')).not.toHaveTextContent('Loaded tools');
+  });
+
+  it('a loader call that loaded nothing is the ordinary row', () => {
+    group([{ id: 'tu_1', name: 'load_tools', state: 'done', isError: true }]);
+    fireEvent.click(screen.getByTestId('chat-tool-group-toggle'));
+    expect(screen.getByTestId('chat-tool-row-tu_1')).toHaveTextContent('load_tools');
+    expect(screen.getByTestId('chat-tool-row-tu_1')).not.toHaveTextContent('Loaded tools');
   });
 });
 

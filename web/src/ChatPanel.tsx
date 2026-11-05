@@ -6,7 +6,7 @@ import { ChatToolGroup } from './ChatToolGroup';
 import { usageLine } from './chatState';
 import type { ChatState, ChatTurn, ToolCall } from './chatState';
 import type { ApprovalDecision } from './chatApi';
-import { CHAT_INPUT_PLACEHOLDER, CHAT_SEND, CHAT_STOP } from './chatCopy';
+import { CHAT_INPUT_PLACEHOLDER, CHAT_SEND, CHAT_STOP, toolsInContextLine } from './chatCopy';
 
 /** How a turn is drawn: its work (runs of tool calls, each with the text that
  *  led into it) and the final text below. Text before a group is interstitial
@@ -75,6 +75,7 @@ export function ChatPanel({ state, selectedId, actionError, onSend, onStop, onSe
             {t.warning && <div data-testid="chat-warning" style={warningBox}>{t.warning}</div>}
             {t.error && <div role="alert" data-testid="chat-turn-error" style={errorBox}>{t.error}</div>}
             {t.usage && <div data-testid="chat-usage" style={usage}>{usageLine(t.usage, t.costUsd)}</div>}
+            {t.tools && <div data-testid="chat-tools-line" style={usage}>{toolsInContextLine(t.tools.loadedNow, t.tools.total, t.tools.tokens)}</div>}
           </div>
         ))}
         {actionError && <div role="alert" data-testid="chat-action-error" style={errorBox}>{actionError}</div>}
