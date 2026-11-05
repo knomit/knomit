@@ -558,12 +558,41 @@ describe('TopBar — the rail toggle in the materialize view\'s Focus', () => {
 
 describe('TopBar — a chat target', () => {
   it('chat target shows only Chat and Settings tabs', () => {
-    render(bar({ facets: ['chat', 'settings'], facet: 'chat', label: { kind: 'chat', name: 'claude-test-x', chip: { text: 'anthropic', tone: 'neutral' } } }));
+    render(bar({ facets: ['chat', 'settings'], facet: 'chat', label: { kind: 'chat', name: 'claude-test-x', provider: { name: 'prov-a', kind: 'anthropic' } } }));
     const tabs = within(screen.getByTestId('facet-tabs')).getAllByRole('tab');
     expect(tabs.map(t => t.textContent)).toEqual(['Chat', 'Settings']);
     expect(screen.queryByText('Browse')).toBeNull();
     expect(screen.queryByText('Activity')).toBeNull();
     expect(screen.getByTestId('facet-tab-chat')).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('target-label')).toHaveTextContent('claude-test-x');
+  });
+
+  const crumb = (name: string, kind: string) =>
+    render(bar({ facets: ['chat', 'settings'], facet: 'chat', label: { kind: 'chat', name: 'model-x', provider: { name, kind } } }));
+  const ANTHROPIC_PATH = 'M17.3041';
+  const OLLAMA_PATH = 'M16.361';
+
+  it('draws the Anthropic mark named by the provider, in place of the chat glyph and a text badge', () => {
+    crumb('prov-a', 'anthropic');
+    const label = screen.getByTestId('target-label');
+    const icon = within(label).getByRole('img', { name: 'prov-a' });
+    expect(icon.querySelector('path')?.getAttribute('d')).toMatch(new RegExp('^' + ANTHROPIC_PATH));
+    expect(icon.querySelector('title')?.textContent).toBe('prov-a');
+    expect(label.querySelectorAll('svg')).toHaveLength(1);
+    expect(screen.queryByTestId('target-label-chip')).toBeNull();
+  });
+
+  it('draws the Ollama mark for kind ollama however the provider is named', () => {
+    crumb('prov-b', 'ollama');
+    const icon = within(screen.getByTestId('target-label')).getByRole('img', { name: 'prov-b' });
+    expect(icon.querySelector('path')?.getAttribute('d')).toMatch(new RegExp('^' + OLLAMA_PATH));
+    expect(screen.queryByTestId('target-label-chip')).toBeNull();
+  });
+
+  it('keeps the generic chat glyph for an unknown kind', () => {
+    crumb('prov-c', 'mystery');
+    const label = screen.getByTestId('target-label');
+    expect(within(label).queryByRole('img')).toBeNull();
+    expect(label.querySelector('path')?.getAttribute('d')).toMatch(/^M21 12a8/);
   });
 });

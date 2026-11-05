@@ -16,7 +16,7 @@ import type { Dispatch } from 'react';
 import { loadRailOpen, saveRailOpen, loadLastFacet, saveLastFacet } from './repoSelection';
 import { repoAvailable, brokenLensMember } from './api';
 import type { RepoInfo, Lens, RepoCreateStatus, ArchivedRepo, FleetStatus } from './api';
-import type { ChatInfo } from './chatApi';
+import type { ChatInfo, ChatProvider } from './chatApi';
 import type { BrowseContext } from './state';
 import { activeCreateByRepo, createFlag } from './useRepoCreates';
 
@@ -390,6 +390,9 @@ export interface TargetLabel {
   kind: 'repo' | 'lens' | 'fleet' | 'chat';
   name: string;
   chip?: { text: string; tone: 'archived' | 'bad' | 'creating' | 'fleet' | 'neutral' | 'pending' };
+  /** A chat's provider: its configured name and its kind. The crumb draws the
+   *  kind's product mark, named by the name, in place of the generic glyph. */
+  provider?: { name: string; kind: string };
   draft?: boolean;
 }
 
@@ -416,7 +419,7 @@ function unavailableWord(state: string | undefined): string {
 
 export function targetLabelFor(
   target: Target, repos: RepoInfo[], archived: ArchivedRepo[], creates: RepoCreateStatus[],
-  fleet: FleetStatus | null = null, chats: ChatInfo[] = [],
+  fleet: FleetStatus | null = null, chats: ChatInfo[] = [], chatProviders: ChatProvider[] = [],
 ): TargetLabel {
   switch (target.kind) {
     case 'draft':
@@ -424,9 +427,11 @@ export function targetLabelFor(
     case 'fleet':
       return { kind: 'fleet', name: fleet?.fleet_repo || 'fleet', chip: fleetChip(fleet) };
     case 'chat': {
-      // A chat is named by its model, with its provider as the chip.
+      // A chat is named by its model; its provider's mark (by kind) stands in
+      // the crumb. A kind the list does not know yet keeps the chat glyph.
       const chat = chats.find(c => c.id === target.id);
-      return { kind: 'chat', name: chat?.model ?? '', ...(chat ? { chip: { text: chat.provider, tone: 'neutral' as const } } : {}) };
+      const kind = chat ? chatProviders.find(p => p.name === chat.provider)?.kind ?? '' : '';
+      return { kind: 'chat', name: chat?.model ?? '', ...(chat ? { provider: { name: chat.provider, kind } } : {}) };
     }
     case 'archived':
       return { kind: 'repo', name: archived.find(a => a.id === target.id)?.name ?? '', chip: { text: 'archived', tone: 'archived' } };

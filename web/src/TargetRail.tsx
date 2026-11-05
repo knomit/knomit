@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react';
 import type { BrowseContext } from './state';
 import { repoAvailable, brokenLensMember } from './api';
 import type { RepoInfo, Lens, ArchivedRepo, RepoCreateStatus, FleetStatus } from './api';
-import type { ChatInfo } from './chatApi';
+import type { ChatInfo, ChatProvider } from './chatApi';
 import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
 import { RepoOntologyChip } from './RepoOntologyChip';
@@ -11,7 +11,7 @@ import { CredentialChip } from './CredentialChip';
 import { RepoDot } from './settingsParts';
 import { PendingCreateRow } from './PendingCreateRow';
 import { useRepoCreates, activeCreateByRepo, createFlag, pendingCreates } from './useRepoCreates';
-import { BookIcon, LayersIcon, ArchiveIcon, PlusIcon, ChevronDownIcon, FleetIcon, ChatIcon } from './icons';
+import { BookIcon, LayersIcon, ArchiveIcon, PlusIcon, ChevronDownIcon, FleetIcon, ChatIcon, ProviderIcon } from './icons';
 import { LENS, noMouseFocus } from './utils';
 import { remoteFailing, DRAFT_NAME } from './facets';
 import type { PinnedTarget, DraftKind } from './facets';
@@ -43,6 +43,9 @@ interface Props {
   drafts?: { repo: boolean; lens: boolean; fleet?: boolean; chat?: boolean };
   /** The caller's live chats (GET /chats). The Chats group draws a row each. */
   chats?: ChatInfo[];
+  /** The configured providers (GET /chat-providers): a chat row draws the mark
+   *  of its provider's kind. */
+  chatProviders?: ChatProvider[];
   /** Whether chat is served here: a provider is configured and the server is
    *  not read-only. Without it the Chats group is absent, not disabled. */
   chatsAvailable?: boolean;
@@ -93,7 +96,7 @@ export function TargetRail({
   repos, lenses, context, currentRepo, remoteError, serverReadOnly, onSelect,
   archived = [], pinned = null, onPin, drafts = { repo: false, lens: false }, draftShown = null,
   onNewDraft, onPickDraft, focusRequest, onFocusHandled, locked = false, fleet = null, onPickFleet,
-  chats = [], chatsAvailable = false,
+  chats = [], chatProviders = [], chatsAvailable = false,
 }: Props) {
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
@@ -377,7 +380,9 @@ export function TargetRail({
                 >
                   <span style={{ width: 7, height: 7, borderRadius: '50%', background: CHAT_ACCENT, flexShrink: 0 }} />
                   <span style={rowName}>{c.model}</span>
-                  <span style={badges}><span style={memberChip}>{c.provider}</span></span>
+                  <span style={badges}>
+                    <ProviderIcon kind={chatProviders.find(p => p.name === c.provider)?.kind} name={c.provider} color="#999" size={14} />
+                  </span>
                 </button>
               );
             })}

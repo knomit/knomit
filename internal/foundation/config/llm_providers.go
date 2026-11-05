@@ -124,6 +124,71 @@ func (c LLMConfig) validateProviders() error {
 	return nil
 }
 
+// APIKeyEnvNotANameMessage is the refusal for an api_key_env that cannot be an
+// environment variable name. It takes the provider name and must never be given
+// the value: that is the secret the user mistyped here.
+const APIKeyEnvNotANameMessage = "llm.providers.%s.api_key_env must name an environment variable (like ANTHROPIC_API_KEY), not hold the key itself; put the key in api_key_file or api_key"
+
+// APIKeyEnvProblem is the refusal text for a provider whose api_key_env is not
+// an environment variable name, or "" when it is fine. It does not fail the
+// config load: the llm registry marks the provider's models unavailable with
+// this text, and the app logs it once. The text never contains the value.
+func (p LLMProviderConfig) APIKeyEnvProblem(name string) string {
+	if validEnvVarName(p.APIKeyEnv) {
+		return ""
+	}
+	return fmt.Sprintf(APIKeyEnvNotANameMessage, name)
+}
+
+// APIKeyEnvBlocked is the APIKeyEnvProblem text when the bad api_key_env is the
+// source the provider would have used: an anthropic provider that is left with
+// no key once api_key_file and api_key are tried (ResolveKey never reads a bad
+// api_key_env). A higher-precedence api_key_file or a plaintext api_key keeps
+// the provider available; the config is still wrong and is still logged.
+// An unreadable api_key_file is reported by ResolveKey's own error instead.
+func (p LLMProviderConfig) APIKeyEnvBlocked(name string) string {
+	why := p.APIKeyEnvProblem(name)
+	if why == "" || p.Kind != LLMKindAnthropic {
+		return ""
+	}
+	if k, err := p.ResolveKey(); err != nil || k != "" {
+		return ""
+	}
+	return why
+}
+
+// APIKeyEnvProblems lists every provider's APIKeyEnvProblem, sorted by
+// provider name.
+func (c LLMConfig) APIKeyEnvProblems() []string {
+	names := make([]string, 0, len(c.Providers))
+	for n := range c.Providers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var out []string
+	for _, n := range names {
+		if m := c.Providers[n].APIKeyEnvProblem(n); m != "" {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// validEnvVarName reports whether s is empty (unset: the default applies) or
+// matches [A-Za-z_][A-Za-z0-9_]*.
+func validEnvVarName(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '_', c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func (p LLMProviderConfig) validate(name string) error {
 	at := "config: [llm.providers." + name + "]"
 	switch p.Kind {
@@ -225,7 +290,7 @@ func (p LLMProviderConfig) ResolveKey() (string, error) {
 			return k, nil
 		}
 	}
-	if p.APIKeyEnv != "" {
+	if p.APIKeyEnv != "" && validEnvVarName(p.APIKeyEnv) {
 		if v := os.Getenv(p.APIKeyEnv); v != "" {
 			return v, nil
 		}

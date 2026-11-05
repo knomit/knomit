@@ -177,6 +177,9 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	var llmRegistry *llm.Registry
 	if len(cfg.LLM.Providers) > 0 {
 		llmRegistry = llm.NewRegistry(cfg.LLM.Providers)
+		// A provider whose api_key_env is not a variable name loads, but its
+		// models are unavailable; say so once. The text never holds the value.
+		logLLMProviderProblems(log.Logger, cfg.LLM)
 		if tracePath := os.Getenv("KNOMIT_LLM_TRACE"); tracePath != "" {
 			llmRegistry.SetTrace(tracePath)
 		}

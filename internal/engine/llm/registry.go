@@ -114,6 +114,11 @@ func (r *Registry) List(ctx context.Context) []ProviderStatus {
 	for _, n := range names {
 		p := r.cfg[n]
 		st := ProviderStatus{Name: n, Kind: p.Kind}
+		if why := p.APIKeyEnvBlocked(n); why != "" {
+			st.Models = allUnavailable(p, why)
+			out = append(out, st)
+			continue
+		}
 		switch p.Kind {
 		case config.LLMKindAnthropic:
 			st.Models = r.anthropicStatus(ctx, p)
@@ -285,6 +290,9 @@ func (r *Registry) Open(ctx context.Context, provider, model string) (ChatModel,
 	p, err := r.lookup(provider, model)
 	if err != nil {
 		return nil, err
+	}
+	if why := p.APIKeyEnvBlocked(provider); why != "" {
+		return nil, fmt.Errorf("%w: %s", ErrNoCredentials, why)
 	}
 	md := p.ModelDefaults[model]
 	switch p.Kind {
