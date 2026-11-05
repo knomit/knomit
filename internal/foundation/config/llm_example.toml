@@ -60,5 +60,4 @@ tiers = [{ up_to_prompt_tokens = 0, input_per_mtok = 4.0, output_per_mtok = 20.0
 # models = ["qwen3:14b"]
 # num_ctx = 32768
 # keep_alive = "30m"
-# DRAFT (comment on the next line): needs user approval
 # adaptive_tools = "auto"   # auto (default): send a tool catalogue and load tools on demand, for a provider with no prompt cache to protect; off: always send every tool.

@@ -69,7 +69,7 @@ const AdaptiveToolsOnRefused = `adaptive_tools = "on" is not allowed for provide
 
 // AdaptiveToolsInvalid is the refusal for any other adaptive_tools value. It
 // takes the provider's config path and the value.
-const AdaptiveToolsInvalid = `%s.adaptive_tools %q: must be "auto" or "off"` // DRAFT: needs user approval
+const AdaptiveToolsInvalid = `%s.adaptive_tools %q: must be "auto" or "off"`
 
 // validateAdaptiveTools checks adaptive_tools, the part that needs no model.
 func (p LLMProviderConfig) validateAdaptiveTools(name, at string) error {
