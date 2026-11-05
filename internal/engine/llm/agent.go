@@ -62,7 +62,23 @@ const (
 // DefaultMaxCalls is the runaway guard (plan P20): tool calls per user turn.
 const DefaultMaxCalls = 500
 
+// RepeatFailureLimit is how many times in a row, within one turn, the model
+// may make the same failing tool call (same tool, byte-identical arguments,
+// same error text) before the turn is ended. It is a policy, not a measurement.
+// The first failure is information and the second is a fair retry after
+// reading the error; a third identical failure shows the model is not acting
+// on what the tool said, and each further attempt only spends tokens and
+// repeats whatever the call does. Three is the smallest count that allows one
+// retry.
+const RepeatFailureLimit = 3
+
+// RepeatedFailureMessage_DRAFT is the sentence the user is shown when the turn
+// is ended by the repeat guard. DRAFT COPY: needs user approval.
+const RepeatedFailureMessage_DRAFT = "The model kept making the same failing tool call (%s, %d times with the same error), so the turn was stopped. The last error was: %s"
+
 var (
+	// ErrRepeatedFailure: the model repeated one failing call RepeatFailureLimit times in a row.
+	ErrRepeatedFailure = errors.New("llm: the model repeated the same failing tool call")
 	// ErrTooManyCalls: the turn asked for more tool calls than Loop.MaxCalls.
 	ErrTooManyCalls = errors.New("llm: the turn exceeded its tool call limit")
 	// ErrCancelled: the caller's context ended the turn.
@@ -270,6 +286,7 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 	}
 	var runErr error
 	pauses := 0
+	guard := &repeatGuard{}
 
 	maxCalls := l.MaxCalls
 	if maxCalls <= 0 {
@@ -373,7 +390,7 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 			}
 			break
 		}
-		results, approvals, err := l.runCalls(ctx, calls, res, maxCalls)
+		results, approvals, err := l.runCalls(ctx, calls, res, maxCalls, guard)
 		if ferr := l.finishResults(results, approvals); ferr != nil {
 			runErr = ferr
 			break
@@ -391,7 +408,7 @@ const contextFullMessage = "This conversation no longer fits the model's context
 // runCalls answers every call in order and returns the tool_result blocks. It
 // stops early (still answering the rest) on cancellation, the call limit or a
 // gate failure, and returns the error that ended the turn.
-func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, maxCalls int) ([]Block, []Approval, error) {
+func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, maxCalls int, guard *repeatGuard) ([]Block, []Approval, error) {
 	var results []Block
 	var approvals []Approval
 	answer := func(c ToolUse, content string, isErr bool) {
@@ -465,8 +482,48 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 		}
 		answer(c, out.Content, out.IsError)
 		l.logCall(c, out.Content, out.IsError)
+		if n := guard.observe(c, out); n >= RepeatFailureLimit {
+			// End the turn the way the call limit does: answer the rest of
+			// this reply's calls so every tool_use stays paired (settle then
+			// flushes the turn).
+			abort(i+1, SkippedResult)
+			return results, approvals, &turnError{
+				msg: fmt.Sprintf(RepeatedFailureMessage_DRAFT, c.Name, n, truncateForMessage(out.Content, 300)),
+				err: ErrRepeatedFailure,
+			}
+		}
 	}
 	return results, approvals, nil
+}
+
+// repeatGuard counts consecutive identical failing calls within one turn.
+// Identity is the tool name, the byte-identical arguments and the error text.
+// Any success, a different call or a different error starts the count over.
+type repeatGuard struct {
+	key string
+	n   int
+}
+
+// observe records an executed call's outcome and returns the current streak.
+func (g *repeatGuard) observe(c ToolUse, out ToolOutcome) int {
+	if !out.IsError {
+		g.key, g.n = "", 0
+		return 0
+	}
+	key := c.Name + "\x00" + string(c.Args) + "\x00" + out.Content
+	if key == g.key {
+		g.n++
+	} else {
+		g.key, g.n = key, 1
+	}
+	return g.n
+}
+
+func truncateForMessage(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return strings.ToValidUTF8(s[:n], "") + "..."
 }
 
 func (l *Loop) logCall(c ToolUse, content string, isErr bool) {
