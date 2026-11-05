@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -51,9 +52,9 @@ const (
 	NotInCatalogueNoMatchResult = "Not in the catalogue: %s." // name
 )
 
-// Reasons a LoopToolsChanged event carries. "preload" joins them with the
-// ranker (a later change).
+// Reasons a LoopToolsChanged event carries.
 const (
+	ToolsReasonPreload   = "preload"    // loaded by the ranker's guess before the turn's first request
 	ToolsReasonModel     = "model"      // the model called the loader
 	ToolsReasonStaleCall = "stale_call" // the model called a catalogue tool it had not loaded
 	ToolsReasonPressure  = "pressure"   // evicted because the request would not fit
@@ -61,11 +62,14 @@ const (
 
 // ToolsChange is one change to the loaded set.
 type ToolsChange struct {
-	Loaded    []string // names added by this change
-	Evicted   []string // names removed by this change
-	Reason    string
-	LoadedNow []string // the loaded set after the change, sorted
-	Tokens    int      // definition tokens (bytes/4) of the loaded set after the change
+	Loaded  []string // names added by this change
+	Evicted []string // names removed by this change
+	Reason  string
+	// RankerError is set on a preload change whose ranker failed; the turn went
+	// on with no preload. It is data for the log, never a user-facing error.
+	RankerError string
+	LoadedNow   []string // the loaded set after the change, sorted
+	Tokens      int      // definition tokens (bytes/4) of the loaded set after the change
 }
 
 // Pinned is a set of tool names that must not be evicted.
@@ -78,6 +82,9 @@ type ToolWindowSpec struct {
 	Loader ToolDef
 	// Names are the catalogue's tool names: the tools the model may load.
 	Names []string
+	// Ranker, when set, guesses the tools a turn's message needs; Preload loads
+	// the best guesses before the turn's first request. Nil: no preload.
+	Ranker ToolRanker
 }
 
 // ToolWindow: see the file comment.
@@ -93,6 +100,8 @@ type ToolWindow struct {
 	batchLoaded Pinned // loaded since BeginBatch: a call to them in this batch is not run
 	sizes       map[string]int
 	changes     []ToolsChange
+	ranker      ToolRanker
+	picks       []string // tools preloaded this turn, in rank order
 }
 
 // LoaderDef builds the loader tool's definition: the approved description with
@@ -129,6 +138,7 @@ func NewToolWindow(spec ToolWindowSpec) (*ToolWindow, error) {
 		loader: spec.Loader, inCat: map[string]bool{},
 		loaded: map[string]bool{}, last: map[string]int{},
 		turnLoaded: Pinned{}, batchLoaded: Pinned{}, sizes: map[string]int{},
+		ranker: spec.Ranker,
 	}
 	for _, n := range spec.Names {
 		if n == LoadToolsName {
@@ -155,7 +165,7 @@ func (w *ToolWindow) Handles(name string) bool {
 }
 
 // BeginTurn starts a user turn: what was loaded earlier may be evicted again.
-func (w *ToolWindow) BeginTurn() { w.turnLoaded = Pinned{} }
+func (w *ToolWindow) BeginTurn() { w.turnLoaded = Pinned{}; w.picks = nil }
 
 // BeginBatch starts the answering of one model response's tool calls.
 func (w *ToolWindow) BeginBatch() { w.batchLoaded = Pinned{} }
@@ -413,3 +423,84 @@ func (w *ToolWindow) unknownLine(name string) string {
 
 // unboundedRoom is what a free func returns when the window is unknown.
 const unboundedRoom = math.MaxInt / 4
+
+// PreloadDivisor sets the preload budget P = usable room / PreloadDivisor.
+// Policy fraction, not a measurement: the guess is a guess, so the most a wrong
+// one may cost is an eighth of the usable room whatever the window (regret
+// bound; design 4.4), and pressure eviction removes it later.
+const PreloadDivisor = 8
+
+// PreloadBudget is P in tokens for usable = window - reply reserve.
+func PreloadBudget(usable int) int {
+	if usable <= 0 {
+		return 0
+	}
+	return usable / PreloadDivisor
+}
+
+// Picks are the tools Preload loaded this turn, in rank order.
+func (w *ToolWindow) Picks() []string { return append([]string(nil), w.picks...) }
+
+// Preload ranks the catalogue against the turn's message and loads the best
+// guesses before the first request. Tools are taken greedily in rank order
+// while their definition tokens (bytes/4) sum to at most min(P, free), P =
+// PreloadBudget(usable); the first tool that does not fit ends it (a cheap
+// low-ranked tool never jumps a big high-ranked one). Loaded tools cost
+// nothing and are skipped. Preload only adds: it never evicts, so it cannot
+// push a request over budget, and when nothing fits it loads nothing. Loaded
+// picks are pinned for the turn like any tool loaded in it.
+//
+// Tools tied with the lowest score carry no evidence (a message naming
+// nothing scores every tool alike) and are not candidates; this is relative to
+// the ranking, not a similarity cutoff. A ranker error is recorded on the
+// change and swallowed. free is the tokens the next request has room for.
+func (w *ToolWindow) Preload(ctx context.Context, message string, snap Snapshot, usable, free int) []string {
+	w.picks = nil
+	if w.ranker == nil {
+		return nil
+	}
+	w.observe(snap)
+	ranked, err := w.ranker.Rank(ctx, message)
+	if err != nil {
+		w.changes = append(w.changes, ToolsChange{Reason: ToolsReasonPreload, RankerError: err.Error(), LoadedNow: w.loadedNames(), Tokens: w.loadedTokens()})
+		return nil
+	}
+	if len(ranked) < 2 {
+		return nil
+	}
+	floor := ranked[0].Score
+	for _, s := range ranked {
+		floor = math.Min(floor, s.Score)
+	}
+	budget := min(PreloadBudget(usable), free)
+	var loaded []string
+	seen := map[string]bool{}
+	for _, s := range ranked {
+		if s.Score <= floor {
+			break
+		}
+		name := s.Name
+		size, known := w.sizes[name]
+		if !w.inCat[name] || !known || seen[name] {
+			continue
+		}
+		seen[name] = true
+		if w.loaded[name] {
+			continue
+		}
+		if size > budget {
+			break
+		}
+		budget -= size
+		w.clock++
+		w.loaded[name] = true
+		w.last[name] = w.clock
+		w.turnLoaded[name] = true
+		loaded = append(loaded, name)
+	}
+	if len(loaded) > 0 {
+		w.picks = loaded
+		w.record(loaded, nil, ToolsReasonPreload)
+	}
+	return loaded
+}

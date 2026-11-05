@@ -277,10 +277,16 @@ type TurnResult struct {
 	Usage      Usage  // summed over the turn's requests
 	Cost       Cost   // summed; zero without a price card
 	Requests   int
-	ToolCalls  int     // every tool call answered, the loader's included
-	Loads      int     // tools loaded into the window this turn
-	Evictions  int     // tools evicted from the window this turn
-	Entries    []Entry // appended to the conversation by this turn
+	ToolCalls  int // every tool call answered, the loader's included
+	Loads      int // tools loaded into the window this turn
+	Evictions  int // tools evicted from the window this turn
+	// Preloaded are the tools the ranker's guess loaded before the first
+	// request, in rank order; PreloadHits are those the model then called this
+	// turn. RankerError is set when the guess failed (the turn went on).
+	Preloaded   []string
+	PreloadHits []string
+	RankerError string
+	Entries     []Entry // appended to the conversation by this turn
 }
 
 var entrySeq atomic.Int64
@@ -320,6 +326,7 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 	if err := l.addTurn(user); err != nil {
 		return res, err
 	}
+	l.preload(ctx, text, res)
 	var runErr error
 	pauses := 0
 	guard := &repeatGuard{}
@@ -847,6 +854,39 @@ func (l *Loop) relieve(res *TurnResult, snap Snapshot, est int) (Snapshot, int) 
 	return snap, est
 }
 
+// preload loads the ranker's guesses for this turn's message before the first
+// request. It adds to the window within its budget and never fails the turn.
+func (l *Loop) preload(ctx context.Context, text string, res *TurnResult) {
+	if l.Window == nil {
+		return
+	}
+	reserve, window := l.budget()
+	if window <= 0 {
+		return // no window reported: P cannot be derived, so nothing is guessed
+	}
+	l.Window.Preload(ctx, text, l.Builder.Snapshot(), window-reserve, l.roomLeft())
+	for _, ch := range l.Window.changes {
+		if ch.RankerError != "" {
+			res.RankerError = ch.RankerError
+		}
+	}
+	res.Preloaded = l.Window.Picks()
+	l.emitToolChanges(res)
+}
+
+// reportPreloadHits records which preloaded tools the model called this turn.
+func (l *Loop) reportPreloadHits(res *TurnResult) {
+	if l.Window == nil || len(res.Preloaded) == 0 {
+		return
+	}
+	called := l.pinnedTools()
+	for _, n := range res.Preloaded {
+		if called[n] {
+			res.PreloadHits = append(res.PreloadHits, n)
+		}
+	}
+}
+
 // emitToolChanges reports the window's pending changes to the sink and counts
 // them in the turn result.
 func (l *Loop) emitToolChanges(res *TurnResult) {
@@ -957,6 +997,7 @@ func (l *Loop) baseline() baselineState {
 // err is the turn's error; a flush failure is returned in its place only when
 // there is none.
 func (l *Loop) settle(res *TurnResult, base baselineState, err error) error {
+	l.reportPreloadHits(res)
 	turn := l.Builder.Snapshot().Hooks[HookTurn]
 	if n := len(turn); n > 0 {
 		if last := turn[n-1].Entry; last != nil && last.Role == RoleAssistant && len(toolUses(last.Blocks)) > 0 {
