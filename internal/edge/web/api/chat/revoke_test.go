@@ -3,9 +3,12 @@ package chat
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/engine/llm"
 )
 
 // Revoking "Allow for session": DELETE /chats/{id}/grants names one grant as
@@ -135,4 +138,39 @@ func TestChat_UsageEventsCarryAnIncreasingSeq(t *testing.T) {
 		seqs = append(seqs, u.Seq)
 	}
 	require.Equal(t, []int{1, 2}, seqs, "two requests: the tool call and the answer")
+}
+
+// A pause_turn continuation is another request of the same turn: its usage is
+// reported with the next seq, not the same one (a client counts a seq once).
+//
+// SABOTAGE: chat.go onLoopEvent, move `c.usageSeq++` out of the LoopUsage case
+// so the pause response's usage reuses the previous seq (or drop the increment)
+// -> the seqs are not [1,2] and the test fails.
+func TestChat_UsageSeqIncreasesAcrossAPauseTurnContinuation(t *testing.T) {
+	h := newHarness(t)
+	pause := step{resp: &llm.Response{
+		Blocks: []llm.Block{{Kind: llm.BlockText, Text: "working"}}, StopReason: llm.StopPauseTurn, Usage: usage,
+	}}
+	h.queue("a1", pause, textStep("finished", usage))
+	id := h.create("uid:501", "a1")
+	s := h.attach("uid:501", id)
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "go"))
+	evs, _ := drive(t, h, "uid:501", id, s, nil)
+
+	var seqs []int
+	done := 0
+	for _, e := range evs {
+		switch e.Name {
+		case "usage":
+			var u struct {
+				Seq int `json:"seq"`
+			}
+			require.NoError(t, json.Unmarshal(e.Data, &u))
+			seqs = append(seqs, u.Seq)
+		case "turn_done":
+			done++
+		}
+	}
+	require.Equal(t, 1, done, "both responses belong to one turn: "+strings.Join(names(evs), ","))
+	require.Equal(t, []int{1, 2}, seqs, "two responses in one turn give two usage events with distinct, increasing seq")
 }

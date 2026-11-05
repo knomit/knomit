@@ -312,3 +312,76 @@ describe('ChatFacet: turn ends and repeats', () => {
     expect(screen.getByTestId('chat-tool-select-tu_1')).toBeEnabled();
   });
 });
+
+// Round 3: a failed turn racing a snapshot read, and a quick follow-up send.
+describe('ChatFacet: turn_error races and fast follow-ups', () => {
+  it('a turn_error that arrives while the ready snapshot is in flight cannot leave the chat running', async () => {
+    const stale = JSON.stringify(snapshot({ running: true, items: [{ kind: 'user', text: 'q' }, { kind: 'assistant', text: 'part' }] }));
+    const settled = snapshot({ running: false, items: [{ kind: 'user', text: 'q' }, { kind: 'assistant', text: 'part and more' }] });
+    stubFleetFetch({ [`GET ${BASE}`]: { body: settled } });
+    const inner = globalThis.fetch;
+    let release!: () => void;
+    let firstHeld = false;
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url === BASE && !init?.method && !firstHeld) {
+        firstHeld = true;
+        return new Promise<Response>(res => { release = () => res(new Response(stale, { status: 200 })); });
+      }
+      return inner(input, init);
+    }));
+    render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} />);
+    await waitFor(() => expect(firstHeld).toBe(true));
+
+    act(() => { latestStream('/chats/chat-a/events')!.emit('turn_error', { message: 'The model declined to answer.' }); });
+    await waitFor(() => expect(screen.getByTestId('chat-text')).toHaveTextContent('part and more'));
+    await act(async () => { release(); }); // the stale read answers last
+    expect(screen.getByTestId('chat-text')).toHaveTextContent('part and more');
+    expect(screen.queryByTestId('chat-stop')).toBeNull();
+    expect(screen.getByTestId('chat-send')).toBeInTheDocument();
+    // The refusal is the page's to keep: the snapshot does not carry it.
+    expect(screen.getByTestId('chat-turn-error').textContent).toBe('The model declined to answer.');
+  });
+
+  it('a follow-up sent before the server took its POST survives the snapshot read a turn end starts', async () => {
+    // The server's view still has only the first turn.
+    const { fx } = mount(snapshot({ running: false, items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] }),
+      { [`POST ${BASE}/turns`]: { status: 202, body: {} } });
+    await screen.findByTestId('chat-turn-0');
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'second' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+    await waitFor(() => expect(callsTo(fx, '/turns')).toHaveLength(1));
+    expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'second']);
+
+    // The first turn's end reaches the page now and starts a snapshot read.
+    const before = callsTo(fx, `GET ${BASE}`).filter(c => c.route === `GET ${BASE}`).length;
+    act(() => { latestStream('/chats/chat-a/events')!.emit('turn_done', {}); });
+    await waitFor(() => expect(callsTo(fx, `GET ${BASE}`).filter(c => c.route === `GET ${BASE}`).length).toBe(before + 1));
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'second']);
+    // And the chat is still running for it: Stop, not Send.
+    expect(screen.getByTestId('chat-stop')).toBeInTheDocument();
+
+    // Once the server lists it, the snapshot owns it (no duplicate).
+    fx.set(`GET ${BASE}`, { body: snapshot({ running: true, items: [
+      { kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }, { kind: 'user', text: 'second' },
+    ] }) });
+    act(() => { latestStream('/chats/chat-a/events')!.emit('ready', {}); });
+    await waitFor(() => expect(callsTo(fx, `GET ${BASE}`).filter(c => c.route === `GET ${BASE}`).length).toBe(before + 2));
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'second']);
+  });
+
+  it.each([[409, 'a turn is running'], [500, 'store unavailable']])('a send the server answers %i takes the unaccepted turn back out and shows the error', async (status, detail) => {
+    mount(snapshot({ running: false, items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] }),
+      { [`POST ${BASE}/turns`]: { status, body: { detail } } });
+    await screen.findByTestId('chat-turn-0');
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'second' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+    await waitFor(() => expect(screen.getByTestId('chat-action-error')).toHaveTextContent(detail));
+    expect(screen.getByTestId('chat-action-error')).toHaveTextContent(String(status));
+    expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first']);
+    expect(screen.queryByTestId('chat-stop')).toBeNull();
+    expect(screen.getByTestId('chat-send')).toBeInTheDocument();
+  });
+});

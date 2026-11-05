@@ -89,8 +89,12 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
     setActionError('');
     dispatch({ kind: 'user', text });
     sendChatTurn(chatId, text).catch(e => {
-      if (statusOf(e) === 404) goneRef.current(chatId);
-      else dispatch({ kind: 'turn_error', message: errText(e) });
+      if (statusOf(e) === 404) { goneRef.current(chatId); return; }
+      // Refused (a 409 while the stopped turn still unwinds, or any other
+      // non-2xx): the message never started a turn, so it leaves the
+      // transcript and the error is shown.
+      dispatch({ kind: 'send_failed', text });
+      setActionError(errText(e));
     });
   }, [chatId]);
   const stop = useCallback(() => {

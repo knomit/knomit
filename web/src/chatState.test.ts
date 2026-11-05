@@ -192,3 +192,34 @@ describe('usage line', () => {
     expect(formatCost(1.5)).toBe('$1.50');
   });
 });
+
+describe('chatReducer: local turns and refused sends', () => {
+  const snap = (items: ChatSnapshotItem[], running = false): ChatEvent => ({
+    kind: 'ready',
+    snapshot: { id: 'c', provider: 'p', model: 'm', running, grants: [], pending_approvals: [], items },
+  });
+  type ChatSnapshotItem = { kind: 'user' | 'assistant'; text: string };
+
+  it('a turn sent from here that the snapshot does not list yet is kept after it, and the chat stays running', () => {
+    const s = run([{ kind: 'user', text: 'one' }, { kind: 'turn_done' }, { kind: 'user', text: 'two' }]);
+    const after = chatReducer(s, snap([{ kind: 'user', text: 'one' }, { kind: 'assistant', text: 'A' }]));
+    expect(after.turns.map(t => t.user)).toEqual(['one', 'two']);
+    expect(after.running).toBe(true);
+    // The server lists it: no duplicate, and it is no longer local.
+    const listed = chatReducer(after, snap([{ kind: 'user', text: 'one' }, { kind: 'assistant', text: 'A' }, { kind: 'user', text: 'two' }], true));
+    expect(listed.turns.map(t => t.user)).toEqual(['one', 'two']);
+    expect(listed.turns[1].local).toBeUndefined();
+    // A snapshot-listed turn is not kept as local the next time.
+    const again = chatReducer(listed, snap([{ kind: 'user', text: 'one' }], false));
+    expect(again.turns.map(t => t.user)).toEqual(['one']);
+  });
+
+  it('send_failed takes back only the turn that never began', () => {
+    const s = run([{ kind: 'user', text: 'one' }, { kind: 'turn_done' }, { kind: 'user', text: 'two' }]);
+    expect(chatReducer(s, { kind: 'send_failed', text: 'two' }).turns.map(t => t.user)).toEqual(['one']);
+    expect(chatReducer(s, { kind: 'send_failed', text: 'two' }).running).toBe(false);
+    // Once something arrived for the turn, it stays.
+    const begun = chatReducer(s, { kind: 'text_delta', text: 'x' });
+    expect(chatReducer(begun, { kind: 'send_failed', text: 'two' }).turns.map(t => t.user)).toEqual(['one', 'two']);
+  });
+});

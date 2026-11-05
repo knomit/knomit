@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { ChatSettings } from './ChatSettings';
 import { stubFleetFetch } from './fleetTestFetch';
-import { CHAT_NO_GRANTS, CHAT_REVOKE_GRANT_DRAFT } from './chatCopy';
+import { CHAT_NO_GRANTS, CHAT_REVOKE_GRANT } from './chatCopy';
 
 const BASE = '/api/v1/chats/chat-a';
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -49,7 +49,7 @@ describe('ChatSettings', () => {
     await screen.findAllByTestId('chat-grant-row');
     const buttons = screen.getAllByTestId('chat-grant-revoke');
     expect(buttons).toHaveLength(2);
-    expect(buttons[0]).toHaveTextContent(CHAT_REVOKE_GRANT_DRAFT);
+    expect(buttons[0]).toHaveTextContent(CHAT_REVOKE_GRANT);
 
     fireEvent.click(buttons[0]);
     await waitFor(() => expect(screen.getAllByTestId('chat-grant-row')).toHaveLength(1));

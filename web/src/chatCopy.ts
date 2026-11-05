@@ -5,7 +5,7 @@
 // APPROVED: wording the plan and design did not give, approved by the user on
 // 2026-11-05. Do not change it on your own ruling either.
 // DRAFT: wording not yet approved; its constant carries a _DRAFT suffix and the
-// report that adds it flags it.
+// report that adds it flags it. (None at present.)
 // The server's own sentences (the price-tier warning, the reasoning-truncated
 // message, a refusal) are NOT here: the page shows them as the server sends
 // them.
@@ -40,7 +40,5 @@ export const CHAT_NO_GRANTS = 'Nothing has been allowed for this session.';
 /** The result panel, while a tool result is being fetched. */
 export const CHAT_RESULT_LOADING = 'Loading…';
 
-// ── DRAFT COPY: needs user approval ──
-
 /** The button on a Settings grant row that takes the grant back. */
-export const CHAT_REVOKE_GRANT_DRAFT = 'Revoke';
+export const CHAT_REVOKE_GRANT = 'Revoke';

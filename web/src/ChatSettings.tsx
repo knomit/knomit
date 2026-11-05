@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { listChatGrants, revokeChatGrant } from './chatApi';
 import type { ChatGrant } from './chatApi';
-import { CHAT_NO_GRANTS, CHAT_REVOKE_GRANT_DRAFT } from './chatCopy';
+import { CHAT_NO_GRANTS, CHAT_REVOKE_GRANT } from './chatCopy';
 
 /**
  * ChatSettings is the chat's Settings tab: what has been authorized for the
@@ -40,7 +40,7 @@ export function ChatSettings({ chatId }: { chatId: string }) {
           <span data-testid="chat-grant-target" title={g.kind} style={{ color: '#ddd' }}>{g.target}</span>
           <span data-testid="chat-grant-tool" style={mono}>{g.tool}</span>
           <span data-testid="chat-grant-action" style={mono}>{g.action}</span>
-          <button type="button" data-testid="chat-grant-revoke" onClick={() => revoke(g)} style={revokeBtn}>{CHAT_REVOKE_GRANT_DRAFT}</button>
+          <button type="button" data-testid="chat-grant-revoke" onClick={() => revoke(g)} style={revokeBtn}>{CHAT_REVOKE_GRANT}</button>
         </div>
       ))}
     </div>

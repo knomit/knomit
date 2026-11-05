@@ -10,7 +10,8 @@
 // which replaces the transcript with the server's view (there is no replay).
 // The snapshot has no usage, error or warning, so the reducer carries those
 // over from the state it replaces, turn by turn (a turn matches when its user
-// message does). The page also refetches when a turn ends, so an end that
+// message does). A turn sent from here that the snapshot does not list yet is
+// kept after it, and the chat stays running for it. The page also refetches when a turn ends, so an end that
 // arrives while a snapshot is in flight cannot leave the chat running.
 import type { ChatApproval, ChatSnapshot, ChatViewItem } from './chatApi';
 
@@ -28,6 +29,9 @@ export interface ChatTurn {
   costUsd: number | null;
   /** The loop's message when the turn ended in an error (a refusal, a limit). */
   error: string | null;
+  /** The person sent this message from here and no snapshot has listed it yet.
+   *  A snapshot cut before the server took the POST must not drop it. */
+  local?: true;
 }
 
 export interface ChatState {
@@ -52,6 +56,9 @@ export type ChatEvent =
   | { kind: 'ready'; snapshot: ChatSnapshot }
   /** The person sent a message (the server's events do not echo it). */
   | { kind: 'user'; text: string }
+  /** The server refused the message (a 409 while the last turn unwinds, any
+   *  non-2xx): the turn that never started is taken back out. */
+  | { kind: 'send_failed'; text: string }
   | { kind: 'text_delta'; text: string }
   | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean }
   | { kind: 'approval'; approval: ChatApproval }
@@ -94,11 +101,16 @@ export function snapshotState(snap: ChatSnapshot, prev: ChatState = initialChatS
   for (const it of snap.items) addItem(turns, it);
   turns.forEach((t, i) => {
     const old = prev.turns[i];
-    if (old && old.user === t.user) { t.usage = old.usage; t.costUsd = old.costUsd; t.error = old.error; }
+    // An old turn with no message is one the page joined mid-way: the first snapshot names it.
+    if (old && (old.user === t.user || old.user === '')) { t.usage = old.usage; t.costUsd = old.costUsd; t.error = old.error; }
   });
+  // Turns sent from here that the snapshot (cut before the server took their
+  // POST) does not list yet.
+  let kept = 0;
+  for (let i = turns.length; i < prev.turns.length && prev.turns[i].local; i++) { turns.push(prev.turns[i]); kept++; }
   const approvals: Record<string, ChatApproval> = {};
   for (const a of snap.pending_approvals ?? []) approvals[a.call_id] = a;
-  return { turns, running: snap.running, approvals, warning: prev.warning, ended: false, seenUsage: prev.seenUsage, loaded: true };
+  return { turns, running: snap.running || kept > 0, approvals, warning: prev.warning, ended: false, seenUsage: prev.seenUsage, loaded: true };
 }
 
 export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
@@ -106,7 +118,13 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
     case 'ready':
       return snapshotState(e.snapshot, s);
     case 'user':
-      return { ...s, turns: [...s.turns, newTurn(e.text)], running: true };
+      return { ...s, turns: [...s.turns, { ...newTurn(e.text), local: true as const }], running: true };
+    case 'send_failed': {
+      const last = s.turns[s.turns.length - 1];
+      // Only the turn that never began: nothing arrived for it yet.
+      if (!last || !last.local || last.user !== e.text || last.parts.length > 0) return { ...s, running: false };
+      return { ...s, turns: s.turns.slice(0, -1), running: false };
+    }
     case 'text_delta':
       return withLastTurn({ ...s, running: true }, t => {
         const last = t.parts[t.parts.length - 1];
