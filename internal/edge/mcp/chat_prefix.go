@@ -93,6 +93,30 @@ func toolDef(t mcpgo.Tool) (llm.ToolDef, error) {
 	return llm.ToolDef{Name: t.Name, Description: t.Description, Schema: schema}, nil
 }
 
+// NewChatToolWindow builds the ToolWindow of an adaptive chat from the tools
+// the principal was shown (the same tools AddPrefix puts in hook 1, which stay
+// in the Builder: the loop sends only the window's projection of them).
+//
+// The loader's description carries the catalogue, not the system prompt, so
+// hook 2 is byte-identical for every provider and for static and adaptive
+// chats alike. budget is the catalogue's allowance in tokens (the preload
+// budget P; 0 or less: no limit); a *CatalogueTooBigError means even the tool
+// names do not fit it. mcp.Replayable tells the window which results a stub may
+// offer back; ranker may be nil (no preload).
+func NewChatToolWindow(tools []llm.ToolDef, ranker llm.ToolRanker, budget int) (*llm.ToolWindow, error) {
+	cat, err := BuildCatalogue(tools, budget)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(tools))
+	for i, t := range tools {
+		names[i] = t.Name
+	}
+	return llm.NewToolWindow(llm.ToolWindowSpec{
+		Loader: llm.LoaderDef(cat), Names: names, Replayable: Replayable, Ranker: ranker,
+	})
+}
+
 // AddPrefix puts the shared hooks into b: one tool:<name> item per tool
 // (hook 1), ChatSystemPrompt as "system" (hook 2) and instructions as
 // "instructions" (hook 3).
