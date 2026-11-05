@@ -274,16 +274,24 @@ export function toolRowLabel(tool: string): string {
   return rest ? `knomit: Knomit ${rest.replaceAll('_', ' ')}` : tool;
 }
 
+/** A knomit_materialize document puts `<a id="f-..."></a>` on its own line
+ *  before each fact so a document can link to it. The chat panel renders
+ *  markdown without raw HTML, so the tag would show as literal text; the panel
+ *  has no in-page links to point at it, so the line is dropped. */
+const ANCHOR_LINE = /^[ \t]*<a\s+(?:id|name)="[^"]*"\s*><\/a>[ \t]*\r?\n?/gm;
+
 /** The markdown a knomit_materialize result stands for: its document `text`
- *  (audience "agent"), or its facts (audience "human") as a title and a body
- *  each. Anything else is shown as it came. */
+ *  (audience "agent", the real result shape: a JSON object whose `text` is the
+ *  document, beside metadata such as root, anchor, total and cursor), or its
+ *  facts (audience "human") as a title and a body each. Anchor lines are
+ *  dropped. Anything else is shown as it came. */
 export function materializedMarkdown(result: string): string {
   try {
     const v = JSON.parse(result) as { text?: unknown; facts?: unknown };
-    if (typeof v.text === 'string') return v.text;
+    if (typeof v.text === 'string') return v.text.replace(ANCHOR_LINE, '');
     if (Array.isArray(v.facts)) {
       return v.facts.map((f: { title?: string; body?: string }) =>
-        `${f.title ? `# ${f.title}\n\n` : ''}${f.body ?? ''}`).join('\n\n---\n\n');
+        `${f.title ? `# ${f.title}\n\n` : ''}${(f.body ?? '').replace(ANCHOR_LINE, '')}`).join('\n\n---\n\n');
     }
   } catch { /* not JSON: the text itself */ }
   return result;
