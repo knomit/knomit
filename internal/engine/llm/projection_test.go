@@ -143,7 +143,7 @@ func TestStub_ReplayableTextAndExcerpt(t *testing.T) {
 func TestStub_NonReplayableNeverOffersARecall(t *testing.T) {
 	w, b := stubWin(t)
 	body := jsonBody(4000)
-	tools := []string{stubWriteTool, stubPageTool, "mystery", LoadToolsName}
+	tools := []string{stubWriteTool, stubPageTool, "mystery"}
 	for i, tool := range tools {
 		addHist(t, b, HookConversation, histPair(fmt.Sprintf("n%d", i), tool, `{}`, body, false)...)
 	}
@@ -161,6 +161,29 @@ func TestStub_NonReplayableNeverOffersARecall(t *testing.T) {
 	last := rs[len(tools)].Content
 	require.Contains(t, last, "Call "+stubReadTool+" again with the same arguments to get it back.")
 	require.NotContains(t, last, "Do not repeat")
+}
+
+// Loader results are never stubbed, however long (here: the real loader's
+// nothing-loaded answer with a long catalogue, well over a stub's size), so the
+// model is never told "do not repeat" about a call EvictedResult invites it to
+// repeat. The window is the real one: only LoadToolsName decides.
+func TestStub_LoaderResultsAreNeverStubbed(t *testing.T) {
+	var names []string
+	for i := 0; i < 80; i++ {
+		names = append(names, fmt.Sprintf("catalogue_tool_%02d", i))
+	}
+	w, err := NewToolWindow(ToolWindowSpec{Loader: LoaderDef(""), Names: names, Replayable: fakeReplayable})
+	require.NoError(t, err)
+	b := NewBuilder()
+	long := w.Run(loadCall("nope"), b.Snapshot(), plenty, nil).Content
+	require.Greater(t, len(long), 1000, "fixture: longer than a stub")
+	addHist(t, b, HookConversation, histPair("l1", LoadToolsName, `{"names":["nope"]}`, long, true)...)
+	addHist(t, b, HookConversation, histPair("q1", stubWriteTool, `{}`, long, true)...)
+
+	rs := resultsOf(w.StubEnded(b.Snapshot(), 6400), HookConversation)
+	require.Equal(t, long, rs[0].Content)
+	require.False(t, rs[0].Elided)
+	require.True(t, rs[1].Elided, "control: the same text from another tool is stubbed")
 }
 
 // A nil Replayable means nothing is replayable, whatever the tool.
@@ -372,6 +395,28 @@ func TestLoop_SessionLogRequestRecordsProjection(t *testing.T) {
 	stored := r.b.Snapshot().Record()
 	require.Less(t, third.Tokens[HookConversation], stored.Tokens[HookConversation]-1500,
 		"the log records the projected hook 6, not the stored one")
+}
+
+// A model that reports no context window gives the projection no room to derive
+// the excerpt from, so nothing is stubbed even with a Window set.
+func TestLoop_UnknownWindowStubsNothing(t *testing.T) {
+	big := jsonBody(9000)
+	m := &fakeModel{steps: []fakeStep{
+		{resp: toolResp("tu1", stubReadTool, `{}`, Usage{Input: 100, Output: 5})},
+		{resp: textResp("one", Usage{Input: 3000, Output: 5})},
+		{resp: textResp("two", Usage{Input: 400, Output: 5})},
+	}}
+	r := stubRig(t, m, 0)
+	require.NotNil(t, r.l.Window)
+	require.Zero(t, m.Caps().ContextWindow)
+	r.out = big
+	_, err := r.l.RunTurn(context.Background(), "first")
+	require.NoError(t, err)
+	_, err = r.l.RunTurn(context.Background(), "second")
+	require.NoError(t, err)
+	got := resultText(m.snaps[2], "tu1")
+	require.Equal(t, big, got.Content, "the ended turn's result is sent whole")
+	require.False(t, got.Elided)
 }
 
 // A model with a stable prefix never gets a window, so nothing is stubbed: the

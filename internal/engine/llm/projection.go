@@ -129,7 +129,10 @@ func (w *ToolWindow) stubItem(it Item, calls map[string]ToolUse, capBytes int) I
 			continue
 		}
 		c, ok := calls[bl.ToolResult.ToolUseID]
-		if !ok {
+		// A loader result is small and tells the model it may load again
+		// ("Load them again if you need them"); a stub saying "do not repeat
+		// this call" would contradict it.
+		if !ok || c.Name == LoadToolsName {
 			continue
 		}
 		stub := stubResult(*bl.ToolResult, c.Name, w.replayableCall(c.Name, c.Args), capBytes)
