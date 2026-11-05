@@ -5,7 +5,7 @@ import { installFakeEventSource, uninstallFakeEventSource, streamsMatching, late
 import { stubFleetFetch } from './fleetTestFetch';
 import { SEND_TIMEOUT_MS } from './chatApi';
 import type { ChatSnapshot } from './chatApi';
-import { CHAT_SEND_TIMEOUT_DRAFT } from './chatCopy';
+import { CHAT_SEND_TIMEOUT } from './chatCopy';
 
 const CHAT = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
 const BASE = '/api/v1/chats/chat-a';
@@ -393,7 +393,7 @@ describe('ChatFacet: turn_error races and fast follow-ups', () => {
       vi.useRealTimers();
     }
     await waitFor(() => expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first']));
-    expect(screen.getByTestId('chat-action-error').textContent).toBe(`${BASE}/turns → ${CHAT_SEND_TIMEOUT_DRAFT}`);
+    expect(screen.getByTestId('chat-action-error').textContent).toBe(`${BASE}/turns → ${CHAT_SEND_TIMEOUT}`);
     expect(screen.getByTestId('chat-send')).toBeInTheDocument();
   });
 
@@ -577,7 +577,7 @@ describe('ChatFacet: events are routed by turn index', () => {
     await waitFor(() => expect(reads()).toBe(before + 1));
     expect(await screen.findByTestId('chat-approval-tu_9')).toBeInTheDocument();
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'second']);
-    expect(screen.getByTestId('chat-action-error').textContent).toBe(`${BASE}/turns → ${CHAT_SEND_TIMEOUT_DRAFT}`);
+    expect(screen.getByTestId('chat-action-error').textContent).toBe(`${BASE}/turns → ${CHAT_SEND_TIMEOUT}`);
   });
 });
 

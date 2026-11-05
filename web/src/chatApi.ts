@@ -5,7 +5,7 @@
 import { fetchJSON, apiUrl } from './api';
 import { openEventStream } from './eventStream';
 import type { EventSourceLike } from './eventStream';
-import { CHAT_SEND_TIMEOUT_DRAFT } from './chatCopy';
+import { CHAT_SEND_TIMEOUT } from './chatCopy';
 
 /** One live chat, as GET /chats lists it. */
 export interface ChatInfo { id: string; provider: string; model: string }
@@ -86,7 +86,7 @@ export async function sendChatTurn(id: string, text: string, timeoutMs = SEND_TI
   try {
     return await fetchJSON(url, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ text }), signal: ctl.signal });
   } catch (e) {
-    if (ctl.signal.aborted) throw new Error(`${url} → ${CHAT_SEND_TIMEOUT_DRAFT}`);
+    if (ctl.signal.aborted) throw new Error(`${url} → ${CHAT_SEND_TIMEOUT}`);
     throw e;
   } finally {
     clearTimeout(timer);

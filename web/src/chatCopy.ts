@@ -4,8 +4,8 @@
 // ruling.
 // APPROVED: wording the plan and design did not give, approved by the user on
 // 2026-11-05. Do not change it on your own ruling either.
-// DRAFT: wording not yet approved; its constant carries a _DRAFT suffix and the
-// report that adds it flags it. (None at present.)
+// New wording that is not yet approved is flagged in the report that adds it
+// and needs the user's approval before it ships. (None at present.)
 // The server's own sentences (the price-tier warning, the reasoning-truncated
 // message, a refusal) are NOT here: the page shows them as the server sends
 // them.
@@ -43,8 +43,6 @@ export const CHAT_RESULT_LOADING = 'Loading…';
 /** The button on a Settings grant row that takes the grant back. */
 export const CHAT_REVOKE_GRANT = 'Revoke';
 
-// ── DRAFT COPY: needs user approval ──
-
 /** The detail of the error shown when a send gets no answer in time
  *  (`<url> → <this>`, the same shape as every other request error). */
-export const CHAT_SEND_TIMEOUT_DRAFT = 'no answer';
+export const CHAT_SEND_TIMEOUT = 'no answer';
