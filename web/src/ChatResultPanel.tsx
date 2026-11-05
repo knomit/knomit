@@ -4,23 +4,8 @@ import ReactMarkdown from 'react-markdown';
 import { markdownPlugins, markdownComponents } from './markdown';
 import { getChatCall } from './chatApi';
 import type { ChatCall } from './chatApi';
-import { toolRowLabel } from './chatState';
+import { toolRowLabel, materializedMarkdown } from './chatState';
 import { CHAT_RESULT_LOADING_DRAFT } from './chatCopy';
-
-/** The markdown a knomit_materialize result stands for: its document `text`
- *  (audience "agent"), or its facts (audience "human") as a title and a body
- *  each. Anything else is shown as it came. */
-export function materializedMarkdown(result: string): string {
-  try {
-    const v = JSON.parse(result) as { text?: unknown; facts?: unknown };
-    if (typeof v.text === 'string') return v.text;
-    if (Array.isArray(v.facts)) {
-      return v.facts.map((f: { title?: string; body?: string }) =>
-        `${f.title ? `# ${f.title}\n\n` : ''}${f.body ?? ''}`).join('\n\n---\n\n');
-    }
-  } catch { /* not JSON: the text itself */ }
-  return result;
-}
 
 /**
  * ChatResultPanel is where a selected tool call's result is shown, on the

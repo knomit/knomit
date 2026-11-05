@@ -156,6 +156,21 @@ export function toolRowLabel(tool: string): string {
   return rest ? `knomit: Knomit ${rest.replaceAll('_', ' ')}` : tool;
 }
 
+/** The markdown a knomit_materialize result stands for: its document `text`
+ *  (audience "agent"), or its facts (audience "human") as a title and a body
+ *  each. Anything else is shown as it came. */
+export function materializedMarkdown(result: string): string {
+  try {
+    const v = JSON.parse(result) as { text?: unknown; facts?: unknown };
+    if (typeof v.text === 'string') return v.text;
+    if (Array.isArray(v.facts)) {
+      return v.facts.map((f: { title?: string; body?: string }) =>
+        `${f.title ? `# ${f.title}\n\n` : ''}${f.body ?? ''}`).join('\n\n---\n\n');
+    }
+  } catch { /* not JSON: the text itself */ }
+  return result;
+}
+
 /** formatCost words an estimated cost in USD. */
 export function formatCost(usd: number): string {
   if (usd > 0 && usd < 0.0001) return '<$0.0001';

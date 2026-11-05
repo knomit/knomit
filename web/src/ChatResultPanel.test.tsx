@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
-import { ChatResultPanel, materializedMarkdown } from './ChatResultPanel';
+import { ChatResultPanel } from './ChatResultPanel';
+import { materializedMarkdown } from './chatState';
 import { stubFleetFetch } from './fleetTestFetch';
 
 const BASE = '/api/v1/chats/chat-a';
