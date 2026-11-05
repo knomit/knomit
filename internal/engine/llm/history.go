@@ -25,7 +25,8 @@ import (
 // (Caps.StablePrefix false) is adaptive: the loop sends a PROJECTION of the
 // stored history and tool list (ToolWindow.Project), a copy. The stored history
 // is still whole and still append-only; only the view sent differs. Today the
-// projection changes the tools block only.
+// projection changes the tools block and shrinks each tool_result of an ended
+// turn to a stub (projection.go); the running turn is sent whole.
 
 // Role is the speaker of an Entry.
 type Role string
@@ -101,9 +102,11 @@ func (t ToolUse) ArgsErr() error {
 	return &InvalidToolArgsError{ToolUseID: t.ID, Name: t.Name, Raw: t.RawArgs}
 }
 
-// ToolResult answers the ToolUse whose ID it names. Elided is reserved and
-// unused: the history is append-only, so nothing replaces an earlier result
-// with a stub (see the package note on the neutral history).
+// ToolResult answers the ToolUse whose ID it names. Elided marks the rendered
+// view of a result whose stored content is whole: an adaptive provider's
+// projection (ToolWindow.StubEnded) sends a stub of an ended turn's result and
+// sets it. It is never set on a stored entry, so the history stays append-only
+// and whole; a stub is not a stored result.
 type ToolResult struct {
 	ToolUseID string `json:"tool_use_id"`
 	Content   string `json:"content"`
