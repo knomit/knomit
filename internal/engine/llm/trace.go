@@ -52,6 +52,9 @@ func (t *tracingChat) Provider() string { return t.inner.Provider() }
 func (t *tracingChat) Model() string    { return t.inner.Model() }
 func (t *tracingChat) Caps() Caps       { return t.inner.Caps() }
 
+// ContextInfo passes the adapter's context info through (see ContextInfoer).
+func (t *tracingChat) ContextInfo() (int, string, bool) { return contextInfoOf(t.inner) }
+
 func (t *tracingChat) Stream(ctx context.Context, s Snapshot, o StreamOptions, sink func(Event)) (*Response, error) {
 	start := time.Now()
 	resp, err := t.inner.Stream(ctx, s, o, sink)

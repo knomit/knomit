@@ -30,6 +30,7 @@ func (m *manager) routes(r chi.Router) {
 	r.Post("/chats/{id}/turns", m.handleTurn)
 	r.Post("/chats/{id}/cancel", m.handleCancel)
 	r.Post("/chats/{id}/approvals/{callId}", m.handleApproval)
+	r.Get("/chats/{id}/context", m.handleContext)
 	r.Get("/chats/{id}/grants", m.handleGrants)
 	r.Delete("/chats/{id}/grants", m.handleRevokeGrant)
 	r.Get("/chats/{id}/calls/{callId}", m.handleCall)
@@ -66,6 +67,7 @@ func chatLinks(id string) hal.LinkMap {
 		"cancel":    {Href: base + "/cancel"},
 		"approval":  {Href: base + "/approvals/{callId}", Templated: true},
 		"grants":    {Href: base + "/grants"},
+		"context":   {Href: base + "/context"},
 		"call":      {Href: base + "/calls/{callId}", Templated: true},
 		"providers": {Href: httpx.APIBase + "/chat-providers"},
 	}
@@ -337,6 +339,38 @@ func (m *manager) handleApproval(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// contextView is GET .../context: the chat model's context window in tokens,
+// how it was resolved ("config", "memory" or "trained"; "" when the model does
+// not say) and whether Ollama reported part of the model on the CPU after the
+// first real request (read live, so it is false until that request is done).
+type contextView struct {
+	Window int         `json:"window"`
+	How    string      `json:"how,omitempty"`
+	Spill  bool        `json:"spill"`
+	Links  hal.LinkMap `json:"_links"`
+}
+
+// contextOf is the model's ContextInfo, or its Caps window with no "how" when
+// the model does not implement llm.ContextInfoer.
+func contextOf(m llm.ChatModel) (window int, how string, spill bool) {
+	if ci, ok := m.(llm.ContextInfoer); ok {
+		return ci.ContextInfo()
+	}
+	return m.Caps().ContextWindow, "", false
+}
+
+func (m *manager) handleContext(w http.ResponseWriter, r *http.Request) {
+	c, ok := m.chatOf(w, r)
+	if !ok {
+		return
+	}
+	window, how, spill := contextOf(c.loop.Model)
+	hal.WriteHAL(w, http.StatusOK, contextView{
+		Window: window, How: how, Spill: spill,
+		Links: hal.LinkMap{"self": {Href: httpx.APIBase + "/chats/" + c.id + "/context"}},
+	})
 }
 
 func (m *manager) handleGrants(w http.ResponseWriter, r *http.Request) {

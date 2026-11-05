@@ -145,7 +145,7 @@ type harness struct {
 	life       context.CancelFunc
 
 	mu     sync.Mutex
-	models []*scripted
+	models []llm.ChatModel
 	next   int
 }
 

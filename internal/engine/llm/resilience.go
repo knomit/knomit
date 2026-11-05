@@ -220,6 +220,9 @@ func (r *resilientChat) Provider() string { return r.inner.Provider() }
 func (r *resilientChat) Model() string    { return r.inner.Model() }
 func (r *resilientChat) Caps() Caps       { return r.inner.Caps() }
 
+// ContextInfo passes the adapter's context info through (see ContextInfoer).
+func (r *resilientChat) ContextInfo() (int, string, bool) { return contextInfoOf(r.inner) }
+
 // Stream runs inner under the policy. observeLLMRequest records the whole
 // logical request (all attempts and backoff), matching the histogram's
 // documented meaning in metrics.go.

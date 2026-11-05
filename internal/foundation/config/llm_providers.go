@@ -20,7 +20,6 @@ const (
 	DefaultAnthropicKeyEnv = "ANTHROPIC_API_KEY"
 
 	DefaultOllamaKeepAlive = "30m"
-	DefaultOllamaNumCtx    = 32768
 )
 
 // LLMProviderConfig is one [llm.providers.<name>] table: where a chat model
@@ -130,9 +129,7 @@ func (c *LLMConfig) applyProviderDefaults() {
 			if p.KeepAlive == "" {
 				p.KeepAlive = DefaultOllamaKeepAlive
 			}
-			if p.NumCtx <= 0 {
-				p.NumCtx = DefaultOllamaNumCtx
-			}
+			// NumCtx has no default: 0 means "derive it from the model" (llm/numctx.go).
 		case LLMKindAnthropic:
 			if p.APIKeyEnv == "" {
 				p.APIKeyEnv = DefaultAnthropicKeyEnv
@@ -264,7 +261,7 @@ func (p LLMProviderConfig) validate(name string) error {
 		if md.MaxOutputTokens < 0 || md.ContextWindow < 0 {
 			return fmt.Errorf("%s: max_output_tokens and context_window must not be negative", mat)
 		}
-		if p.Kind == LLMKindOllama && md.MaxOutputTokens > 0 && md.MaxOutputTokens >= p.NumCtx {
+		if p.Kind == LLMKindOllama && md.MaxOutputTokens > 0 && p.NumCtx > 0 && md.MaxOutputTokens >= p.NumCtx {
 			// The trained-length half of this rule can only be checked at probe time
 			// (llm.Registry), because /api/show reports it.
 			return fmt.Errorf("%s.max_output_tokens %d must be below num_ctx %d: num_ctx covers the prompt and the reply together", mat, md.MaxOutputTokens, p.NumCtx)

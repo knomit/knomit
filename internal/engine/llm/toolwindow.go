@@ -82,6 +82,11 @@ type ToolWindowSpec struct {
 	Loader ToolDef
 	// Names are the catalogue's tool names: the tools the model may load.
 	Names []string
+	// Replayable says whether a call, made again with the same arguments,
+	// returns the same data with no session effect; the stub of its result
+	// offers a re-call only then. Nil means never (the edge passes
+	// mcp.Replayable).
+	Replayable func(tool string, args json.RawMessage) bool
 	// Ranker, when set, guesses the tools a turn's message needs; Preload loads
 	// the best guesses before the turn's first request. Nil: no preload.
 	Ranker ToolRanker
@@ -101,6 +106,7 @@ type ToolWindow struct {
 	sizes       map[string]int
 	bytes       map[string]int // definition bytes, for preload's rounding
 	changes     []ToolsChange
+	replayable  func(tool string, args json.RawMessage) bool
 	ranker      ToolRanker
 	picks       []string // tools preloaded this turn, in rank order
 }
@@ -139,7 +145,7 @@ func NewToolWindow(spec ToolWindowSpec) (*ToolWindow, error) {
 		loader: spec.Loader, inCat: map[string]bool{},
 		loaded: map[string]bool{}, last: map[string]int{},
 		turnLoaded: Pinned{}, batchLoaded: Pinned{}, sizes: map[string]int{}, bytes: map[string]int{},
-		ranker: spec.Ranker,
+		replayable: spec.Replayable, ranker: spec.Ranker,
 	}
 	for _, n := range spec.Names {
 		if n == LoadToolsName {

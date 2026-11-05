@@ -372,11 +372,12 @@ func TestLoop_PauseTurnResendsWithoutNewUserMessage(t *testing.T) {
 }
 
 type recLog struct {
-	mu  sync.Mutex
-	ev  []string
-	req []RequestLog
-	tc  []ToolCallLog
-	ap  []ApprovalLog
+	mu    sync.Mutex
+	ev    []string
+	req   []RequestLog
+	tc    []ToolCallLog
+	ap    []ApprovalLog
+	turns []Entry
 }
 
 func (r *recLog) add(s string) { r.mu.Lock(); r.ev = append(r.ev, s); r.mu.Unlock() }
@@ -384,7 +385,7 @@ func (r *recLog) Request(x RequestLog) {
 	r.req = append(r.req, x)
 	r.add("request")
 }
-func (r *recLog) Turn(e Entry)           { r.add("turn:" + string(e.Role)) }
+func (r *recLog) Turn(e Entry)           { r.turns = append(r.turns, e); r.add("turn:" + string(e.Role)) }
 func (r *recLog) ToolCall(c ToolCallLog) { r.tc = append(r.tc, c); r.add("toolcall:" + c.Name) }
 func (r *recLog) Approval(a ApprovalLog) { r.ap = append(r.ap, a); r.add("approval:" + a.Decision) }
 

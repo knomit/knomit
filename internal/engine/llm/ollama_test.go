@@ -60,6 +60,11 @@ func (s *ollamaServer) received() []map[string]json.RawMessage {
 func newTestOllama(t *testing.T, srv *ollamaServer, o OllamaOptions) *OllamaChat {
 	t.Helper()
 	o.Host = srv.URL
+	if o.NumCtx == 0 {
+		// There is no default num_ctx: an unset one is derived (numctx_test.go).
+		// These tests are about everything else, so they configure one.
+		o.NumCtx = 32768
+	}
 	c, err := NewOllamaChat(context.Background(), "test-model", o)
 	require.NoError(t, err)
 	return c

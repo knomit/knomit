@@ -40,6 +40,17 @@ var ErrWindowWithStablePrefix = errors.New("llm: Loop.Window is set for a model 
 // called or loaded in the current turn, so a pending call never meets an
 // eviction. With Window nil the snapshot sent is Builder.Snapshot(), byte for
 // byte.
+//
+// For the same providers the SENT history is also shorter than the stored one,
+// a deliberate carve-out from "never trimmed" (user decision, 2026-11-05): the
+// projection replaces each tool_result of an ended turn (hook 6) with a stub,
+// a header and a short head excerpt, and sends the running turn (hook 7) whole.
+// The stored entries, the Builder's hook 6 and the session log's turn records
+// stay whole; the stub never removes a tool_use or a tool_result, so the
+// pairing holds in every request. A stub offers a re-call only for a call the
+// effects table marks Replay. Anthropic (Caps.StablePrefix) never gets a
+// window and keeps its full history: its cache and thinking signatures depend
+// on a stable prefix.
 
 // ToolHost runs tool calls. The chat layer's in-process MCP session
 // implements it.
@@ -791,7 +802,11 @@ func (l *Loop) budget() (reserve, window int) {
 func (l *Loop) view() Snapshot {
 	snap := l.Builder.Snapshot()
 	if l.Window != nil {
-		return l.Window.Project(snap)
+		p := l.Window.Project(snap)
+		// Ended turns shrink to stubs; the running turn is sent whole. With no
+		// known window there is no room to derive the excerpt from: no stubs.
+		reserve, window := l.budget()
+		return l.Window.StubEnded(p, window-reserve)
 	}
 	return snap
 }
