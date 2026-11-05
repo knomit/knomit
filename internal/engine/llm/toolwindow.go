@@ -78,6 +78,11 @@ type ToolWindowSpec struct {
 	Loader ToolDef
 	// Names are the catalogue's tool names: the tools the model may load.
 	Names []string
+	// Replayable says whether a call, made again with the same arguments,
+	// returns the same data with no session effect; the stub of its result
+	// offers a re-call only then. Nil means never (the edge passes
+	// mcp.Replayable).
+	Replayable func(tool string, args json.RawMessage) bool
 }
 
 // ToolWindow: see the file comment.
@@ -93,6 +98,7 @@ type ToolWindow struct {
 	batchLoaded Pinned // loaded since BeginBatch: a call to them in this batch is not run
 	sizes       map[string]int
 	changes     []ToolsChange
+	replayable  func(tool string, args json.RawMessage) bool
 }
 
 // LoaderDef builds the loader tool's definition: the approved description with
@@ -129,6 +135,7 @@ func NewToolWindow(spec ToolWindowSpec) (*ToolWindow, error) {
 		loader: spec.Loader, inCat: map[string]bool{},
 		loaded: map[string]bool{}, last: map[string]int{},
 		turnLoaded: Pinned{}, batchLoaded: Pinned{}, sizes: map[string]int{},
+		replayable: spec.Replayable,
 	}
 	for _, n := range spec.Names {
 		if n == LoadToolsName {
