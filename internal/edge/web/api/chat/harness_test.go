@@ -68,16 +68,29 @@ type step struct {
 // scripted is a ChatModel that plays steps and records the snapshots it saw.
 type scripted struct {
 	name string
+	// adaptive makes the model an Ollama-like one with no prompt cache to
+	// protect (Caps.StablePrefix false); by default it is Anthropic-like.
+	adaptive bool
+	window   int // the context window it reports; 0 is 1,000,000
 
 	mu    sync.Mutex
 	steps []step
 	snaps []llm.Snapshot
 }
 
-func (m *scripted) Provider() string { return "anthropic" }
-func (m *scripted) Model() string    { return m.name }
+func (m *scripted) Provider() string {
+	if m.adaptive {
+		return "ollama"
+	}
+	return "anthropic"
+}
+func (m *scripted) Model() string { return m.name }
 func (m *scripted) Caps() llm.Caps {
-	return llm.Caps{Tools: true, ContextWindow: 1_000_000, MaxOutput: 1000}
+	w := m.window
+	if w == 0 {
+		w = 1_000_000
+	}
+	return llm.Caps{Tools: true, ContextWindow: w, MaxOutput: 1000, StablePrefix: !m.adaptive}
 }
 
 func (m *scripted) Stream(ctx context.Context, s llm.Snapshot, _ llm.StreamOptions, sink func(llm.Event)) (*llm.Response, error) {
@@ -222,7 +235,7 @@ func newHarnessProvider(t *testing.T, provider http.HandlerFunc) *harness {
 	life, endLife := context.WithCancel(context.Background())
 	h := &harness{t: t, repos: m, sessions: st, sessionsDB: stDB, srv: srv, sessionDir: filepath.Join(t.TempDir(), "chat-sessions"), logDir: filepath.Join(t.TempDir(), "chat-logs"), life: endLife}
 	var released sync.WaitGroup
-	h.mgr = newManager(life, srv, m, reg, h.sessionDir, h.logDir, &released)
+	h.mgr = newManager(life, srv, m, reg, nil, h.sessionDir, h.logDir, &released)
 	realOpen := h.mgr.openModel
 	h.mgr.openModel = func(ctx context.Context, provider, model string) (llm.ChatModel, error) {
 		if _, err := realOpen(ctx, provider, model); err != nil {

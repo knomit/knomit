@@ -24,6 +24,7 @@ import (
 	"knomit/internal/edge/mcp"
 	"knomit/internal/edge/web/httpx"
 	"knomit/internal/engine/llm"
+	"knomit/internal/engine/store/model"
 	"knomit/internal/foundation/auth"
 )
 
@@ -32,6 +33,9 @@ import (
 // to: permissions, the binding gate and validation are the ordinary ones, and
 // chat never calls a handler or a corpus API directly. rm is the repo manager
 // the session registers in, and reg opens the configured providers' models.
+// emb is the process's embedder, which guesses the tools a turn of an adaptive
+// chat needs (the chat falls back to a lexical guess when emb is nil or fails);
+// it is not used for an Anthropic chat.
 //
 // sessionsDir is where the chats' temp files live: each process keeps one run
 // directory there, guarded by an OS lock, and Mount sweeps the runs of dead
@@ -42,8 +46,8 @@ import (
 // The chats live as long as ctx: when it ends, every chat is ended, its temp
 // files and run directory removed. A non-nil released is how the caller waits
 // for that: Mount adds one to it and marks it Done once everything is let go.
-func Mount(ctx context.Context, r chi.Router, srv *mcpserver.MCPServer, rm *repos.Manager, reg *llm.Registry, sessionsDir, logDir string, released *sync.WaitGroup) {
-	m := newManager(ctx, srv, rm, reg, sessionsDir, logDir, released)
+func Mount(ctx context.Context, r chi.Router, srv *mcpserver.MCPServer, rm *repos.Manager, reg *llm.Registry, emb model.Embedder, sessionsDir, logDir string, released *sync.WaitGroup) {
+	m := newManager(ctx, srv, rm, reg, emb, sessionsDir, logDir, released)
 	m.routes(r)
 }
 
@@ -53,6 +57,7 @@ type manager struct {
 	srv  *mcpserver.MCPServer
 	rm   *repos.Manager
 	reg  *llm.Registry
+	emb  model.Embedder // nil: adaptive chats guess lexically
 
 	base      string // the sessions directory; "" until a private one is made
 	baseOwned bool
@@ -72,9 +77,9 @@ type manager struct {
 	release func()
 }
 
-func newManager(ctx context.Context, srv *mcpserver.MCPServer, rm *repos.Manager, reg *llm.Registry, sessionsDir, logDir string, released *sync.WaitGroup) *manager {
+func newManager(ctx context.Context, srv *mcpserver.MCPServer, rm *repos.Manager, reg *llm.Registry, emb model.Embedder, sessionsDir, logDir string, released *sync.WaitGroup) *manager {
 	m := &manager{
-		life: ctx, srv: srv, rm: rm, reg: reg, base: sessionsDir, logDir: logDir,
+		life: ctx, srv: srv, rm: rm, reg: reg, emb: emb, base: sessionsDir, logDir: logDir,
 		chats: map[string]*chat{},
 	}
 	if reg != nil {
@@ -301,13 +306,29 @@ func (m *manager) create(ctx context.Context, p auth.Principal, provider, model 
 	window, how, _ := contextOf(cm)
 	c.log.Start(provider, model, window, how)
 
+	// An adaptive chat (Registry.Adaptive: the provider's adapter needs no
+	// stable prefix and adaptive_tools is not "off") gets a ToolWindow, and
+	// nothing else decides that. The Builder keeps every tool; the loop sends
+	// the window's projection of them.
+	var win *llm.ToolWindow
+	if m.reg != nil && m.reg.Adaptive(provider, model, cm.Caps()) {
+		if win, err = m.openWindow(c, cm, tools); err != nil {
+			_ = sess.Close(context.Background())
+			c.log.End("open_failed")
+			return fail(err)
+		}
+	}
+
 	var price *llm.PriceCard
 	if m.price != nil {
 		price = m.price(provider, model)
 	}
 	c.loop = &llm.Loop{
 		Model: cm, Builder: b, Tools: sess, Gate: c, Sink: c.onLoopEvent,
-		ArgsHook: c.argsHook, Log: c.logSink(), Price: price,
+		ArgsHook: c.argsHook, Log: c.logSink(), Price: price, Window: win,
+	}
+	if win != nil {
+		m.warmRanker(c, tools)
 	}
 
 	m.mu.Lock()

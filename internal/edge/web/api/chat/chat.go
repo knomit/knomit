@@ -44,6 +44,9 @@ type viewItem struct {
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 	State     string          `json:"state,omitempty"` // running | done
 	IsError   bool            `json:"is_error,omitempty"`
+	// Loaded, on the call to the loader tool only: the tools that call loaded,
+	// which the page words as the call's row.
+	Loaded []string `json:"loaded,omitempty"`
 
 	// On a "user" item only: what the page shows for the turn it opens, so a
 	// snapshot is the whole truth about the turn and the page patches nothing.
@@ -52,6 +55,9 @@ type viewItem struct {
 	Warning   string     `json:"warning,omitempty"`   // the price-tier warning, worded
 	Error     string     `json:"error,omitempty"`     // how the turn ended, if it did not succeed
 	Cancelled bool       `json:"cancelled,omitempty"` // Error is the person's own Stop
+	// Tools is the turn's view of the loaded tools; present on an adaptive chat
+	// only (see adaptive.go).
+	Tools *turnTools `json:"tools,omitempty"`
 }
 
 // turnUsage is a turn's token counts, summed over its requests.
@@ -115,6 +121,8 @@ type chat struct {
 	cancel context.CancelFunc
 
 	traceTools map[string]bool // tools whose schema declares `trace`
+
+	adapt *adaptiveState // nil on a static chat; set once, before the chat is published
 
 	mu         sync.Mutex
 	ended      bool
@@ -371,7 +379,12 @@ func (c *chat) startTurn(text string) (int, error) {
 	c.turnCancel = cancel
 	c.turnAt = len(c.view)
 	turn := c.turnAt
-	c.view = append(c.view, viewItem{Kind: "user", Text: text})
+	user := viewItem{Kind: "user", Text: text}
+	if c.adapt != nil {
+		// Every turn of an adaptive chat shows the loaded set it opens with.
+		user.Tools = c.adapt.turnView(0, 0)
+	}
+	c.view = append(c.view, user)
 	c.turns.Add(1)
 	c.mu.Unlock()
 	c.store.appendTranscript(viewItem{Kind: "user", Text: text})
@@ -406,16 +419,25 @@ func (c *chat) finishTurn(ctx context.Context, res *llm.TurnResult, err error) {
 	}
 	truncatedBare := msg == reasoningTruncatedMessage
 	ended := c.ended
+	var tools *turnTools
+	if turn < len(c.view) {
+		tools = c.view[turn].Tools
+	}
 	c.mu.Unlock()
 	c.store.appendTranscript(map[string]any{"turn_end": true, "error": errString(err)})
+	c.logPreload(turn, res)
 	if ended {
 		return
 	}
 	if err == nil {
-		c.emit("turn_done", map[string]any{
+		done := map[string]any{
 			"turn": turn, "stop_reason": res.StopReason, "requests": res.Requests, "tool_calls": res.ToolCalls,
 			"usage": usageView(res.Usage), "cost_usd": res.Cost.USD,
-		})
+		}
+		if tools != nil {
+			done["tools"] = tools
+		}
+		c.emit("turn_done", done)
 		return
 	}
 	if !truncatedBare && cancelled {
@@ -479,9 +501,16 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		r := ev.Result
 		c.mu.Lock()
 		tu := c.calls[r.ToolUseID]
+		// The loader's own call carries what it loaded, which the page words
+		// as the call's row. The window reports a call's changes just before
+		// the call's result, so they are the ones it holds now.
+		var loaded []string
+		if c.adapt != nil && tu.Name == llm.LoadToolsName {
+			loaded, c.adapt.loadRow = c.adapt.loadRow, nil
+		}
 		for i := range c.view {
 			if c.view[i].Kind == "tool_call" && c.view[i].ID == r.ToolUseID {
-				c.view[i].State, c.view[i].IsError = "done", r.IsError
+				c.view[i].State, c.view[i].IsError, c.view[i].Loaded = "done", r.IsError, loaded
 			}
 		}
 		turn := c.turnAt
@@ -489,7 +518,13 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		if err := c.store.putCall(r.ToolUseID, callRecord{Name: tu.Name, Arguments: tu.Args, Result: r.Content, IsError: r.IsError, Elided: r.Elided}); err != nil {
 			log.Warn().Err(err).Str("chat", c.id).Msg("chat: could not store a tool call")
 		}
-		c.emit("tool_call", map[string]any{"id": r.ToolUseID, "name": tu.Name, "state": "done", "is_error": r.IsError, "turn": turn})
+		done := map[string]any{"id": r.ToolUseID, "name": tu.Name, "state": "done", "is_error": r.IsError, "turn": turn}
+		if len(loaded) > 0 {
+			done["loaded"] = loaded
+		}
+		c.emit("tool_call", done)
+	case llm.LoopToolsChanged:
+		c.onToolsChanged(*ev.Tools)
 	case llm.LoopUsage:
 		c.mu.Lock()
 		c.lastText, c.lastReasoning = c.reqText, c.reqReasoning

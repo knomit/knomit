@@ -157,7 +157,7 @@ func TestChat_SweepAtStartRemovesDeadRuns(t *testing.T) {
 	t.Cleanup(release)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	m := newManager(ctx, nil, nil, nil, base, "", nil)
+	m := newManager(ctx, nil, nil, nil, nil, base, "", nil)
 	require.NotNil(t, m)
 	require.False(t, exists(deadRun), "the first router build removed the dead run")
 	require.True(t, exists(liveRun), "a run whose lock is held stays")
@@ -182,7 +182,7 @@ func TestChat_SessionLogOutlivesChat(t *testing.T) {
 	// A later start's sweep touches only the sessions directory.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	newManager(ctx, nil, nil, nil, h.sessionDir, h.logDir, nil)
+	newManager(ctx, nil, nil, nil, nil, h.sessionDir, h.logDir, nil)
 	require.True(t, exists(filepath.Join(h.logDir, id+".jsonl")), "the sweep never removes a session log")
 	n, err := httpx.SweepDeadRuns(h.sessionDir)
 	require.NoError(t, err)
