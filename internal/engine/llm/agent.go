@@ -902,7 +902,8 @@ func (l *Loop) view() Snapshot {
 		// Ended turns shrink to stubs; the running turn is sent whole. With no
 		// known window there is no room to derive the excerpt from: no stubs.
 		reserve, window := l.budget()
-		return l.Window.StubEnded(p, window-reserve)
+		// Reasoning of ended turns is not sent either (DropEndedReasoning).
+		return l.Window.DropEndedReasoning(l.Window.StubEnded(p, window-reserve))
 	}
 	return snap
 }
