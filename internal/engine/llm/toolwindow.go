@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -51,9 +52,9 @@ const (
 	NotInCatalogueNoMatchResult = "Not in the catalogue: %s." // name
 )
 
-// Reasons a LoopToolsChanged event carries. "preload" joins them with the
-// ranker (a later change).
+// Reasons a LoopToolsChanged event carries.
 const (
+	ToolsReasonPreload   = "preload"    // loaded by the ranker's guess before the turn's first request
 	ToolsReasonModel     = "model"      // the model called the loader
 	ToolsReasonStaleCall = "stale_call" // the model called a catalogue tool it had not loaded
 	ToolsReasonPressure  = "pressure"   // evicted because the request would not fit
@@ -61,11 +62,14 @@ const (
 
 // ToolsChange is one change to the loaded set.
 type ToolsChange struct {
-	Loaded    []string // names added by this change
-	Evicted   []string // names removed by this change
-	Reason    string
-	LoadedNow []string // the loaded set after the change, sorted
-	Tokens    int      // definition tokens (bytes/4) of the loaded set after the change
+	Loaded  []string // names added by this change
+	Evicted []string // names removed by this change
+	Reason  string
+	// RankerError is set on a preload change whose ranker failed; the turn went
+	// on with no preload. It is data for the log, never a user-facing error.
+	RankerError string
+	LoadedNow   []string // the loaded set after the change, sorted
+	Tokens      int      // definition tokens (bytes/4) of the loaded set after the change
 }
 
 // Pinned is a set of tool names that must not be evicted.
@@ -83,6 +87,9 @@ type ToolWindowSpec struct {
 	// offers a re-call only then. Nil means never (the edge passes
 	// mcp.Replayable).
 	Replayable func(tool string, args json.RawMessage) bool
+	// Ranker, when set, guesses the tools a turn's message needs; Preload loads
+	// the best guesses before the turn's first request. Nil: no preload.
+	Ranker ToolRanker
 }
 
 // ToolWindow: see the file comment.
@@ -97,8 +104,11 @@ type ToolWindow struct {
 	turnLoaded  Pinned // loaded since BeginTurn: never evicted in this turn
 	batchLoaded Pinned // loaded since BeginBatch: a call to them in this batch is not run
 	sizes       map[string]int
+	bytes       map[string]int // definition bytes, for preload's rounding
 	changes     []ToolsChange
 	replayable  func(tool string, args json.RawMessage) bool
+	ranker      ToolRanker
+	picks       []string // tools preloaded this turn, in rank order
 }
 
 // LoaderDef builds the loader tool's definition: the approved description with
@@ -134,8 +144,8 @@ func NewToolWindow(spec ToolWindowSpec) (*ToolWindow, error) {
 	w := &ToolWindow{
 		loader: spec.Loader, inCat: map[string]bool{},
 		loaded: map[string]bool{}, last: map[string]int{},
-		turnLoaded: Pinned{}, batchLoaded: Pinned{}, sizes: map[string]int{},
-		replayable: spec.Replayable,
+		turnLoaded: Pinned{}, batchLoaded: Pinned{}, sizes: map[string]int{}, bytes: map[string]int{},
+		replayable: spec.Replayable, ranker: spec.Ranker,
 	}
 	for _, n := range spec.Names {
 		if n == LoadToolsName {
@@ -162,7 +172,7 @@ func (w *ToolWindow) Handles(name string) bool {
 }
 
 // BeginTurn starts a user turn: what was loaded earlier may be evicted again.
-func (w *ToolWindow) BeginTurn() { w.turnLoaded = Pinned{} }
+func (w *ToolWindow) BeginTurn() { w.turnLoaded = Pinned{}; w.picks = nil }
 
 // BeginBatch starts the answering of one model response's tool calls.
 func (w *ToolWindow) BeginBatch() { w.batchLoaded = Pinned{} }
@@ -207,6 +217,7 @@ func (w *ToolWindow) observe(snap Snapshot) {
 	for _, it := range snap.Hooks[HookTools] {
 		if it.Tool != nil {
 			w.sizes[it.Tool.Name] = itemBytes(it) / 4
+			w.bytes[it.Tool.Name] = itemBytes(it)
 		}
 	}
 }
@@ -235,7 +246,9 @@ func (w *ToolWindow) Project(snap Snapshot) Snapshot {
 
 // evictOrder lists the loaded tools that may be evicted, best victim first:
 // least recently used, ties to the larger definition, then by name. Tools in
-// pinned, tools loaded this turn and the loader are never listed.
+// pinned, tools the model loaded this turn and the loader are never listed.
+// Preloaded picks are not pinned until called (the caller's pinned set holds
+// the called ones), and unused picks are the first victims.
 func (w *ToolWindow) evictOrder(pinned Pinned) []string {
 	var cand []string
 	for n := range w.loaded {
@@ -243,8 +256,17 @@ func (w *ToolWindow) evictOrder(pinned Pinned) []string {
 			cand = append(cand, n)
 		}
 	}
+	guess := map[string]bool{}
+	for _, n := range w.picks {
+		guess[n] = true
+	}
 	sort.Slice(cand, func(i, j int) bool {
 		a, b := cand[i], cand[j]
+		// A preloaded pick the model has not called (a called one is in
+		// pinned) is a guess: it goes before any tool the model asked for.
+		if guess[a] != guess[b] {
+			return guess[a]
+		}
 		if w.last[a] != w.last[b] {
 			return w.last[a] < w.last[b]
 		}
@@ -420,3 +442,87 @@ func (w *ToolWindow) unknownLine(name string) string {
 
 // unboundedRoom is what a free func returns when the window is unknown.
 const unboundedRoom = math.MaxInt / 4
+
+// PreloadDivisor sets the preload budget P = usable room / PreloadDivisor.
+// Policy fraction, not a measurement: the guess is a guess, so the most a wrong
+// one may cost is an eighth of the usable room whatever the window (regret
+// bound; design 4.4), and pressure eviction removes it later.
+const PreloadDivisor = 8
+
+// PreloadBudget is P in tokens for usable = window - reply reserve.
+func PreloadBudget(usable int) int {
+	if usable <= 0 {
+		return 0
+	}
+	return usable / PreloadDivisor
+}
+
+// Picks are the tools Preload loaded this turn, in rank order.
+func (w *ToolWindow) Picks() []string { return append([]string(nil), w.picks...) }
+
+// Preload ranks the catalogue against the turn's message and loads the best
+// guesses before the first request. Tools are taken greedily in rank order
+// while their definition tokens (bytes/4) sum to at most min(P, free), P =
+// PreloadBudget(usable); the first tool that does not fit ends it (a cheap
+// low-ranked tool never jumps a big high-ranked one). Loaded tools cost
+// nothing and are skipped. Preload only adds: it never evicts, so it cannot
+// push a request over budget, and when nothing fits it loads nothing. A pick is
+// pinned only once the model calls it this turn; until then it is the first
+// thing pressure evicts (a wrong guess must not cost the turn).
+//
+// Tools tied with the lowest score carry no evidence (a message naming
+// nothing scores every tool alike) and are not candidates; this is relative to
+// the ranking, not a similarity cutoff. A ranker error is recorded on the
+// change and swallowed. free is the tokens the next request has room for.
+func (w *ToolWindow) Preload(ctx context.Context, message string, snap Snapshot, usable, free int) []string {
+	w.picks = nil
+	if w.ranker == nil {
+		return nil
+	}
+	w.observe(snap)
+	ranked, err := w.ranker.Rank(ctx, message)
+	if err != nil {
+		w.changes = append(w.changes, ToolsChange{Reason: ToolsReasonPreload, RankerError: err.Error(), LoadedNow: w.loadedNames(), Tokens: w.loadedTokens()})
+		return nil
+	}
+	if len(ranked) < 2 {
+		return nil
+	}
+	floor := ranked[0].Score
+	for _, s := range ranked {
+		floor = math.Min(floor, s.Score)
+	}
+	budget := min(PreloadBudget(usable), free)
+	var loaded []string
+	seen := map[string]bool{}
+	for _, s := range ranked {
+		if s.Score <= floor {
+			break
+		}
+		name := s.Name
+		_, known := w.sizes[name]
+		if !w.inCat[name] || !known || seen[name] {
+			continue
+		}
+		seen[name] = true
+		if w.loaded[name] {
+			continue
+		}
+		// Round up per tool: Snapshot.Record() floors the whole hook, so the
+		// real growth of the estimate is at most the sum of the ceilings.
+		size := (w.bytes[name] + 3) / 4
+		if size > budget {
+			break
+		}
+		budget -= size
+		w.clock++
+		w.loaded[name] = true
+		w.last[name] = w.clock
+		loaded = append(loaded, name)
+	}
+	if len(loaded) > 0 {
+		w.picks = loaded
+		w.record(loaded, nil, ToolsReasonPreload)
+	}
+	return loaded
+}
