@@ -400,7 +400,7 @@ func TestApplySettingsRollsBackAutostartWhenTheWriteFails(t *testing.T) {
 	}
 }
 
-// knomit.toml can hold an API key ([llm] api_key). A dialog-created file must
+// knomit.toml can hold an API key ([llm.providers.<name>] api_key). A dialog-created file must
 // not be world-readable, and an existing file's mode is the user's business.
 func TestApplySettingsFilePermissions(t *testing.T) {
 	// Windows synthesises Perm() from the read-only attribute alone: every
