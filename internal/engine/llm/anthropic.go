@@ -110,7 +110,7 @@ func (o AnthropicOptions) withDefaults() AnthropicOptions {
 	return o
 }
 
-// AnthropicChat is the v2 Anthropic Messages adapter: streaming, tools, and
+// AnthropicChat is the Anthropic Messages adapter: streaming, tools, and
 // prompt caching at hook boundaries (see renderAnthropic).
 type AnthropicChat struct {
 	client anthropic.Client

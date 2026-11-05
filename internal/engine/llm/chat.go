@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 )
 
-// This file is the v2 model interface: streaming, tool-calling, cache-aware.
+// This file is the model interface: streaming, tool-calling, cache-aware.
 //
 // A request is never a flat message list. It is a Snapshot of the context
 // Builder's fixed hooks (builder.go), which each adapter renders into its own
@@ -15,7 +15,7 @@ import (
 // conversation is kept in the provider-neutral form in history.go and is
 // converted on every request; it never takes a provider's native shape.
 
-// ChatModel is one provider model behind the v2 interface.
+// ChatModel is one provider model behind the ChatModel interface.
 type ChatModel interface {
 	Provider() string
 	Model() string

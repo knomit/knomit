@@ -12,10 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ollamaV2Server answers /api/show with caps and every /api/chat with the
+// ollamaServer answers /api/show with caps and every /api/chat with the
 // given NDJSON lines (each followed by a newline), recording each chat body
 // and counting chat calls.
-type ollamaV2Server struct {
+type ollamaServer struct {
 	*httptest.Server
 	mu     sync.Mutex
 	bodies []map[string]json.RawMessage
@@ -25,9 +25,9 @@ type ollamaV2Server struct {
 	info map[string]any
 }
 
-func newOllamaV2Server(t *testing.T, caps []string, lines ...string) *ollamaV2Server {
+func newOllamaServer(t *testing.T, caps []string, lines ...string) *ollamaServer {
 	t.Helper()
-	s := &ollamaV2Server{}
+	s := &ollamaServer{}
 	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/show":
@@ -51,13 +51,13 @@ func newOllamaV2Server(t *testing.T, caps []string, lines ...string) *ollamaV2Se
 	return s
 }
 
-func (s *ollamaV2Server) received() []map[string]json.RawMessage {
+func (s *ollamaServer) received() []map[string]json.RawMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]map[string]json.RawMessage(nil), s.bodies...)
 }
 
-func newTestOllama(t *testing.T, srv *ollamaV2Server, o OllamaOptions) *OllamaChat {
+func newTestOllama(t *testing.T, srv *ollamaServer, o OllamaOptions) *OllamaChat {
 	t.Helper()
 	o.Host = srv.URL
 	c, err := NewOllamaChat(context.Background(), "test-model", o)
@@ -113,9 +113,9 @@ func TestRenderOllama_ToolResultCarriesToolName(t *testing.T) {
 func TestRenderOllama_PrefixStableWhenTurnChanges(t *testing.T) {
 	a := renderOllama(ollamaSnapshot(t, "turn one"), "m", OllamaOptions{})
 	b := renderOllama(ollamaSnapshot(t, "a different turn"), "m", OllamaOptions{})
-	for _, f := range []func(r ollamaChatRequestV2) any{
-		func(r ollamaChatRequestV2) any { return r.Messages[0] },
-		func(r ollamaChatRequestV2) any { return r.Tools },
+	for _, f := range []func(r ollamaChatRequest) any{
+		func(r ollamaChatRequest) any { return r.Messages[0] },
+		func(r ollamaChatRequest) any { return r.Tools },
 	} {
 		ja, _ := json.Marshal(f(a))
 		jb, _ := json.Marshal(f(b))
@@ -135,7 +135,7 @@ func TestRenderOllama_PrefixStableWhenTurnChanges(t *testing.T) {
 }
 
 func TestOllamaChat_StreamToolCallGetsKnomitID(t *testing.T) {
-	srv := newOllamaV2Server(t, []string{"completion", "tools"},
+	srv := newOllamaServer(t, []string{"completion", "tools"},
 		`{"model":"test-model","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"knomit_query","arguments":{"text":"x"}}}]},"done":false}`,
 		`{"model":"test-model","message":{"role":"assistant","content":""},"done_reason":"stop","done":true,"prompt_eval_count":120,"eval_count":7}`,
 	)

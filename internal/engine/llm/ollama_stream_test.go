@@ -16,13 +16,13 @@ import (
 
 func TestOllamaChat_CapsFromShow(t *testing.T) {
 	t.Run("tools", func(t *testing.T) {
-		c := newTestOllama(t, newOllamaV2Server(t, []string{"completion", "tools"}), OllamaOptions{NumCtx: 8192, MaxOutput: 512})
+		c := newTestOllama(t, newOllamaServer(t, []string{"completion", "tools"}), OllamaOptions{NumCtx: 8192, MaxOutput: 512})
 		require.True(t, c.Caps().Tools)
 		require.Equal(t, "", c.UnusableReason())
 		require.Equal(t, Caps{Tools: true, MaxBreakpoints: 0, ContextWindow: 8192, MaxOutput: 512}, c.Caps())
 	})
 	t.Run("window is capped at the trained context", func(t *testing.T) {
-		srv := newOllamaV2Server(t, []string{"tools"})
+		srv := newOllamaServer(t, []string{"tools"})
 		srv.info = map[string]any{"general.architecture": "llama", "llama.context_length": 8000}
 		c := newTestOllama(t, srv, OllamaOptions{NumCtx: 32768})
 		require.Equal(t, 8000, c.Caps().ContextWindow)
@@ -31,12 +31,12 @@ func TestOllamaChat_CapsFromShow(t *testing.T) {
 		require.Equal(t, 4096, c.Caps().ContextWindow)
 	})
 	t.Run("no trained context reported keeps num_ctx", func(t *testing.T) {
-		srv := newOllamaV2Server(t, []string{"tools"})
+		srv := newOllamaServer(t, []string{"tools"})
 		srv.info = map[string]any{"general.architecture": "llama"}
 		require.Equal(t, 32768, newTestOllama(t, srv, OllamaOptions{}).Caps().ContextWindow)
 	})
 	t.Run("no tools", func(t *testing.T) {
-		srv := newOllamaV2Server(t, []string{"completion"})
+		srv := newOllamaServer(t, []string{"completion"})
 		c := newTestOllama(t, srv, OllamaOptions{})
 		require.False(t, c.Caps().Tools)
 		require.Contains(t, c.UnusableReason(), "does not support tool calling")
@@ -65,7 +65,7 @@ func TestOllamaChat_CapsFromShow(t *testing.T) {
 		require.Contains(t, c.UnusableReason(), "capability probe failed")
 	})
 	t.Run("host from environment", func(t *testing.T) {
-		srv := newOllamaV2Server(t, []string{"tools"})
+		srv := newOllamaServer(t, []string{"tools"})
 		t.Setenv("OLLAMA_HOST", strings.TrimPrefix(srv.URL, "http://"))
 		c, err := NewOllamaChat(context.Background(), "m", OllamaOptions{})
 		require.NoError(t, err)
@@ -74,7 +74,7 @@ func TestOllamaChat_CapsFromShow(t *testing.T) {
 }
 
 func TestOllamaChat_LengthStopIsAnError(t *testing.T) {
-	srv := newOllamaV2Server(t, []string{"tools"},
+	srv := newOllamaServer(t, []string{"tools"},
 		`{"message":{"role":"assistant","content":"partial "},"done":false}`,
 		`{"message":{"role":"assistant","content":"text"},"done":false}`,
 		`{"message":{"role":"assistant","content":""},"done_reason":"length","done":true,"prompt_eval_count":30,"eval_count":9}`,
@@ -99,7 +99,7 @@ func TestOllamaChat_LengthStopIsAnError(t *testing.T) {
 // ends with done_reason "length", which is a *StopError that Is ErrTruncated
 // (not a silent "stop" after llama-server discarded KV).
 func TestOllamaChat_ShiftFalseOverrunIsErrTruncated(t *testing.T) {
-	srv := newOllamaV2Server(t, []string{"tools"},
+	srv := newOllamaServer(t, []string{"tools"},
 		`{"message":{"role":"assistant","content":"cut off"},"done":false}`,
 		`{"message":{"role":"assistant","content":""},"done_reason":"length","done":true,"prompt_eval_count":32000,"eval_count":768}`,
 	)
@@ -128,7 +128,7 @@ func TestOllamaChat_AlwaysSendsNumCtxAndKeepAlive(t *testing.T) {
 		{"per-request output", OllamaOptions{NumCtx: 4096, MaxOutput: 300}, StreamOptions{MaxOutput: 77}, 4096, 77, `"30m"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := newOllamaV2Server(t, []string{"tools"}, done)
+			srv := newOllamaServer(t, []string{"tools"}, done)
 			c := newTestOllama(t, srv, tc.o)
 			_, err := c.Stream(context.Background(), ollamaSnapshot(t, "x"), tc.stream, nil)
 			require.NoError(t, err)
@@ -144,7 +144,7 @@ func TestOllamaChat_AlwaysSendsNumCtxAndKeepAlive(t *testing.T) {
 }
 
 func TestOllamaChat_ThinkingModelStreamsReasoningFirst(t *testing.T) {
-	srv := newOllamaV2Server(t, []string{"tools", "thinking"},
+	srv := newOllamaServer(t, []string{"tools", "thinking"},
 		`{"message":{"role":"assistant","content":"","thinking":"let me "},"done":false}`,
 		`{"message":{"role":"assistant","content":"","thinking":"think"},"done":false}`,
 		`{"message":{"role":"assistant","content":"Answer."},"done":false}`,
@@ -187,7 +187,7 @@ func TestRenderOllama_ReasoningReplay(t *testing.T) {
 }
 
 func TestOllamaChat_ToolArgumentsAreObjects(t *testing.T) {
-	srv := newOllamaV2Server(t, []string{"tools"},
+	srv := newOllamaServer(t, []string{"tools"},
 		`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"knomit_repos","arguments":null}},{"function":{"name":"knomit_query","arguments":{ "text" : "ok" }}}]},"done":false}`,
 		`{"message":{"role":"assistant","content":""},"done_reason":"stop","done":true}`,
 	)
@@ -213,7 +213,7 @@ func TestOllamaChat_ToolArgumentsAreObjects(t *testing.T) {
 func TestOllamaChat_InvalidToolArgumentsFailTheTurn(t *testing.T) {
 	const msg = `llama-server returned invalid tool call arguments for "knomit_query": invalid character 'x' looking for beginning of value`
 	t.Run("error line after content", func(t *testing.T) {
-		srv := newOllamaV2Server(t, []string{"tools"},
+		srv := newOllamaServer(t, []string{"tools"},
 			`{"message":{"role":"assistant","content":"calling"},"done":false}`,
 			`{"error":"`+strings.ReplaceAll(msg, `"`, `\"`)+`"}`)
 		resp, err := newTestOllama(t, srv, OllamaOptions{}).Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
@@ -268,7 +268,7 @@ func TestOllamaChat_PromptOverContextIsErrContextFull(t *testing.T) {
 		require.False(t, isRetryable(err), "the same prompt fails the same way")
 	})
 	t.Run("error line", func(t *testing.T) {
-		srv := newOllamaV2Server(t, []string{"tools"}, `{"error":"`+tooLong+`"}`)
+		srv := newOllamaServer(t, []string{"tools"}, `{"error":"`+tooLong+`"}`)
 		_, err := newTestOllama(t, srv, OllamaOptions{}).Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
 		require.ErrorIs(t, err, ErrContextFull)
 	})
@@ -292,8 +292,8 @@ func TestOllamaChat_PromptOverContextIsErrContextFull(t *testing.T) {
 
 // Two calls to the SAME tool in one turn are told apart by id on the wire.
 func TestOllamaChat_ParallelSameNameCallsKeepTheirIDs(t *testing.T) {
-	roundTrip := func(t *testing.T, line string, ids ...string) (resp *Response, sent []ollamaMsgV2) {
-		srv := newOllamaV2Server(t, []string{"tools"}, line,
+	roundTrip := func(t *testing.T, line string, ids ...string) (resp *Response, sent []ollamaMsg) {
+		srv := newOllamaServer(t, []string{"tools"}, line,
 			`{"message":{"role":"assistant","content":""},"done_reason":"stop","done":true}`)
 		c := newTestOllama(t, srv, OllamaOptions{})
 		n := 0
@@ -311,7 +311,7 @@ func TestOllamaChat_ParallelSameNameCallsKeepTheirIDs(t *testing.T) {
 		_, err = c.Stream(context.Background(), b.Snapshot(), StreamOptions{}, nil)
 		require.NoError(t, err)
 		var body struct {
-			Messages []ollamaMsgV2 `json:"messages"`
+			Messages []ollamaMsg `json:"messages"`
 		}
 		raw, _ := json.Marshal(srv.received()[1])
 		require.NoError(t, json.Unmarshal(raw, &body))
@@ -325,8 +325,8 @@ func TestOllamaChat_ParallelSameNameCallsKeepTheirIDs(t *testing.T) {
 		require.Len(t, msgs, 3)
 		require.Equal(t, "tu_a", msgs[0].ToolCalls[0].ID, "knomit's id is sent, not the server's call_aaa11111")
 		require.Equal(t, "tu_b", msgs[0].ToolCalls[1].ID)
-		require.Equal(t, ollamaMsgV2{Role: "tool", Content: "SECOND", ToolName: "knomit_query", ToolCallID: "tu_b"}, msgs[1])
-		require.Equal(t, ollamaMsgV2{Role: "tool", Content: "FIRST", ToolName: "knomit_query", ToolCallID: "tu_a"}, msgs[2])
+		require.Equal(t, ollamaMsg{Role: "tool", Content: "SECOND", ToolName: "knomit_query", ToolCallID: "tu_b"}, msgs[1])
+		require.Equal(t, ollamaMsg{Role: "tool", Content: "FIRST", ToolName: "knomit_query", ToolCallID: "tu_a"}, msgs[2])
 	})
 	t.Run("server sends no ids", func(t *testing.T) {
 		resp, msgs := roundTrip(t, `{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"knomit_query","arguments":{"text":"1"}}},{"function":{"name":"knomit_query","arguments":{"text":"2"}}}]},"done":false}`, "tu_a", "tu_b")
@@ -334,14 +334,14 @@ func TestOllamaChat_ParallelSameNameCallsKeepTheirIDs(t *testing.T) {
 		require.Len(t, msgs, 3)
 		require.Equal(t, "tu_a", msgs[0].ToolCalls[0].ID, "knomit's id is sent either way")
 		require.Equal(t, "tu_b", msgs[0].ToolCalls[1].ID)
-		require.Equal(t, ollamaMsgV2{Role: "tool", Content: "SECOND", ToolName: "knomit_query", ToolCallID: "tu_b"}, msgs[1])
-		require.Equal(t, ollamaMsgV2{Role: "tool", Content: "FIRST", ToolName: "knomit_query", ToolCallID: "tu_a"}, msgs[2])
+		require.Equal(t, ollamaMsg{Role: "tool", Content: "SECOND", ToolName: "knomit_query", ToolCallID: "tu_b"}, msgs[1])
+		require.Equal(t, ollamaMsg{Role: "tool", Content: "FIRST", ToolName: "knomit_query", ToolCallID: "tu_a"}, msgs[2])
 	})
 }
 
 func TestOllamaChat_StreamFailures(t *testing.T) {
 	t.Run("error line mid-stream", func(t *testing.T) {
-		srv := newOllamaV2Server(t, []string{"tools"},
+		srv := newOllamaServer(t, []string{"tools"},
 			`{"message":{"role":"assistant","content":"hi"},"done":false}`,
 			`{"error":"an error was encountered while running the model"}`)
 		c := newTestOllama(t, srv, OllamaOptions{})
@@ -349,13 +349,13 @@ func TestOllamaChat_StreamFailures(t *testing.T) {
 		require.ErrorContains(t, err, "an error was encountered while running the model")
 	})
 	t.Run("no done line", func(t *testing.T) {
-		srv := newOllamaV2Server(t, []string{"tools"}, `{"message":{"role":"assistant","content":"hi"},"done":false}`)
+		srv := newOllamaServer(t, []string{"tools"}, `{"message":{"role":"assistant","content":"hi"},"done":false}`)
 		c := newTestOllama(t, srv, OllamaOptions{})
 		_, err := c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
 		require.ErrorContains(t, err, "before the done line")
 	})
 	t.Run("garbage line", func(t *testing.T) {
-		srv := newOllamaV2Server(t, []string{"tools"}, `this is not json`)
+		srv := newOllamaServer(t, []string{"tools"}, `this is not json`)
 		c := newTestOllama(t, srv, OllamaOptions{})
 		_, err := c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
 		require.ErrorContains(t, err, "read stream")
@@ -373,13 +373,13 @@ func TestOllamaChat_StreamFailures(t *testing.T) {
 		require.NoError(t, err)
 		_, err = c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
 		require.ErrorContains(t, err, "ollama: HTTP 503: busy")
-		require.True(t, isRetryable(err), "the v1 classifier must see this as overload")
+		require.True(t, isRetryable(err), "the classifier must see this as overload")
 	})
 	t.Run("tool result with no call", func(t *testing.T) {
 		b := NewBuilder()
 		require.NoError(t, b.Add(Item{ID: "c1", Hook: HookConversation, Entry: &Entry{ID: "c1", Role: RoleUser, Blocks: []Block{
 			{Kind: BlockToolResult, ToolResult: &ToolResult{ToolUseID: "tu_9", Content: "orphan"}}}}}))
-		srv := newOllamaV2Server(t, []string{"tools"})
+		srv := newOllamaServer(t, []string{"tools"})
 		c := newTestOllama(t, srv, OllamaOptions{})
 		_, err := c.Stream(context.Background(), b.Snapshot(), StreamOptions{}, nil)
 		require.ErrorContains(t, err, `"tu_9" answers no tool call`)
@@ -421,7 +421,7 @@ func TestOllamaChat_ThinkingLinesAreProgress(t *testing.T) {
 
 func TestOllamaChat_UsageFromCachedCount(t *testing.T) {
 	run := func(counts string) Usage {
-		srv := newOllamaV2Server(t, []string{"tools"},
+		srv := newOllamaServer(t, []string{"tools"},
 			`{"message":{"role":"assistant","content":"ok"},"done_reason":"stop","done":true,`+counts+`,"eval_count":3}`)
 		resp, err := newTestOllama(t, srv, OllamaOptions{}).Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
 		require.NoError(t, err)
@@ -449,7 +449,7 @@ func TestOllamaChat_UsageFallbackEstimate(t *testing.T) {
 	require.Greater(t, est, 50, "the fixture must estimate more tokens than the evaluated count below")
 
 	run := func(evaluated string) Usage {
-		srv := newOllamaV2Server(t, []string{"tools"},
+		srv := newOllamaServer(t, []string{"tools"},
 			`{"message":{"role":"assistant","content":"ok"},"done_reason":"stop","done":true,"prompt_eval_count":`+evaluated+`,"eval_count":3}`)
 		resp, err := newTestOllama(t, srv, OllamaOptions{}).Stream(context.Background(), s, StreamOptions{}, nil)
 		require.NoError(t, err)
@@ -461,7 +461,7 @@ func TestOllamaChat_UsageFallbackEstimate(t *testing.T) {
 }
 
 func TestOllamaPrefixJSON_MatchesWire(t *testing.T) {
-	srv := newOllamaV2Server(t, []string{"tools"}, `{"message":{"role":"assistant","content":"ok"},"done_reason":"stop","done":true}`)
+	srv := newOllamaServer(t, []string{"tools"}, `{"message":{"role":"assistant","content":"ok"},"done_reason":"stop","done":true}`)
 	s := ollamaSnapshot(t, "x")
 	_, err := newTestOllama(t, srv, OllamaOptions{}).Stream(context.Background(), s, StreamOptions{}, nil)
 	require.NoError(t, err)
