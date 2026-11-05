@@ -180,7 +180,7 @@ func TestRegistry_OpenAnthropicUsesConfiguredProfileAndWindow(t *testing.T) {
 	})
 	m, err := r.Open(context.Background(), "anthropic", "a1")
 	require.NoError(t, err)
-	require.Equal(t, Caps{Tools: true, MaxBreakpoints: anthropicMaxBreakpoints, ContextWindow: 777000, MaxOutput: 31000}, m.Caps())
+	require.Equal(t, Caps{Tools: true, MaxBreakpoints: anthropicMaxBreakpoints, ContextWindow: 777000, MaxOutput: 31000, StablePrefix: true}, m.Caps())
 	m2, err := r.Open(context.Background(), "anthropic", "a2")
 	require.NoError(t, err)
 	require.Equal(t, 123000, m2.Caps().ContextWindow, "a model without its own window takes the provider's")

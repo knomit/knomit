@@ -360,5 +360,19 @@ func (r *Registry) Price(provider, model string) *PriceCard {
 	return pc
 }
 
+// Adaptive reports whether a chat on this provider and model runs the adaptive
+// tool path (ToolWindow): the provider's adapter must not require a stable
+// prefix (caps.StablePrefix false) and the provider's adaptive_tools must not
+// be "off" (empty means "auto"). An unknown provider or model is never
+// adaptive. caps are the opened model's own Caps, so the capability stays the
+// adapter's, not a list of provider kinds kept here.
+func (r *Registry) Adaptive(provider, model string, caps Caps) bool {
+	p, err := r.lookup(provider, model)
+	if err != nil {
+		return false
+	}
+	return p.AdaptiveTools != config.AdaptiveToolsOff && !caps.StablePrefix
+}
+
 // ErrUnknownModel is what lookup-style callers can test for; Open wraps it.
 var ErrUnknownModel = errors.New("llm: unknown provider or model")

@@ -136,7 +136,7 @@ func NewAnthropicChat(model string, o AnthropicOptions) *AnthropicChat {
 func (a *AnthropicChat) Provider() string { return anthropicProvider }
 func (a *AnthropicChat) Model() string    { return a.model }
 func (a *AnthropicChat) Caps() Caps {
-	return Caps{Tools: true, MaxBreakpoints: anthropicMaxBreakpoints, ContextWindow: a.o.ContextWindow, MaxOutput: a.o.Profile.MaxOutput}
+	return Caps{Tools: true, MaxBreakpoints: anthropicMaxBreakpoints, ContextWindow: a.o.ContextWindow, MaxOutput: a.o.Profile.MaxOutput, StablePrefix: true}
 }
 
 var (

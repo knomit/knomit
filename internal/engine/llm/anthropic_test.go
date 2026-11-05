@@ -343,8 +343,8 @@ func TestAnthropicChat_HTTPErrorIsReturned(t *testing.T) {
 
 func TestAnthropicChat_Caps(t *testing.T) {
 	c := NewAnthropicChat("claude-test-x", AnthropicOptions{ContextWindow: 123456, Profile: ModelProfile{MaxOutput: 777}})
-	require.Equal(t, Caps{Tools: true, MaxBreakpoints: 4, ContextWindow: 123456, MaxOutput: 777}, c.Caps())
-	require.Equal(t, Caps{Tools: true, MaxBreakpoints: 4, ContextWindow: 200000, MaxOutput: 64000}, NewAnthropicChat("m", AnthropicOptions{}).Caps())
+	require.Equal(t, Caps{Tools: true, MaxBreakpoints: 4, ContextWindow: 123456, MaxOutput: 777, StablePrefix: true}, c.Caps())
+	require.Equal(t, Caps{Tools: true, MaxBreakpoints: 4, ContextWindow: 200000, MaxOutput: 64000, StablePrefix: true}, NewAnthropicChat("m", AnthropicOptions{}).Caps())
 	require.Equal(t, "anthropic", c.Provider())
 	require.Equal(t, "claude-test-x", c.Model())
 }

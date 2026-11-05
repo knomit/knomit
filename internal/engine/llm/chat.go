@@ -34,6 +34,14 @@ type Caps struct {
 	MaxBreakpoints int  // cache breakpoints the provider accepts per request (0: none)
 	ContextWindow  int  // input tokens
 	MaxOutput      int  // output tokens requested per response
+	// StablePrefix says that changing the tool list, or editing anything earlier
+	// in the history, between requests is costly or invalid for this provider:
+	// either its prompt cache is keyed on the byte-stable prefix, or (Claude 5.1+
+	// thinking blocks) its signatures bind system, tools and earlier messages.
+	// Anthropic sets it. A provider that sets it keeps every tool and the whole
+	// history in every request; one that does not (Ollama: no cache to protect)
+	// is adaptive and may send a loaded subset of the tools (ToolWindow).
+	StablePrefix bool
 }
 
 // StreamOptions are per-request knobs that are not part of the context.
