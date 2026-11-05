@@ -9,6 +9,11 @@ import (
 	"sync/atomic"
 )
 
+// ErrWindowWithStablePrefix is returned by RunTurn when Loop.Window is set for a
+// model whose Caps().StablePrefix is true: the window changes the tools block
+// between requests, which would break that provider's prompt cache.
+var ErrWindowWithStablePrefix = errors.New("llm: Loop.Window is set for a model with a stable prefix (Caps.StablePrefix); the window must be nil for it")
+
 // This file is the agent loop: send the context, stream the reply, run the
 // tool calls the model asked for, append the results, and repeat until the
 // model answers. It reaches tools only through ToolHost and decisions only
@@ -304,6 +309,9 @@ func (l *Loop) emit(ev LoopEvent) {
 // dropped: its results stay paired with their calls and are flushed.
 func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 	res := &TurnResult{}
+	if l.Window != nil && l.Model.Caps().StablePrefix {
+		return res, ErrWindowWithStablePrefix
+	}
 	user := Entry{ID: l.newID(), Role: RoleUser, Blocks: []Block{{Kind: BlockText, Text: text}}}
 	base := l.baseline()
 	if l.Window != nil {

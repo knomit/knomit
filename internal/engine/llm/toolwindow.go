@@ -379,6 +379,9 @@ func (w *ToolWindow) Run(call ToolUse, snap Snapshot, free func() int, pinned Pi
 // run (its arguments were written without the schema), loaded for the next
 // request.
 func (w *ToolWindow) runStale(name string, avail *int, pinned Pinned, tick int) ToolOutcome {
+	if _, known := w.sizes[name]; !w.inCat[name] || !known {
+		return ToolOutcome{Content: w.unknownLine(name), IsError: true}
+	}
 	if w.loaded[name] { // loaded earlier in this batch
 		return ToolOutcome{Content: fmt.Sprintf(NotLoadedCallResult, name), IsError: true}
 	}

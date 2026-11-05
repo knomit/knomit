@@ -67,6 +67,10 @@ const (
 // whose adapter needs a stable prefix. It takes the provider name.
 const AdaptiveToolsOnRefused = `adaptive_tools = "on" is not allowed for provider %s: its requests must keep a stable prefix.` // approved copy (design C10)
 
+// AdaptiveToolsInvalid is the refusal for any other adaptive_tools value. It
+// takes the provider's config path and the value.
+const AdaptiveToolsInvalid = `%s.adaptive_tools %q: must be "auto" or "off"` // DRAFT: needs user approval
+
 // validateAdaptiveTools checks adaptive_tools, the part that needs no model.
 func (p LLMProviderConfig) validateAdaptiveTools(name, at string) error {
 	switch p.AdaptiveTools {
@@ -77,7 +81,7 @@ func (p LLMProviderConfig) validateAdaptiveTools(name, at string) error {
 			return fmt.Errorf("%s: "+AdaptiveToolsOnRefused, at, name)
 		}
 	}
-	return fmt.Errorf("%s.adaptive_tools %q: must be %q or %q", at, p.AdaptiveTools, AdaptiveToolsAuto, AdaptiveToolsOff)
+	return fmt.Errorf(AdaptiveToolsInvalid, at, p.AdaptiveTools)
 }
 
 // LLMModelConfig is [llm.providers.<name>.model.<id>].

@@ -523,3 +523,34 @@ func TestLoop_DroppedTurnKeepsLoadedSet(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{LoadToolsName, "knomit_query"}, toolsOf(m.snaps[1]))
 }
+
+// 79f352d3: a dropped turn restores the whole baseline, including lastBytes.
+// Turn 1 answers (reports 510 tokens). Turn 2's loader response sets
+// lastCount/lastBytes to a larger view, then the turn is dropped. The next
+// estimate must start from turn 1's bytes: 510 plus the loaded tool's 400
+// bytes (100 tokens) at bytes/4 = 610. With lastBytes left at the dropped
+// turn's value the delta loses the assistant entry's bytes and falls short.
+func TestLoop_DroppedTurnRestoresLastBytes(t *testing.T) {
+	m := &fakeModel{steps: []fakeStep{
+		{resp: textResp("ok", Usage{Input: 500, Output: 10})},
+		{resp: loadResp("tu_l", Usage{Input: 700, Output: 20}, "knomit_query")},
+	}}
+	tool := winTool("knomit_query", 100)
+	r := newRig(t, m, tool, winTool("knomit_learn", 100))
+	_, err := r.l.RunTurn(context.Background(), "first")
+	require.NoError(t, err)
+	require.Equal(t, int64(510), r.l.lastTokens)
+	afterOne := r.l.lastBytes
+
+	ids := []string{"e_user", "e_dup", "e_dup"}
+	n := 0
+	r.l.NewID = func() string { id := ids[n%len(ids)]; n++; return id }
+	_, err = r.l.RunTurn(context.Background(), "load it")
+	require.ErrorIs(t, err, ErrDuplicateItem)
+	require.Equal(t, []string{"knomit_query"}, r.w.Loaded())
+	require.Equal(t, int64(510), r.l.lastTokens, "the dropped response's tokens are not the baseline")
+	require.Equal(t, afterOne, r.l.lastBytes, "bytes are restored with the tokens")
+
+	require.Equal(t, 400, itemBytes(Item{Tool: tool}))
+	require.Equal(t, 510+400/4, r.l.estimate(r.l.view()))
+}
