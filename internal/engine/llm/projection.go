@@ -156,3 +156,21 @@ func (w *ToolWindow) stubItem(it Item, calls map[string]ToolUse, capBytes int) I
 func (w *ToolWindow) replayableCall(name string, args json.RawMessage) bool {
 	return w.replayable != nil && w.replayable(name, args)
 }
+
+// projectionOf says what the projection did to one request: stored is the
+// Builder's whole snapshot, sent the view the request carried. Only ended
+// turns (hook 6) are stubbed, so only they are counted.
+func projectionOf(stored, sent Snapshot) *ProjectionLog {
+	p := &ProjectionLog{SavedTokensEst: max(viewBytes(stored)-viewBytes(sent), 0) / 4}
+	for _, it := range sent.Hooks[HookConversation] {
+		if it.Entry == nil {
+			continue
+		}
+		for _, b := range it.Entry.Blocks {
+			if b.ToolResult != nil && b.ToolResult.Elided {
+				p.StubbedResults++
+			}
+		}
+	}
+	return p
+}

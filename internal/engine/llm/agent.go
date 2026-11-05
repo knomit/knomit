@@ -218,6 +218,18 @@ type RequestLog struct {
 	Provider, Model string
 	RequestRecord
 	Usage Usage
+	// Projection is set for an adaptive chat only: what the projection did to
+	// this request.
+	Projection *ProjectionLog
+}
+
+// ProjectionLog is what the projection of an adaptive chat did to one request:
+// the tool results of ended turns it sent as stubs, and the tokens (bytes/4)
+// the sent view is smaller than the stored one by, tool definitions and stubs
+// together and net of the loader's own definition.
+type ProjectionLog struct {
+	StubbedResults int
+	SavedTokensEst int
 }
 
 // ToolCallLog is one tool call and its outcome.
@@ -684,7 +696,11 @@ func (l *Loop) account(res *TurnResult, snap Snapshot, resp *Response) {
 		ev.Cost = &c
 	}
 	if l.Log != nil {
-		l.Log.Request(RequestLog{Provider: l.Model.Provider(), Model: l.Model.Model(), RequestRecord: snap.Record(), Usage: u})
+		rl := RequestLog{Provider: l.Model.Provider(), Model: l.Model.Model(), RequestRecord: snap.Record(), Usage: u}
+		if l.Window != nil {
+			rl.Projection = projectionOf(l.Builder.Snapshot(), snap)
+		}
+		l.Log.Request(rl)
 	}
 	l.emit(ev)
 
@@ -919,6 +935,11 @@ func (l *Loop) emitToolChanges(res *TurnResult) {
 // the window, the reply reserve and the room left after it.
 const OpeningTooBigMessage = "The opening of this chat (the tool definitions, the repo instructions and your message) needs about %d tokens, but the context window of %s is %d and %d of it is reserved for the reply, which leaves %d. Use a model with a larger window%s."
 
+// OpeningTooBigAdaptiveMessage is OpeningTooBigMessage for an adaptive chat,
+// whose opening holds the tool catalogue and the loader instead of every tool
+// definition (approved: design C7). Same arguments.
+const OpeningTooBigAdaptiveMessage = "The opening of this chat (the tool catalogue, the repo instructions and your message) needs about %d tokens, but the context window of %s is %d and %d of it is reserved for the reply, which leaves %d. Use a model with a larger window%s."
+
 // OllamaRaiseNumCtxHint is appended for an Ollama provider.
 const OllamaRaiseNumCtxHint = ", or raise num_ctx for this provider in knomit.toml"
 
@@ -933,16 +954,33 @@ func isOpening(snap Snapshot) bool {
 // to change; it never suggests a number, because the toolset's size varies
 // with the repos and the permissions.
 func (l *Loop) openingTooBig(est, reserve, window int) error {
+	return OpeningTooBigError(l.Window != nil, l.Model.Provider(), l.Model.Model(), est, reserve, window)
+}
+
+// OpeningTooBigError is the refusal of an opening of est tokens that cannot fit
+// window less reserve. adaptive selects the sentence that names the catalogue
+// instead of the tool definitions. The chat uses it too, when the catalogue
+// alone cannot fit at open.
+func OpeningTooBigError(adaptive bool, provider, model string, est, reserve, window int) error {
 	hint := ""
-	if l.Model.Provider() == "ollama" {
+	if provider == "ollama" {
 		hint = OllamaRaiseNumCtxHint
+	}
+	format := OpeningTooBigMessage
+	if adaptive {
+		format = OpeningTooBigAdaptiveMessage
 	}
 	left := max(window-reserve, 0)
 	return &turnError{
-		msg: fmt.Sprintf(OpeningTooBigMessage, est, l.Model.Model(), window, reserve, left, hint),
+		msg: fmt.Sprintf(format, est, model, window, reserve, left, hint),
 		err: ErrContextFull,
 	}
 }
+
+// ReplyReserve is the tokens the loop keeps free for the reply of a model with
+// these capabilities (the loop's own rule, for a caller that sizes something
+// to the usable room).
+func ReplyReserve(c Caps) int { return replyReserve(c) }
 
 // OpeningRefusedByServerMessage is shown when the server refused an
 // opening that the local estimate says fits the window the model reports: the

@@ -52,6 +52,11 @@ const (
 	NotInCatalogueNoMatchResult = "Not in the catalogue: %s." // name
 )
 
+// ReservedToolNameMessage is the error (user-visible, approved: design C10)
+// for a server that offers a tool named like the loader. The argument is the
+// loader's name.
+const ReservedToolNameMessage = "The server already offers a tool named %s, which the chat reserves."
+
 // Reasons a LoopToolsChanged event carries.
 const (
 	ToolsReasonPreload   = "preload"    // loaded by the ranker's guess before the turn's first request
@@ -149,7 +154,7 @@ func NewToolWindow(spec ToolWindowSpec) (*ToolWindow, error) {
 	}
 	for _, n := range spec.Names {
 		if n == LoadToolsName {
-			return nil, fmt.Errorf("llm: the server already offers a tool named %s, which the chat reserves", LoadToolsName)
+			return nil, fmt.Errorf(ReservedToolNameMessage, LoadToolsName)
 		}
 		if !w.inCat[n] {
 			w.inCat[n] = true
