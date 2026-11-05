@@ -530,38 +530,118 @@ func TestOntologyReload_CloseWaitsForAFleetConflictRetire(t *testing.T) {
 	require.False(t, m.startFleetConflictRetire(g.ri, ferr), "no retire starts once Close has begun")
 }
 
-// A retire whose unmount cannot drain (here: the driver is stuck inside a
-// stage Enter that ignores its ctx, as a hung fetch would hold a round)
-// gives up after the machine's unmountDrainBound, exactly like Close's own
-// Unmounts, so Close — which waits for the retire — returns within that cap.
-// SABOTAGE: unmount with context.Background() (no bound) → Close never
-// returns → red.
+// stallSyncExit holds g's machine driver inside the unmount, just before the
+// Sync stage's Exit (the first stage an unmount exits), until release is
+// closed; arrived closes when it gets there. honourCtx false makes the stall
+// ignore the life's ctx (already cancelled at that point), so the unmount
+// cannot finish until release: a drain that hangs. drainBound > 0 sets the
+// machine's unmountDrainBound. Set while the driver is idle (index settled);
+// the Send that triggers the unmount orders these writes before its reads.
+func stallSyncExit(t *testing.T, g *ghInstance, drainBound time.Duration) (arrived, release chan struct{}) {
+	t.Helper()
+	waitIndexSettled(t, g.ri)
+	arrived, release = make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	if drainBound > 0 {
+		g.ri.machine.opts.UnmountDrainBound = drainBound
+	}
+	g.ri.machine.opts.Hook = func(stage StageID, point string, _ context.Context) {
+		if stage == StageSync && point == "exit" {
+			once.Do(func() { close(arrived) })
+			<-release
+		}
+	}
+	return arrived, release
+}
+
+func waitClosed(t *testing.T, ch chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+// The retired repo is listed unavailable (and leaves the live maps) only
+// AFTER its unmount has completed — its store closed. Otherwise an operator
+// acting on the listing (a remount, a restore, a purge) races the teardown:
+// the old store's Close deletes its session DB files (Service.Close), and a
+// fresh store.Open of the same database in that window fails with "init
+// session schema: disk I/O error: no such file or directory" (CI run
+// 42032962603), or opens and then loses its session DB. Deterministic: the
+// unmount is held at the Sync stage's Exit, and while it is held the repo is
+// still mounted and NOT listed. SABOTAGE (no -race needed): publish before
+// the unmount → it is listed while the unmount is held → red.
+func TestOntologyReload_RetireListsUnavailableOnlyAfterTheStoreIsClosed(t *testing.T) {
+	t.Parallel()
+	_, g := newReloadFixture(t)
+	m, name := g.ri.env.m, g.ri.Name()
+	arrived, release := stallSyncExit(t, g, 0)
+	ferr := markFleetConflict(t, g)
+	require.True(t, m.startFleetConflictRetire(g.ri, ferr))
+	waitClosed(t, arrived, "the unmount to reach the Sync stage's Exit")
+
+	// Held mid-unmount: the store is still open.
+	time.Sleep(50 * time.Millisecond)
+	require.Empty(t, unavailableCause(m, name), "listed unavailable while its store is still open")
+	require.Same(t, g.ri, m.Get(name), "the repo left the live maps while its store is still open")
+
+	close(release)
+	require.Eventually(t, func() bool { return unavailableCause(m, name) == CauseFleetConflict }, 30*time.Second, 5*time.Millisecond)
+	require.Equal(t, termClosed, g.ri.snap().terminal, "listed unavailable only once its machine is closed")
+	require.Nil(t, m.Get(name))
+}
+
+// A RENAME during the unmount (RenameRepo only moves map and registry
+// entries, so it succeeds while the unmount runs) does not strand the repo:
+// the publish re-checks the instance by UID and lists it unavailable under
+// its NEW name. SABOTAGE: re-check by the name read before the unmount → the
+// publish is skipped and the repo stays live under the new name with a
+// closed machine → red.
+func TestOntologyReload_RetireAfterARenameDuringTheUnmountPublishesTheNewName(t *testing.T) {
+	t.Parallel()
+	_, g := newReloadFixture(t)
+	m, oldName := g.ri.env.m, g.ri.Name()
+	arrived, release := stallSyncExit(t, g, 0)
+	ferr := markFleetConflict(t, g)
+	require.True(t, m.startFleetConflictRetire(g.ri, ferr))
+	waitClosed(t, arrived, "the unmount to reach the Sync stage's Exit")
+
+	require.NoError(t, m.RenameRepo(oldName, "renamed"), "a rename succeeds while the unmount runs")
+	close(release)
+	require.Eventually(t, func() bool { return unavailableCause(m, "renamed") == CauseFleetConflict }, 30*time.Second, 5*time.Millisecond,
+		"listed unavailable under its new name")
+	require.Nil(t, m.Get("renamed"))
+	require.Nil(t, m.Get(oldName))
+	require.Empty(t, unavailableCause(m, oldName))
+}
+
+// A DRAIN THAT RUNS OUT publishes nothing: the unmount hangs (the held Exit
+// ignores its ctx) past the machine's unmountDrainBound, so the store may
+// still be open; the repo stays in the live maps, unwritable, and is NOT
+// listed unavailable. Close — which waits for the retire — still returns
+// within the bounds (the retire's and its own bounded Unmount of the same
+// repo, which is still in m.repos). SABOTAGE: publish after a timed-out
+// Send → it is listed while the store may be open → red; unbounded retire
+// unmount → Close never returns → red.
 func TestOntologyReload_RetireUnmountIsBoundedSoCloseReturns(t *testing.T) {
 	t.Parallel()
 	_, g := newReloadFixture(t)
-	m := g.ri.env.m
-	arrived, release := make(chan struct{}), make(chan struct{})
+	m, name := g.ri.env.m, g.ri.Name()
+	arrived, release := stallSyncExit(t, g, 300*time.Millisecond)
 	t.Cleanup(func() { close(release) })
-	gen := g.ri.snap().gens[StageServe]
-	require.NotZero(t, gen)
-	// Set before the post below hands control to the driver (the mailbox's
-	// lock orders the write before the driver's read).
-	g.ri.machine.opts.UnmountDrainBound = 300 * time.Millisecond
-	g.ri.machine.opts.Hook = func(stage StageID, point string, _ context.Context) {
-		if stage == StageServe && point == "enter" {
-			close(arrived)
-			<-release // ignores ctx on purpose: a drain that cannot finish
-		}
-	}
-	g.ri.machine.post(crashed{stage: StageServe, gen: gen})
-	select {
-	case <-arrived:
-	case <-time.After(30 * time.Second):
-		t.Fatal("Serve was never re-entered")
-	}
-
 	ferr := markFleetConflict(t, g)
 	require.True(t, m.startFleetConflictRetire(g.ri, ferr))
+	waitClosed(t, arrived, "the unmount to reach the Sync stage's Exit")
+
+	retired := make(chan struct{})
+	go func() { m.retireWg.Wait(); close(retired) }()
+	waitClosed(t, retired, "the retire to give up after its drain bound")
+	require.Empty(t, unavailableCause(m, name), "a timed-out drain is NOT listed unavailable: its store may still be open")
+	require.Same(t, g.ri, m.Get(name), "it stays in the live maps")
+	require.False(t, g.ri.WritableBranch(g.branch), "and unwritable")
+
 	closed := make(chan struct{})
 	start := time.Now()
 	go func() {
@@ -571,35 +651,10 @@ func TestOntologyReload_RetireUnmountIsBoundedSoCloseReturns(t *testing.T) {
 	select {
 	case <-closed:
 	case <-time.After(10 * time.Second):
-		t.Fatal("Close did not return: the retire's unmount is not bounded")
+		t.Fatal("Close did not return: an unmount is not bounded")
 	}
 	require.Less(t, time.Since(start), 5*time.Second)
-	require.Equal(t, CauseFleetConflict, unavailableCause(m, g.ri.Name()))
-}
-
-// The retired repo is listed unavailable (and leaves the live maps) only
-// AFTER its unmount has closed its store. Otherwise an operator acting on
-// the listing — a remount, a restore, a purge — races the teardown: the old
-// store's Close deletes its session DB files (Service.Close), and a fresh
-// store.Open of the same database in that window fails with "init session
-// schema: disk I/O error: no such file or directory" (CI run 42032962603),
-// or, worse, opens and then loses its session DB. SABOTAGE: publish the
-// unavailable entry before the unmount → the machine is seen still open
-// when the entry appears → red.
-func TestOntologyReload_RetireListsUnavailableOnlyAfterTheStoreIsClosed(t *testing.T) {
-	t.Parallel()
-	_, g := newReloadFixture(t)
-	m, name := g.ri.env.m, g.ri.Name()
-	ferr := markFleetConflict(t, g)
-	require.True(t, m.startFleetConflictRetire(g.ri, ferr))
-	deadline := time.Now().Add(30 * time.Second)
-	for unavailableCause(m, name) == "" {
-		require.NotNil(t, m.Get(name), "the repo left the live maps before it was listed unavailable")
-		require.True(t, time.Now().Before(deadline), "never listed unavailable")
-		time.Sleep(time.Millisecond)
-	}
-	require.Equal(t, termClosed, g.ri.snap().terminal, "listed unavailable while its machine (and store) was still open")
-	require.Nil(t, m.Get(name))
+	require.Empty(t, unavailableCause(m, name))
 }
 
 // A later reload that applied a FIXED (usable, non-fleet) tip before the

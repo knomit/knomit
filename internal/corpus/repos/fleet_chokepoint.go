@@ -156,31 +156,36 @@ func refuseReservedOntology(spec CreateSpec) error {
 // starts it through startFleetConflictRetire): the unmount drains the Sync
 // stage, and the reload may be running inside that stage.
 //
-// ORDER: UNMOUNT FIRST, PUBLISH SECOND. The repo is listed unavailable only
-// once its machine is closed and its store with it. Listing it first (as
-// this function did at bf1fe514) opened a window in which the repo looked
-// gone while its store was still open: an operator acting on the listing —
-// a remount, a restore, a purge — then raced the teardown. The old store's
-// Close deletes its session DB files (Service.Close), so a fresh store.Open
-// of the same database in that window failed with "init session schema:
-// disk I/O error: no such file or directory" (CI run 42032962603), or
-// opened and then lost its session DB. Until the unmount completes the repo
-// stays in the live maps, unwritable (OntologyError) and winding down. The
-// two map changes then happen under one lock, so GET /repos never shows it
-// both absent and not unavailable.
+// ORDER: UNMOUNT FIRST, PUBLISH ONLY ON A CLOSED STORE. The repo is listed
+// unavailable only once its unmount has COMPLETED — Send returned nil, which
+// means every stage exited and the store is closed. Listing it before that
+// (as this function did at bf1fe514) opened a window in which the repo
+// looked gone while its store was still open: an operator acting on the
+// listing — a remount, a restore, a purge — raced the teardown. The old
+// store's Close deletes its session DB files (Service.Close), so a fresh
+// store.Open of the same database in that window failed with "init session
+// schema: disk I/O error: no such file or directory" (CI run 42032962603),
+// or opened and then lost its session DB. Until the unmount completes the
+// repo stays in the live maps, unwritable (OntologyError) and winding down.
 //
-// A repo the maps no longer hold as ri (archived, removed, replaced
-// meanwhile) is left alone, before the unmount and again after it.
+// A DRAIN THAT RUNS OUT (the Send is bounded by unmountDrainBound, like
+// Close's own Unmounts, because Close waits for this goroutine) publishes
+// NOTHING: the store may still be open, so the repo stays in the live maps,
+// unwritable, its machine's root context cancelled, and the timeout is
+// logged at Error. Close's own bounded Unmount still covers it (it is in
+// m.repos), and the next mount refuses it with fleet_conflict as always.
+//
+// THE PUBLISH re-checks the instance by UID, not by name: RenameRepo only
+// moves map and registry entries, so it can succeed while the unmount runs,
+// and a name-keyed re-check would then skip the publish and strand the
+// repo live under its new name with a closed machine. Archive and Remove
+// drop the instance from BOTH maps, so they are still skipped. The entry is
+// deleted and published under the instance's CURRENT name, in one critical
+// section, so GET /repos never shows it both absent and not unavailable.
 func (m *Manager) retireFleetConflict(ri *RepoInstance, err error) {
-	rec := control.RepoRecord{UID: ri.uid, Name: ri.Name()}
-	if reg := m.Repos(); reg != nil {
-		if got, ok, gerr := reg.Get(ri.uid); gerr == nil && ok {
-			rec = got
-		}
-	}
 	reason, cause, detail := unavailableReason(&StageError{Stage: StageIdentify, Err: err})
 	m.mu.Lock()
-	if m.repos[rec.Name] != ri {
+	if m.byUID[ri.uid] != ri {
 		m.mu.Unlock()
 		return
 	}
@@ -192,32 +197,37 @@ func (m *Manager) retireFleetConflict(ri *RepoInstance, err error) {
 	if !errors.Is(ri.OntologyError(), ErrFleetOntologyReserved) {
 		m.mu.Unlock()
 		ri.fleetConflictRetired.Store(false)
-		log.Info().Str("repo", rec.Name).Msg("fleet conflict cleared by a later reload before the retire ran; the repo stays mounted")
+		log.Info().Str("repo", ri.Name()).Msg("fleet conflict cleared by a later reload before the retire ran; the repo stays mounted")
 		return
 	}
 	m.mu.Unlock()
-	// Bounded like Close's own Unmounts (unmountDrainBound): Close waits for
-	// this goroutine (retireWg), so an unbounded drain — a Sync round parked
-	// on a slow fetch, a stage that will not let go — would hold Close past
-	// the cap it promises for every other repo. A drain that runs out is
-	// logged, as Close logs its own; the machine's root context is already
-	// cancelled by the Send, so it still winds down (and is then listed
-	// unavailable anyway: it serves nothing).
 	if ri.machine != nil {
 		bound := ri.machine.opts.unmountDrainBound()
 		ctx, cancel := context.WithTimeout(context.Background(), bound)
 		defer cancel()
 		if _, uerr := ri.machine.Send(ctx, Unmount("fleet conflict")); uerr != nil {
-			log.Error().Err(uerr).Str("repo", rec.Name).Dur("bound", bound).
-				Msg("fleet conflict: repo did not finish unmounting within the drain bound; giving up waiting")
+			log.Error().Err(uerr).Str("repo", ri.Name()).Str("uid", ri.uid).Dur("bound", bound).
+				Msg("fleet conflict: the repo did not finish unmounting within the drain bound; its store may still be open, so it is NOT listed unavailable: it stays mounted, unwritable, winding down, and its next mount refuses it (fleet_conflict)")
+			return
+		}
+	}
+	// The registry row, read now: it carries the name a rename gave it
+	// during the unmount. Falls back to what the instance knows.
+	rec := control.RepoRecord{UID: ri.uid, Name: ri.Name()}
+	if reg := m.Repos(); reg != nil {
+		if got, ok, gerr := reg.Get(ri.uid); gerr == nil && ok {
+			rec = got
 		}
 	}
 	m.mu.Lock()
-	if m.repos[rec.Name] != ri {
+	if m.byUID[ri.uid] != ri {
 		m.mu.Unlock()
 		return
 	}
-	delete(m.repos, rec.Name)
+	rec.Name = ri.Name()
+	if m.repos[rec.Name] == ri {
+		delete(m.repos, rec.Name)
+	}
 	delete(m.byUID, ri.uid)
 	m.unavailable[ri.uid] = Unavailable{Record: rec, Reason: reason, Detail: m.redactHome(detail), Cause: cause}
 	m.mu.Unlock()
