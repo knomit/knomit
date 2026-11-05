@@ -100,7 +100,8 @@ type OllamaChat struct {
 	how           string // how the window was resolved: NumCtxHow*; "" when unresolved
 
 	spillOnce sync.Once
-	spill     atomic.Bool // /api/ps showed layers on the CPU after the first request
+	spill     atomic.Bool   // /api/ps showed layers on the CPU after the first request
+	spillDone chan struct{} // closed when that read has finished; nil outside tests
 }
 
 var _ ChatModel = (*OllamaChat)(nil)

@@ -252,9 +252,23 @@ func kvBytesPerToken(info map[string]any, arch string) (int, bool) {
 // (so it never loads, reloads or warms anything), and records whether the
 // model is partly on the CPU at this context size. It only reports; a
 // failure to read is ignored.
+//
+// The read runs in a goroutine on a context detached from the request (it
+// keeps the request's values, not its cancellation) with its own timeout, so
+// Stream never waits on it and a second Stream never blocks behind it.
 func (c *OllamaChat) checkSpillOnce(ctx context.Context) {
-	c.spillOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	detached := context.WithoutCancel(ctx)
+	c.spillOnce.Do(func() { go c.readSpill(detached) })
+}
+
+// readSpill is the /api/ps read checkSpillOnce starts. spillDone, when set (a
+// test seam), is closed when the read has finished.
+func (c *OllamaChat) readSpill(ctx context.Context) {
+	if c.spillDone != nil {
+		defer close(c.spillDone)
+	}
+	{
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.o.Host+"/api/ps", nil)
 		if err != nil {
@@ -285,5 +299,5 @@ func (c *OllamaChat) checkSpillOnce(ctx context.Context) {
 				return
 			}
 		}
-	})
+	}
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -28,9 +29,13 @@ type ctxFake struct {
 	// psBeforeChat counts /api/ps requests that arrived before any /api/chat.
 	psBeforeChat int
 	generates    int
-	psSize       int64
-	psVRAM       int64
-	chatBodies   []map[string]json.RawMessage
+	// psGate, when set, blocks every /api/ps until it is closed; psReached
+	// receives once a /api/ps request has arrived.
+	psGate     chan struct{}
+	psReached  chan struct{}
+	psSize     int64
+	psVRAM     int64
+	chatBodies []map[string]json.RawMessage
 }
 
 // hybridInfo is model_info for a hybrid model: a full-attention layer every
@@ -82,6 +87,16 @@ func newCtxFake(t *testing.T, info map[string]any, weights int64) *ctxFake {
 		case "/api/show":
 			_ = json.NewEncoder(w).Encode(map[string]any{"capabilities": []string{"tools"}, "model_info": info})
 		case "/api/ps":
+			if f.psGate != nil {
+				select {
+				case f.psReached <- struct{}{}:
+				default:
+				}
+				select {
+				case <-f.psGate:
+				case <-r.Context().Done():
+				}
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"models": []map[string]any{{"name": "m", "model": "m", "size": f.psSize, "size_vram": f.psVRAM}}})
 		case "/api/chat":
 			_, _ = io.WriteString(w, `{"message":{"role":"assistant","content":"ok"},"done_reason":"stop","done":true}`+"\n")
@@ -118,7 +133,18 @@ func openCtx(t *testing.T, host string, o OllamaOptions) *OllamaChat {
 	o.Host = host
 	c, err := NewOllamaChat(context.Background(), "m", o)
 	require.NoError(t, err)
+	c.spillDone = make(chan struct{})
 	return c
+}
+
+// waitSpill waits for the background /api/ps read to finish.
+func waitSpill(t *testing.T, c *OllamaChat) {
+	t.Helper()
+	select {
+	case <-c.spillDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the /api/ps read never finished")
+	}
 }
 
 func TestNumCtx_ConfigWinsAndIsCappedAtTrained(t *testing.T) {
@@ -342,6 +368,7 @@ func TestNumCtx_SpillIsReported(t *testing.T) {
 			require.False(t, spill)
 			_, err := c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
 			require.NoError(t, err)
+			waitSpill(t, c)
 			_, _, spill = c.ContextInfo()
 			require.Equal(t, tc.want, spill)
 			require.Equal(t, 1, f.count("/api/ps"))
@@ -356,6 +383,7 @@ func TestNumCtx_SpillCheckedOnceAfterFirstRequest(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		_, err := c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
 		require.NoError(t, err)
+		waitSpill(t, c)
 		require.Equal(t, 1, f.count("/api/ps"), "exactly one /api/ps after request %d", i+1)
 	}
 	require.Zero(t, f.psBeforeChat)
@@ -370,7 +398,81 @@ func TestNumCtx_SpillCheckSkippedWhenTheFirstRequestFails(t *testing.T) {
 	cancel()
 	_, err := c.Stream(ctx, ollamaSnapshot(t, "x"), StreamOptions{}, nil)
 	require.Error(t, err)
+	select {
+	case <-c.spillDone:
+		t.Fatal("a failed first request started the /api/ps read")
+	case <-time.After(150 * time.Millisecond):
+	}
 	require.Zero(t, f.count("/api/ps"))
+}
+
+// Stream must never wait on the /api/ps read: with /api/ps blocked on a
+// channel, the first Stream returns, and a second Stream on the same adapter
+// returns too (it does not queue behind the Once). Run under -race.
+func TestNumCtx_StreamDoesNotWaitForPs(t *testing.T) {
+	release := make(chan struct{})
+	reached := make(chan struct{}, 1)
+	f := newCtxFake(t, hybridInfo(262144), 1*gib)
+	f.psGate, f.psReached = release, reached
+	c := openCtx(t, f.URL, OllamaOptions{NumCtx: 8192})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
+		if err == nil {
+			_, err = c.Stream(context.Background(), ollamaSnapshot(t, "y"), StreamOptions{}, nil)
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("Stream waited for the stalled /api/ps")
+	}
+	select {
+	case <-reached: // the read really is in flight, blocked
+	case <-time.After(2 * time.Second):
+		t.Fatal("the /api/ps read was never started")
+	}
+	select {
+	case <-c.spillDone:
+		t.Fatal("the read finished although /api/ps is blocked")
+	default:
+	}
+	close(release)
+	waitSpill(t, c)
+	require.Equal(t, 2, f.count("/api/chat"))
+	require.Equal(t, 1, f.count("/api/ps"))
+}
+
+// A window that rounds below one granule (1024 tokens) is refused with the
+// approved reason, not shrunk to a uselessly small number.
+func TestNumCtx_UnderOneGranuleIsUnavailable(t *testing.T) {
+	f := newCtxFake(t, hybridInfo(262144), 1*gib)
+	// 100 KiB / 4 / 32768 bytes per token = 0 tokens.
+	c := openCtx(t, f.URL, OllamaOptions{Memory: memory(100 * 1024)})
+	require.Equal(t, OllamaNumCtxUnavailableReason, c.UnusableReason())
+	require.True(t, c.ContextUnresolved())
+	require.Equal(t, 0, c.Caps().ContextWindow)
+
+	// 5 MiB / 4 / 32768 = 40 tokens: still under one granule.
+	c = openCtx(t, f.URL, OllamaOptions{Memory: memory(5 << 20)})
+	require.True(t, c.ContextUnresolved())
+
+	// The guard is always a multiple of 1024, so a window strictly between 0 and
+	// 1024 can only come from a trained length that small: also refused.
+	small := newCtxFake(t, hybridInfo(500), 1*gib)
+	c = openCtx(t, small.URL, OllamaOptions{Memory: memory(64 * gib)})
+	require.Equal(t, OllamaNumCtxUnavailableReason, c.UnusableReason())
+	require.Equal(t, 0, c.Caps().ContextWindow)
+
+	// 128 MiB / 4 / 32768 = 1024 tokens exactly: the smallest accepted window.
+	c = openCtx(t, f.URL, OllamaOptions{Memory: memory(128 << 20)})
+	require.False(t, c.ContextUnresolved())
+	w, _, _ := c.ContextInfo()
+	require.Equal(t, 1024, w)
 }
 
 func TestWrapChat_PassesContextInfo(t *testing.T) {
