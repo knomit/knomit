@@ -287,9 +287,12 @@ func (m *manager) handleTurn(w http.ResponseWriter, r *http.Request) {
 		hal.WriteProblem(w, http.StatusBadRequest, "Invalid request", "text is required", r.URL.Path)
 		return
 	}
-	switch err := c.startTurn(req.Text); {
+	turn, err := c.startTurn(req.Text)
+	switch {
 	case err == nil:
-		hal.WriteHAL(w, http.StatusAccepted, map[string]any{"_links": chatLinks(c.id)})
+		// `turn` is the view index of the new turn: the client routes live
+		// events by it. The turn is already in the view when this answers.
+		hal.WriteHAL(w, http.StatusAccepted, map[string]any{"turn": turn, "_links": chatLinks(c.id)})
 	case errors.Is(err, errBusy):
 		hal.WriteProblem(w, http.StatusConflict, "A turn is running", "wait for the running turn to finish, or cancel it", r.URL.Path)
 	default:

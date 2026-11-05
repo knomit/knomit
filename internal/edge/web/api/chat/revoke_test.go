@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -261,4 +262,129 @@ func TestChat_SnapshotCarriesEachTurnsUsageCostWarningAndEnd(t *testing.T) {
 	require.True(t, turns[2].Cancelled)
 
 	require.Equal(t, 2, seq, "usage_seq counts the two requests the items include")
+}
+
+// GET /chats/{id} during a running turn must not race the loop's updates to the
+// turn's summary: the response is encoded after the chat lock is released, so
+// the summary the view holds has to be immutable (a new value per update).
+//
+// SABOTAGE: chat.go onLoopEvent LoopUsage, update the existing *turnUsage in
+// place again (`u := it.Usage; ... u.Input += ...`) -> `go test -race` reports
+// DATA RACE here.
+func TestChat_SnapshotDuringATurnDoesNotRaceTheUsageSummary(t *testing.T) {
+	h := newHarness(t)
+	pause := step{resp: &llm.Response{
+		Blocks: []llm.Block{{Kind: llm.BlockText, Text: "working"}}, StopReason: llm.StopPauseTurn, Usage: usage,
+	}}
+	steps := make([]step, 0, 20)
+	for i := 0; i < 19; i++ {
+		steps = append(steps, pause)
+	}
+	steps = append(steps, textStep("finished", usage))
+	h.queue("a1", steps...)
+	id := h.create("uid:501", "a1")
+	s := h.attach("uid:501", id)
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "go"))
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
+				}
+			}
+		}()
+	}
+	s.until("turn_done")
+	close(stop)
+	wg.Wait()
+
+	turns, seq := userTurns(t, h, id)
+	require.Len(t, turns, 1)
+	require.Equal(t, 20, seq)
+	require.EqualValues(t, 20*usage.Input, turns[0].Usage.Input, "every response's usage is in the summary")
+}
+
+// Every live event of a turn names the view index of that turn's user item, and
+// POST /turns answers it, so a client routes by index and guesses nothing.
+//
+// SABOTAGE: chat.go, drop "turn" from one emit (text_delta, tool_call, usage,
+// approval, turn_done) or return a wrong index from startTurn -> the matching
+// assertion fails.
+func TestChat_EventsAndTheAcceptedTurnNameTheirTurnIndex(t *testing.T) {
+	h := newHarness(t)
+	handle := h.bind(writer, "chat-00000000000000000000000000000061", "alpha")
+	h.queue("a1",
+		textStep("first answer", usage),
+		toolStep("tu_l", "knomit_learn", learnArgs(handle, "Indexed"), usage),
+		textStep("second answer", usage))
+	id := h.create("uid:501", "a1")
+	s := h.attach("uid:501", id)
+
+	post := func(text string) int {
+		code, body := h.do("uid:501", http.MethodPost, "/chats/"+id+"/turns", map[string]string{"text": text})
+		require.Equal(t, http.StatusAccepted, code, string(body))
+		var v struct {
+			Turn int `json:"turn"`
+		}
+		require.NoError(t, json.Unmarshal(body, &v))
+		return v.Turn
+	}
+	turnOf := func(evs []sseEvent, name string) []int {
+		var out []int
+		for _, e := range evs {
+			if e.Name != name {
+				continue
+			}
+			var v struct {
+				Turn *int `json:"turn"`
+			}
+			require.NoError(t, json.Unmarshal(e.Data, &v))
+			require.NotNil(t, v.Turn, name+" carries a turn")
+			out = append(out, *v.Turn)
+		}
+		return out
+	}
+
+	first := post("one")
+	require.Equal(t, 0, first)
+	evs1, _ := drive(t, h, "uid:501", id, s, nil)
+	second := post("two")
+	require.Greater(t, second, first)
+	evs2, _ := drive(t, h, "uid:501", id, s, map[string]string{"tu_l": "allow"})
+
+	for _, name := range []string{"text_delta", "usage", "turn_done"} {
+		require.Equal(t, []int{first}, dedup(turnOf(evs1, name)), name+" of turn one")
+	}
+	for _, name := range []string{"text_delta", "usage", "turn_done", "tool_call", "approval"} {
+		got := dedup(turnOf(evs2, name))
+		require.Equal(t, []int{second}, got, name+" of turn two")
+	}
+
+	// The index is the position of the turn's user item in the snapshot.
+	code, body := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
+	require.Equal(t, http.StatusOK, code)
+	var v struct {
+		Items []snapTurn `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(body, &v))
+	require.Equal(t, "two", v.Items[second].Text)
+	require.Equal(t, "user", v.Items[second].Kind)
+}
+
+func dedup(xs []int) []int {
+	var out []int
+	for _, x := range xs {
+		if len(out) == 0 || out[len(out)-1] != x {
+			out = append(out, x)
+		}
+	}
+	return out
 }
