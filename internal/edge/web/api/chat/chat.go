@@ -148,12 +148,10 @@ var _ llm.CallGate = (*chat)(nil)
 // Decide implements llm.CallGate. mcp.ClassifyCall decides: a read-only call
 // runs. A side-effecting call looks up the grant (pin, tool, action); with
 // none it emits an approval event and blocks until the person answers, the
-// turn is cancelled or the chat ends. A side-effecting call whose handle does
-// not resolve is not prompted: it runs and the binding gate refuses it before
-// any handler code. A call whose handle lookup FAILED (the store errored)
-// fails closed: it asks, and cannot be granted, because the binding gate does
-// its own lookup and may succeed. An unknown tool or action always asks and is
-// never grantable.
+// turn is cancelled or the chat ends. A side-effecting call whose target does
+// not resolve (no handle, a handle that names nothing, or a failed lookup)
+// fails closed: it asks, and cannot be granted. An unknown tool or action
+// always asks and is never grantable.
 func (c *chat) Decide(ctx context.Context, call llm.ToolUse) (llm.Decision, error) {
 	var args map[string]any
 	_ = json.Unmarshal(call.Args, &args)
@@ -174,11 +172,15 @@ func (c *chat) Decide(ctx context.Context, call llm.ToolUse) (llm.Decision, erro
 		// the cancellation as its error).
 		return llm.Decision{}, err
 	}
-	unresolved := pinErr != nil
-	if unresolved {
+	// Fail closed: a write whose target did not resolve (the lookup failed,
+	// the call carries no handle, or the handle names nothing) asks and is not
+	// grantable. It is never run unprompted: the later binding gate refusing it
+	// is a second line, not the approval.
+	unresolved := pinErr != nil || !pinOK
+	if pinErr != nil {
 		log.Warn().Err(pinErr).Str("chat", c.id).Str("tool", call.Name).Msg("chat: cannot resolve the call's binding handle; asking")
 	} else if !pinOK {
-		return llm.Decision{Allow: true, Kind: "auto"}, nil
+		log.Warn().Str("chat", c.id).Str("tool", call.Name).Msg("chat: write call has no resolvable binding handle; asking")
 	}
 	var kind, name string
 	if !unresolved {
