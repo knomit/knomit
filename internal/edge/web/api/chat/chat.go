@@ -116,6 +116,7 @@ type chat struct {
 	// request streamed text, and whether it streamed reasoning.
 	reqText, reqReasoning   bool
 	lastText, lastReasoning bool
+	usageSeq                int // requests whose usage was reported, for the usage event's seq
 
 	endOnce sync.Once
 	done    chan struct{}
@@ -454,8 +455,12 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		c.mu.Lock()
 		c.lastText, c.lastReasoning = c.reqText, c.reqReasoning
 		c.reqText, c.reqReasoning = false, false
+		c.usageSeq++
+		seq := c.usageSeq
 		c.mu.Unlock()
-		out := map[string]any{"usage": usageView(*ev.Usage)}
+		// seq numbers the chat's requests (1, 2, ...): a client that sees the
+		// same one twice has seen the same request's usage twice.
+		out := map[string]any{"usage": usageView(*ev.Usage), "seq": seq}
 		if ev.Cost != nil {
 			out["cost_usd"] = ev.Cost.USD
 		}

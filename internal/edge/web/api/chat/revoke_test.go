@@ -110,3 +110,29 @@ func TestChat_RevokeIsTheOwnersAlone(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, code)
 	require.Len(t, grantsOf(t, h, "uid:501", id), 1)
 }
+
+// The usage event numbers the chat's requests, so a client can tell a repeat of
+// one request's usage from the next request's.
+//
+// SABOTAGE: chat.go onLoopEvent, drop `c.usageSeq++` -> every seq is 0 and the
+// test fails.
+func TestChat_UsageEventsCarryAnIncreasingSeq(t *testing.T) {
+	h := newHarness(t)
+	h.queue("a1", toolStep("tu_r", "knomit_repos", map[string]any{}, usage), textStep("done", usage))
+	id := h.create("uid:501", "a1")
+	s := h.attach("uid:501", id)
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "go"))
+	evs, _ := drive(t, h, "uid:501", id, s, nil)
+	var seqs []int
+	for _, e := range evs {
+		if e.Name != "usage" {
+			continue
+		}
+		var u struct {
+			Seq int `json:"seq"`
+		}
+		require.NoError(t, json.Unmarshal(e.Data, &u))
+		seqs = append(seqs, u.Seq)
+	}
+	require.Equal(t, []int{1, 2}, seqs, "two requests: the tool call and the answer")
+}
