@@ -24,7 +24,7 @@ func TestRoot_ErrorsPrintOnceWithTheHintOnlyForUsageMistakes(t *testing.T) {
 	}{
 		// A RunE error. The config load fails on the env overlay, before
 		// app.New, so no embedder or repo is ever built.
-		{"serve config load fails", map[string]string{"KNOMIT_LLM_CACHE": "notabool"}, []string{"serve"}, ""},
+		{"serve config load fails", map[string]string{"KNOMIT_GIT_SERVE": "notabool"}, []string{"serve"}, ""},
 		// An argument error on a SUBCOMMAND. Its parent `grants` once set
 		// SilenceUsage itself, which cobra never consulted for `grants add`.
 		{"grants add wrong arg count", nil, []string{"grants", "add", "x"}, "Run 'knomit grants add --help' for usage."},

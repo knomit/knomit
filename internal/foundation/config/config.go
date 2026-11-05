@@ -111,14 +111,8 @@ type RemoteAuthConfig struct {
 	SSHKeyPassphrase string `toml:"-"`
 }
 
-// Config holds LLM-related configuration.
+// LLMConfig holds the LLM-related configuration.
 type LLMConfig struct {
-	Model    string `toml:"model"`
-	Provider string `toml:"provider"`
-	APIKey   string `toml:"api_key"`
-	Cache    bool   `toml:"cache"`
-	Batch    bool   `toml:"batch"`
-
 	// Providers are the chat providers, by name ([llm.providers.<name>]).
 	Providers map[string]LLMProviderConfig `toml:"providers"`
 }
@@ -671,11 +665,7 @@ func Defaults() Config {
 			WGap:                 1.0,
 			WSpec:                1.0,
 		},
-		Embeddings: EmbeddingsConfig{Model: modelparams.DefaultModelID},
-		LLM: LLMConfig{
-			Model:    "gemini-2.5-flash",
-			Provider: "gemini",
-		},
+		Embeddings:  EmbeddingsConfig{Model: modelparams.DefaultModelID},
 		Experiments: ExperimentsConfig{ExpiryDays: 30},
 		Triggers:    TriggersConfig{ScriptRatePerMinute: DefaultScriptRatePerMinute},
 		Git: GitConfig{
@@ -746,15 +736,6 @@ func Load() (Config, error) {
 	envOr("KNOMIT_OAUTH_ISSUER", &cfg.OAuth.Issuer)
 	envOr("KNOMIT_OAUTH_ADDR", &cfg.OAuth.Addr)
 	envOr("KNOMIT_EMBED_MODEL", &cfg.Embeddings.Model)
-	envOr("KNOMIT_LLM_MODEL", &cfg.LLM.Model)
-	envOr("KNOMIT_LLM_PROVIDER", &cfg.LLM.Provider)
-	envOr("KNOMIT_API_KEY", &cfg.LLM.APIKey)
-	if err := envBoolOr("KNOMIT_LLM_CACHE", &cfg.LLM.Cache); err != nil {
-		return Config{}, err
-	}
-	if err := envBoolOr("KNOMIT_LLM_BATCH", &cfg.LLM.Batch); err != nil {
-		return Config{}, err
-	}
 	if err := envBoolOr("KNOMIT_GIT_SERVE", &cfg.Git.Serve); err != nil {
 		return Config{}, err
 	}
