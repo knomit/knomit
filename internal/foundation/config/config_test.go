@@ -423,6 +423,7 @@ func TestReadOnly_DefaultsFalse(t *testing.T) {
 }
 
 func TestReadOnly_EnvOverride(t *testing.T) {
+	t.Setenv("KNOMIT_HOME", t.TempDir()) // isolate from any real ~/.knomit/knomit.toml
 	t.Setenv("KNOMIT_READ_ONLY", "true")
 	cfg, err := Load()
 	if err != nil {
