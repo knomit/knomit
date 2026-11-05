@@ -236,38 +236,26 @@ describe('ChatFacet', () => {
 // The reviewer's N1, N2 and N4 at the page: a turn end that races a snapshot
 // read, Stop, a cancel, and repeated frames.
 describe('ChatFacet: turn ends and repeats', () => {
-  it('N1: a turn_done that arrives while the ready snapshot is in flight cannot leave the chat running', async () => {
-    // The snapshot read the server cut while the turn was still running.
-    const stale = JSON.stringify(snapshot({ running: true, items: [{ kind: 'user', text: 'q' }, { kind: 'assistant', text: 'part' }] }));
+  it('N3: a turn_done that arrives while a snapshot read is in flight cannot leave the chat running: one read follows the end, and the stale answer is not applied', async () => {
+    const live = snapshot({ running: true, items: [{ kind: 'user', text: 'q' }, { kind: 'assistant', text: 'part' }] });
     const settled = snapshot({ running: false, items: [{ kind: 'user', text: 'q' }, { kind: 'assistant', text: 'part and the rest' }] });
-    const fx = stubFleetFetch({ [`GET ${BASE}`]: { body: settled } });
-    const inner = globalThis.fetch;
-    let release!: () => void;
-    let firstHeld = false;
-    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      if (url === BASE && !init?.method && !firstHeld) {
-        firstHeld = true;
-        return new Promise<Response>(res => { release = () => res(new Response(stale, { status: 200 })); });
-      }
-      return inner(input, init);
-    }));
+    // read 0 (ready) lands at once and makes turn 0 known; read 1 is cut while the
+    // turn is still running and held; read 2 is what the turn end must start.
+    const st = scriptedReads([live, live, settled], 1);
     render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} />);
-    await waitFor(() => expect(firstHeld).toBe(true));
+    await screen.findByTestId('chat-stop');
+    act(() => { latestStream('/chats/chat-a/events')!.emit('ready', {}); });
+    await waitFor(() => expect(st.held).toBe(true));
+    expect(st.n).toBe(2);
 
-    // The turn ends while that read is still out.
     act(() => { latestStream('/chats/chat-a/events')!.emit('turn_done', { turn: 0 }); });
+    await act(async () => { st.release(); });
     await waitFor(() => expect(screen.getByTestId('chat-text')).toHaveTextContent('part and the rest'));
-    // Now the stale read answers: it must not undo the end.
-    await act(async () => { release(); });
-    expect(screen.getByTestId('chat-text')).toHaveTextContent('part and the rest');
     expect(screen.queryByTestId('chat-stop')).toBeNull();
     expect(screen.getByTestId('chat-send')).toBeInTheDocument();
-    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'next' } });
-    expect(screen.getByTestId('chat-send')).toBeEnabled();
-    // The reads started after the first (the end's own, and the one an event for
-    // a turn the page did not know asked for) went through the stub.
-    expect(fx.calls.filter(c => c.route === `GET ${BASE}`).length).toBeGreaterThanOrEqual(1);
+    // Exactly one read followed the end (coalesced with nothing else).
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(st.n).toBe(3);
   });
 
   it('N1: Stop clears the running state here, even when the stream never reports an end', async () => {
@@ -319,32 +307,24 @@ describe('ChatFacet: turn ends and repeats', () => {
 
 // Round 3: a failed turn racing a snapshot read, and a quick follow-up send.
 describe('ChatFacet: turn_error races and fast follow-ups', () => {
-  it('a turn_error that arrives while the ready snapshot is in flight cannot leave the chat running', async () => {
-    const stale = JSON.stringify(snapshot({ running: true, items: [{ kind: 'user', text: 'q' }, { kind: 'assistant', text: 'part' }] }));
+  it('a turn_error that arrives while a snapshot read is in flight cannot leave the chat running', async () => {
+    const live = snapshot({ running: true, items: [{ kind: 'user', text: 'q' }, { kind: 'assistant', text: 'part' }] });
     const settled = snapshot({ running: false, items: [{ kind: 'user', text: 'q', error: 'The model declined to answer.' }, { kind: 'assistant', text: 'part and more' }] });
-    stubFleetFetch({ [`GET ${BASE}`]: { body: settled } });
-    const inner = globalThis.fetch;
-    let release!: () => void;
-    let firstHeld = false;
-    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      if (url === BASE && !init?.method && !firstHeld) {
-        firstHeld = true;
-        return new Promise<Response>(res => { release = () => res(new Response(stale, { status: 200 })); });
-      }
-      return inner(input, init);
-    }));
+    const st = scriptedReads([live, live, settled], 1);
     render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} />);
-    await waitFor(() => expect(firstHeld).toBe(true));
+    await screen.findByTestId('chat-stop');
+    act(() => { latestStream('/chats/chat-a/events')!.emit('ready', {}); });
+    await waitFor(() => expect(st.held).toBe(true));
 
     act(() => { latestStream('/chats/chat-a/events')!.emit('turn_error', { message: 'The model declined to answer.', turn: 0 }); });
+    await act(async () => { st.release(); }); // the stale read answers last
     await waitFor(() => expect(screen.getByTestId('chat-text')).toHaveTextContent('part and more'));
-    await act(async () => { release(); }); // the stale read answers last
-    expect(screen.getByTestId('chat-text')).toHaveTextContent('part and more');
     expect(screen.queryByTestId('chat-stop')).toBeNull();
     expect(screen.getByTestId('chat-send')).toBeInTheDocument();
     // The refusal comes from the snapshot, which carries how each turn ended.
     expect(screen.getByTestId('chat-turn-error').textContent).toBe('The model declined to answer.');
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(st.n).toBe(3);
   });
 
   it('a follow-up whose POST is still unanswered survives the snapshot read a turn end starts, and is not duplicated once the server lists it', async () => {
@@ -598,5 +578,49 @@ describe('ChatFacet: events are routed by turn index', () => {
     expect(await screen.findByTestId('chat-approval-tu_9')).toBeInTheDocument();
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'second']);
     expect(screen.getByTestId('chat-action-error').textContent).toBe(`${BASE}/turns → ${CHAT_SEND_TIMEOUT_DRAFT}`);
+  });
+});
+
+/** GET /chats/{id} answers from `bodies`, one per read, in order; the read at
+ *  `holdAt` waits until `release()`. `reads()` counts every read. */
+function scriptedReads(bodies: ChatSnapshot[], holdAt: number) {
+  const st = { n: 0, release: () => {}, held: false };
+  vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (url === BASE && !init?.method) {
+      const i = st.n++;
+      const res = () => new Response(JSON.stringify(bodies[Math.min(i, bodies.length - 1)]), { status: 200 });
+      if (i === holdAt) { st.held = true; return new Promise<Response>(r => { st.release = () => r(res()); }); }
+      return Promise.resolve(res());
+    }
+    return Promise.resolve(new Response('{}', { status: 404 }));
+  }));
+  return st;
+}
+
+describe('ChatFacet: snapshot reads are coalesced', () => {
+  it('N1: while a read is in flight, 5 unknown-turn events start no other read; after it resolves exactly one more follows', async () => {
+    const first = snapshot({ items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] });
+    const second = snapshot({ running: true, items: [
+      { kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }, { kind: 'user', text: 'typed in another tab' },
+    ] });
+    // read 0 (ready) is stalled; the follow-up must be read 1.
+    const st = scriptedReads([first, second], 0);
+    render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} />);
+    await waitFor(() => expect(st.held).toBe(true));
+    expect(st.n).toBe(1);
+
+    // Five events for turns the page does not know, while that read is out.
+    act(() => {
+      const es = latestStream('/chats/chat-a/events')!;
+      for (let k = 0; k < 5; k++) es.emit('text_delta', { text: 'x', turn: 10 + k });
+    });
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(st.n).toBe(1); // no second GET while the first is in flight
+
+    await act(async () => { st.release(); });
+    await waitFor(() => expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'typed in another tab']));
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(st.n).toBe(2); // exactly one follow-up for the five triggers
   });
 });

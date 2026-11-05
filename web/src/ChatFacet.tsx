@@ -34,19 +34,35 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
   useEffect(() => {
     const es = openChatEvents(chatId);
     let closed = false;
-    // Snapshot reads are numbered and only the LATEST one started is applied.
-    // A turn can end while an earlier read is in flight; that read's answer
-    // (cut before the end, so running:true) must not land after, and wedge the
-    // chat on a turn that is over. The read started at the end supersedes it.
-    let reads = 0;
-    const refresh = () => {
-      const mine = ++reads;
+    // Snapshot reads are COALESCED: one is in flight at a time. A trigger that
+    // arrives meanwhile (a turn end, an event for a turn the page does not
+    // know, a send with no answer) only marks that another is wanted; when the
+    // one in flight answers it is not applied (it was cut before the trigger and
+    // may be stale: a turn end it missed would leave the chat running) and ONE
+    // more read follows, however many triggers arrived.
+    let inFlight = false;
+    let again = false;
+    const read = () => {
+      inFlight = true;
+      again = false;
       // The sends the server had accepted when this read started: it lists them.
       const confirmed = [...acceptedRef.current];
       getChat(chatId)
-        .then(snapshot => { if (!closed && mine === reads) dispatch({ kind: 'ready', snapshot, confirmed }); })
-        .catch(e => { if (statusOf(e) === 404) gone(); else if (!closed && mine === reads) setActionError(errText(e)); });
+        .then(snapshot => {
+          inFlight = false;
+          if (closed) return;
+          if (again) { read(); return; }
+          dispatch({ kind: 'ready', snapshot, confirmed });
+        })
+        .catch(e => {
+          inFlight = false;
+          if (statusOf(e) === 404) { gone(); return; }
+          if (closed) return;
+          if (again) { read(); return; }
+          setActionError(errText(e));
+        });
     };
+    const refresh = () => { if (inFlight) again = true; else read(); };
     refreshRef.current = refresh;
     const gone = () => { if (!closed) goneRef.current(chatId); };
     const turnOf = (d: Record<string, unknown>): number => Number(d.turn);
