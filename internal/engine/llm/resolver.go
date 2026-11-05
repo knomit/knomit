@@ -19,8 +19,6 @@ var ErrNoCredentials = errors.New("no API key in the environment")
 // If explicit is non-empty it is returned as-is. Otherwise the model name
 // is matched by prefix:
 //
-//   - "claude"             → "claudecli"  (bare name = CLI shorthand)
-//   - "gemini"             → "geminicli"
 //   - "claude-*"           → "anthropic"
 //   - "gemini-*"           → "gemini"
 //   - "anthropic.*|us.*|eu.*" → "bedrock"
@@ -29,12 +27,6 @@ var ErrNoCredentials = errors.New("no API key in the environment")
 func ResolveProvider(model, explicit string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
-	}
-	if model == "claude" {
-		return "claudecli", nil
-	}
-	if model == "gemini" {
-		return "geminicli", nil
 	}
 	if strings.HasPrefix(model, "claude-") {
 		return "anthropic", nil
@@ -75,10 +67,6 @@ func NewAdapter(ctx context.Context, provider, model string, cfg ...config.LLMCo
 		inner, err = NewGeminiAdapter(ctx, model, c)
 	case "bedrock":
 		inner, err = NewBedrockAdapter(ctx, model)
-	case "claudecli":
-		inner = NewClaudeCLIAdapter(model)
-	case "geminicli":
-		inner = NewGeminiCLIAdapter(model)
 	case "ollama":
 		inner, err = NewOllamaAdapter(ctx, model)
 	default:

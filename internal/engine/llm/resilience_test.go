@@ -149,7 +149,7 @@ func TestIsOverloadedErr(t *testing.T) {
 		// JSON error envelopes, and the bare phrases providers use.
 		`anthropic: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`,
 		`bedrock: {"code": 429, "message": "rate limit exceeded"}`,
-		`claudecli: exit status 1: 503 Service Unavailable`,
+		`provider: exit status 1: 503 Service Unavailable`,
 	}
 	for _, msg := range retryable {
 		require.True(t, isOverloadedErr(errors.New(msg)), "must retry: %s", msg)

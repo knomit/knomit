@@ -58,6 +58,6 @@ func TestLogLLMSetup_OtherFailureStaysWarn(t *testing.T) {
 }
 
 func TestLogLLMSetup_AdapterIsEnabled(t *testing.T) {
-	got := logLines(t, llm.NewClaudeCLIAdapter("claude"), nil)
+	got := logLines(t, llm.NewAnthropicAdapter("claude-test"), nil)
 	require.Equal(t, [][2]string{{"info", "synthesis enabled"}}, got)
 }

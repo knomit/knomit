@@ -12,8 +12,6 @@
 //   - bedrock      — AWS Bedrock InvokeModelWithResponseStream (Anthropic format).
 //   - gemini       — Google Gemini API via the genai SDK (streaming).
 //   - ollama       — Local/remote Ollama REST API (/api/chat, NDJSON streaming).
-//   - claudecli    — Shells out to the `claude` CLI (non-streaming, single-turn).
-//   - geminicli    — Shells out to the `gemini` CLI (non-streaming, single-turn).
 //
 // Files in this package:
 //
@@ -24,8 +22,6 @@
 //   - bedrock.go   — BedrockAdapter (streaming via AWS SDK).
 //   - gemini.go    — GeminiAdapter (streaming via genai SDK).
 //   - ollama.go    — OllamaAdapter (NDJSON streaming via HTTP).
-//   - claudecli.go — ClaudeCLIAdapter (subprocess, single-turn).
-//   - geminicli.go — GeminiCLIAdapter (subprocess, single-turn).
 package llm
 
 import "context"

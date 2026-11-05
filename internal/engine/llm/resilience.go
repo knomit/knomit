@@ -66,8 +66,6 @@ const (
 //     isCacheMissingErr requires a "cached content … not found/expired" message,
 //     which carries none of the statuses or phrases isOverloadedErr matches. In
 //     practice the two never both fire, so the 6 is a bound, not a cost.
-//   - the CLI adapters shell out to a subprocess. One retry covers transient
-//     startup flake; more would mostly re-pay a slow process launch.
 func policyFor(provider string) Policy {
 	p := Policy{AttemptTimeout: defaultAttemptTimeout}
 	switch provider {
@@ -75,8 +73,6 @@ func policyFor(provider string) Policy {
 		p.MaxRetries = 0
 	case "gemini", "ollama":
 		p.MaxRetries = 2
-	case "claudecli", "geminicli":
-		p.MaxRetries = 1
 	}
 	return p
 }
@@ -122,7 +118,7 @@ func (a *resilientAdapter) Complete(ctx context.Context, system string, msgs []M
 	//
 	// The plain bool holds by construction, not by test: every adapter forwards
 	// chunks from its own read loop (ollama.go:138, gemini.go:197, anthropic.go:62,
-	// bedrock.go:95, the CLI adapters once at the end) and TracingAdapter passes
+	// bedrock.go:95) and TracingAdapter passes
 	// onChunk straight through. No test drives concurrent chunks, so -race has
 	// nothing to prove here — an adapter that ever calls onChunk from another
 	// goroutine would need this to become an atomic.Bool.

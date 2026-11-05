@@ -19,8 +19,6 @@ func TestResolveProvider(t *testing.T) {
 
 		// Bare names are the CLI shorthand, and must be checked before the
 		// "claude-"/"gemini-" prefix rules below.
-		{"bare claude is cli shorthand", "claude", "", "claudecli"},
-		{"bare gemini is cli shorthand", "gemini", "", "geminicli"},
 
 		{"claude- prefix is anthropic api", "claude-sonnet-4-6", "", "anthropic"},
 		{"gemini- prefix is gemini api", "gemini-2.0-flash", "", "gemini"},
@@ -47,7 +45,7 @@ func TestResolveProvider(t *testing.T) {
 // no prefix and carries no explicit provider is a configuration error, not a
 // silent fallback to some default adapter.
 func TestResolveProvider_NoRuleMatches(t *testing.T) {
-	for _, model := range []string{"unknown-model", "gpt-4", "", "claudecli"} {
+	for _, model := range []string{"unknown-model", "gpt-4", "", "claudecli", "claude", "gemini"} {
 		if got, err := ResolveProvider(model, ""); err == nil {
 			t.Errorf("ResolveProvider(%q, \"\") = %q, want an error", model, got)
 		}
