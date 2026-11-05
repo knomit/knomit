@@ -273,11 +273,38 @@ func TestLexicalFallbackWhenNoEmbedder(t *testing.T) {
 	t.Run("embedder fails at call time", func(t *testing.T) {
 		h := newHarness(t)
 		emb := newFakeEmb(t, names(h), "knomit_explain")
-		emb.err = errors.New("onnx session closed")
+		emb.err = errors.New("onnx session closed: /Users/someone/models/embed.onnx")
 		_, rec := run(t, emb, "explain")
 		require.Equal(t, "lexical", rec["ranker"], "the guess is made by the fallback")
-		require.Contains(t, rec["embedding_error"], "onnx session closed")
+		require.Equal(t, "error", rec["embedding_error"], "the log keeps the class of the failure, not the embedder's text")
 	})
+}
+
+// The session log names the class of a ranker failure, never the raw error: an
+// embedder error can carry model paths and other local detail.
+//
+// SABOTAGE: adaptive.go, make rankErrorClass return its argument -> fails.
+func TestRankErrorClass(t *testing.T) {
+	for in, want := range map[string]string{
+		"embedding the message: context deadline exceeded": "timeout",
+		"embedding tool x: i/o timeout":                    "timeout",
+		"context canceled":                                 "canceled",
+		"onnx session closed: /Users/someone/m.onnx":       "error",
+		"": "",
+	} {
+		require.Equal(t, want, rankErrorClass(in), in)
+	}
+}
+
+// The tools record of a failed preload carries the class too.
+func TestSessionLog_ToolsRecordRankerErrorIsAClass(t *testing.T) {
+	dir := t.TempDir()
+	l, err := openSessionLog(dir, "chat-00000000000000000000000000000b01", nil)
+	require.NoError(t, err)
+	l.Tools(1, llm.ToolsChange{Reason: llm.ToolsReasonPreload, RankerError: "boom at /Users/someone/x"})
+	recs := recordsOf(readLog(t, dir, "chat-00000000000000000000000000000b01"), "tools")
+	require.Len(t, recs, 1)
+	require.Equal(t, "error", recs[0]["ranker_error"])
 }
 
 // The chat warms the embedding ranker's tool vectors when it opens, off the

@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -61,7 +62,7 @@ func (t *rankTap) wrap(kind string, r llm.ToolRanker) llm.ToolRanker {
 		t.ran = true
 		switch {
 		case err != nil && kind == rankerEmbedding:
-			t.rec.EmbeddingErr = err.Error()
+			t.rec.EmbeddingErr = rankErrorClass(err.Error())
 		case err == nil:
 			t.rec.Kind, t.rec.Ranked = kind, out
 		}
@@ -76,6 +77,28 @@ func (t *rankTap) take() (rankRecord, bool) {
 	rec, ran := t.rec, t.ran
 	t.rec, t.ran = rankRecord{}, false
 	return rec, ran
+}
+
+// Classes of a ranker failure, as the session log names them.
+const (
+	rankErrTimeout  = "timeout"
+	rankErrCanceled = "canceled"
+	rankErrOther    = "error"
+)
+
+// rankErrorClass is the class of a ranker failure: the session log records it
+// instead of the error's text, which an embedder fills with model paths and
+// other local detail. "" stays "".
+func rankErrorClass(msg string) string {
+	switch low := strings.ToLower(msg); {
+	case msg == "":
+		return ""
+	case strings.Contains(low, "deadline exceeded"), strings.Contains(low, "timeout"), strings.Contains(low, "timed out"):
+		return rankErrTimeout
+	case strings.Contains(low, "canceled"), strings.Contains(low, "cancelled"):
+		return rankErrCanceled
+	}
+	return rankErrOther
 }
 
 type rankFunc func(ctx context.Context, msg string) ([]llm.ScoredTool, error)
@@ -176,7 +199,7 @@ func (c *chat) logPreload(turn int, res *llm.TurnResult) {
 		fields["embedding_error"] = rec.EmbeddingErr
 	}
 	if res.RankerError != "" {
-		fields["ranker_error"] = res.RankerError
+		fields["ranker_error"] = rankErrorClass(res.RankerError)
 	}
 	c.log.Preload(fields)
 }

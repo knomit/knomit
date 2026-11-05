@@ -136,7 +136,7 @@ func (l *sessionLog) Tools(turn int, ch llm.ToolsChange) {
 		"loaded_now": nonNilStrings(ch.LoadedNow), "tokens": ch.Tokens,
 	}
 	if ch.RankerError != "" {
-		f["ranker_error"] = ch.RankerError
+		f["ranker_error"] = rankErrorClass(ch.RankerError)
 	}
 	l.write("tools", f)
 }
