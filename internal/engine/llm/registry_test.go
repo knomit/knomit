@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -81,7 +83,7 @@ func TestRegistry_ListMarksUnavailableAndToolless(t *testing.T) {
 // with the message as the reason (what GET /chat-providers shows); the other
 // provider stays available, and the reason never holds the value.
 //
-// SABOTAGE: drop the APIKeyEnvProblem check in List → red.
+// SABOTAGE: drop the APIKeyEnvBlocked check in List → red.
 func TestRegistry_APIKeyEnvHoldingAKeyMakesOnlyThatProviderUnavailable(t *testing.T) {
 	const key = "sk-ant-api03-Zq9xT7mK2vLpR4wB"
 	an, _ := fakeAnthropicModels(t, "a1", "a2", "a3")
@@ -101,6 +103,37 @@ func TestRegistry_APIKeyEnvHoldingAKeyMakesOnlyThatProviderUnavailable(t *testin
 	_, err := r.Open(context.Background(), "prov-x", "a1")
 	require.ErrorIs(t, err, ErrNoCredentials)
 	require.NotContains(t, err.Error(), key[:8])
+}
+
+// The bad api_key_env blocks the provider only when it is the source that would
+// have been used. An api_key_file or a plaintext api_key (both rank ahead of or
+// stand in for it) keeps the provider available, and nothing echoes the value.
+//
+// SABOTAGE: make APIKeyEnvBlocked ignore ResolveKey → the available cases go red.
+func TestRegistry_APIKeyEnvBadButAnotherKeySourceSetStaysAvailable(t *testing.T) {
+	const key = "sk-ant-api03-Zq9xT7mK2vLpR4wB"
+	an, _ := fakeAnthropicModels(t, "a1", "a2")
+	keyFile := filepath.Join(t.TempDir(), "key")
+	require.NoError(t, os.WriteFile(keyFile, []byte("sk-test-file\n"), 0o600))
+	r := NewRegistry(map[string]config.LLMProviderConfig{
+		"prov-f": {Kind: "anthropic", BaseURL: an.URL, APIKeyEnv: key, APIKeyFile: keyFile, Models: []string{"a1"}},
+		"prov-k": {Kind: "anthropic", BaseURL: an.URL, APIKeyEnv: key, APIKey: "sk-test-plain", Models: []string{"a2"}},
+	})
+	got := r.List(context.Background())
+	require.Equal(t, []ProviderStatus{
+		{Name: "prov-f", Kind: "anthropic", Models: []ModelStatus{{ID: "a1", Available: true, Tools: true}}},
+		{Name: "prov-k", Kind: "anthropic", Models: []ModelStatus{{ID: "a2", Available: true, Tools: true}}},
+	}, got)
+	for _, p := range []string{"prov-f", "prov-k"} {
+		m, err := r.Open(context.Background(), p, map[string]string{"prov-f": "a1", "prov-k": "a2"}[p])
+		require.NoError(t, err)
+		require.NotNil(t, m)
+	}
+	out, err := json.Marshal(got)
+	require.NoError(t, err)
+	for i := 0; i+8 <= len(key); i++ {
+		require.NotContains(t, string(out), key[i:i+8])
+	}
 }
 
 func TestRegistry_ListIsCachedFor60Seconds(t *testing.T) {

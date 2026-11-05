@@ -114,7 +114,7 @@ func (r *Registry) List(ctx context.Context) []ProviderStatus {
 	for _, n := range names {
 		p := r.cfg[n]
 		st := ProviderStatus{Name: n, Kind: p.Kind}
-		if why := p.APIKeyEnvProblem(n); why != "" {
+		if why := p.APIKeyEnvBlocked(n); why != "" {
 			st.Models = allUnavailable(p, why)
 			out = append(out, st)
 			continue
@@ -291,7 +291,7 @@ func (r *Registry) Open(ctx context.Context, provider, model string) (ChatModel,
 	if err != nil {
 		return nil, err
 	}
-	if why := p.APIKeyEnvProblem(provider); why != "" {
+	if why := p.APIKeyEnvBlocked(provider); why != "" {
 		return nil, fmt.Errorf("%w: %s", ErrNoCredentials, why)
 	}
 	md := p.ModelDefaults[model]

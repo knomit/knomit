@@ -140,6 +140,23 @@ func (p LLMProviderConfig) APIKeyEnvProblem(name string) string {
 	return fmt.Sprintf(APIKeyEnvNotANameMessage, name)
 }
 
+// APIKeyEnvBlocked is the APIKeyEnvProblem text when the bad api_key_env is the
+// source the provider would have used: an anthropic provider that is left with
+// no key once api_key_file and api_key are tried (ResolveKey never reads a bad
+// api_key_env). A higher-precedence api_key_file or a plaintext api_key keeps
+// the provider available; the config is still wrong and is still logged.
+// An unreadable api_key_file is reported by ResolveKey's own error instead.
+func (p LLMProviderConfig) APIKeyEnvBlocked(name string) string {
+	why := p.APIKeyEnvProblem(name)
+	if why == "" || p.Kind != LLMKindAnthropic {
+		return ""
+	}
+	if k, err := p.ResolveKey(); err != nil || k != "" {
+		return ""
+	}
+	return why
+}
+
 // APIKeyEnvProblems lists every provider's APIKeyEnvProblem, sorted by
 // provider name.
 func (c LLMConfig) APIKeyEnvProblems() []string {
@@ -273,7 +290,7 @@ func (p LLMProviderConfig) ResolveKey() (string, error) {
 			return k, nil
 		}
 	}
-	if p.APIKeyEnv != "" {
+	if p.APIKeyEnv != "" && validEnvVarName(p.APIKeyEnv) {
 		if v := os.Getenv(p.APIKeyEnv); v != "" {
 			return v, nil
 		}
