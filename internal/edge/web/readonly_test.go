@@ -77,6 +77,7 @@ func TestIsMutatingRequest(t *testing.T) {
 		{"POST", "/api/v1/chats/chat-0f/turns", false},
 		{"POST", "/api/v1/chats/chat-0f/approvals/tu_1", false},
 		{"DELETE", "/api/v1/chats/chat-0f", false},
+		{"DELETE", "/api/v1/chats/chat-0f/grants", false},
 		// ...but the pattern is anchored: look-alikes and paths that merely
 		// contain /chats stay gated.
 		{"POST", "/api/v1/chatsfoo", true},

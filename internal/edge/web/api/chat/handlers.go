@@ -31,6 +31,7 @@ func (m *manager) routes(r chi.Router) {
 	r.Post("/chats/{id}/cancel", m.handleCancel)
 	r.Post("/chats/{id}/approvals/{callId}", m.handleApproval)
 	r.Get("/chats/{id}/grants", m.handleGrants)
+	r.Delete("/chats/{id}/grants", m.handleRevokeGrant)
 	r.Get("/chats/{id}/calls/{callId}", m.handleCall)
 }
 
@@ -360,4 +361,30 @@ func (m *manager) handleCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hal.WriteHAL(w, http.StatusOK, rec)
+}
+
+// handleRevokeGrant takes back one "Allow for session" grant: the body names a
+// grant as GET .../grants lists it ({target, kind, tool, action}). Only that
+// grant goes; the next call of that tool and action on that target asks again.
+// Like every chat route it is the owner's alone (chatOf answers 404 for any
+// other principal) and it sits outside the write gate, because it changes the
+// chat's own approvals and no knowledge base. A grant that is not held is 404.
+func (m *manager) handleRevokeGrant(w http.ResponseWriter, r *http.Request) {
+	c, ok := m.chatOf(w, r)
+	if !ok {
+		return
+	}
+	var req grantInfo
+	if !httpx.DecodeJSON(w, r, &req, 1<<12) {
+		return
+	}
+	if req.Target == "" || req.Kind == "" || req.Tool == "" || req.Action == "" {
+		hal.WriteProblem(w, http.StatusBadRequest, "Invalid request", "target, kind, tool and action are required", r.URL.Path)
+		return
+	}
+	if !c.revokeGrant(req) {
+		hal.WriteProblem(w, http.StatusNotFound, "Not Found", "no such grant", r.URL.Path)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

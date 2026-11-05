@@ -4433,6 +4433,31 @@ paths:
                             tool: { type: string }
                             action: { type: string }
         "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [chat]
+      summary: Revoke one session grant
+      description: |
+        Takes back one "Allow for session" grant, named as `GET .../grants`
+        lists it. Only that grant is removed: the next call of that tool and
+        action on that target asks again, and every other grant stays in force.
+        A grant the chat does not hold is a 404.
+      operationId: revokeChatGrant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target, kind, tool, action]
+              properties:
+                target: { type: string, description: The repo or lens name }
+                kind: { type: string, enum: [repo, lens] }
+                tool: { type: string }
+                action: { type: string }
+      responses:
+        "204": { description: The grant is revoked }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
 
   /chats/{id}/calls/{callId}:
     parameters:

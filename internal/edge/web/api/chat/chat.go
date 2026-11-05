@@ -248,6 +248,23 @@ func (c *chat) grantList() []grantInfo {
 	return out
 }
 
+// revokeGrant removes the grant g describes (as grantList shows it) and
+// reports whether there was one. Nothing else is touched: a grant for another
+// target, tool or action stays in force, and a call waiting for approval is
+// not decided by it.
+func (c *chat) revokeGrant(g grantInfo) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	found := false
+	for k, v := range c.grants {
+		if v == g {
+			delete(c.grants, k)
+			found = true
+		}
+	}
+	return found
+}
+
 func (c *chat) callMetaOf(callID string) (string, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
