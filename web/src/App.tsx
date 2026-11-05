@@ -1090,7 +1090,7 @@ export default function App() {
   const [fleetLanding, setFleetLanding] = useState<FleetLanding | null>(null);
   const shownFacet: Facet | null = displayed.kind === 'draft' ? null : facets.includes(view.facet) ? view.facet : 'settings';
   const browseShown = view.server === null && onContext && shownFacet === 'browse';
-  const targetLabel = useMemo(() => targetLabelFor(displayed, repos, archived, creates, fleet, chats), [displayed, repos, archived, creates, fleet, chats]);
+  const targetLabel = useMemo(() => targetLabelFor(displayed, repos, archived, creates, fleet, chats, chatProviders ?? []), [displayed, repos, archived, creates, fleet, chats, chatProviders]);
   // The Settings tab's dot: the current repo's remote is failing, by the
   // banner's source OR by the listing. Only for a repo context — a lens's
   // Settings has no Remote block, and a dot pointing at nothing is a dead
@@ -1790,6 +1790,7 @@ export default function App() {
               onPin={onPin}
               drafts={drafts}
               chats={chats}
+              chatProviders={chatProviders ?? []}
               chatsAvailable={chatsAvailable}
               draftShown={draftShownKind}
               onNewDraft={onNewDraft}

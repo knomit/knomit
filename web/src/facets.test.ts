@@ -518,10 +518,12 @@ describe('a chat target', () => {
     expect(localStorage.getItem('knomit.facet')).not.toBe('chat');
   });
 
-  it('is labelled by its model with its provider as the chip; a draft is New chat', () => {
-    const chats = [{ id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' }];
-    expect(targetLabelFor({ kind: 'chat', id: 'chat-a' }, repos, [], [], null, chats)).toEqual(
-      { kind: 'chat', name: 'claude-test-x', chip: { text: 'anthropic', tone: 'neutral' } });
+  it('is labelled by its model with its provider (name and kind) for the crumb mark; a draft is New chat', () => {
+    const chats = [{ id: 'chat-a', provider: 'prov-a', model: 'claude-test-x' }];
+    const providers = [{ name: 'prov-a', kind: 'ollama', models: [] }];
+    expect(targetLabelFor({ kind: 'chat', id: 'chat-a' }, repos, [], [], null, chats, providers)).toEqual(
+      { kind: 'chat', name: 'claude-test-x', provider: { name: 'prov-a', kind: 'ollama' } });
+    expect(targetLabelFor({ kind: 'chat', id: 'chat-a' }, repos, [], [], null, chats).provider).toEqual({ name: 'prov-a', kind: '' });
     expect(DRAFT_NAME.chat).toBe('New chat');
     expect(targetLabelFor({ kind: 'draft', draft: 'chat' }, repos, [], [])).toEqual({ kind: 'chat', name: 'New chat', draft: true });
   });

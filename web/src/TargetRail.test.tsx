@@ -509,7 +509,6 @@ describe('TargetRail — chats', () => {
     const group = screen.getByTestId('rail-chats');
     expect(within(group).getAllByTestId(/^rail-chat-chat-/).map(r => r.getAttribute('data-testid'))).toEqual(['rail-chat-chat-a', 'rail-chat-chat-b']);
     expect(within(group).getByTestId('rail-chat-chat-a')).toHaveTextContent('claude-test-x');
-    expect(within(group).getByTestId('rail-chat-chat-a')).toHaveTextContent('anthropic');
     const order = ['rail-repos', 'rail-lenses', 'rail-chats'].map(id => screen.getByTestId(id));
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -546,5 +545,45 @@ describe('TargetRail — chats', () => {
   it('the + is off on a locked rail', () => {
     renderRail({ chats: [], chatsAvailable: true, locked: true });
     expect(screen.getByTestId('rail-new-chat')).toBeDisabled();
+  });
+
+  describe('provider marks', () => {
+    const providers = [
+      { name: 'prov-a', kind: 'anthropic', models: [] },
+      { name: 'prov-b', kind: 'ollama', models: [] },
+      { name: 'prov-c', kind: 'mystery', models: [] },
+    ];
+    const rows = [
+      { id: 'c1', provider: 'prov-a', model: 'model-1' },
+      { id: 'c2', provider: 'prov-b', model: 'model-2' },
+      { id: 'c3', provider: 'prov-c', model: 'model-3' },
+    ];
+    const mark = (id: string, name: string) => within(screen.getByTestId(`rail-chat-${id}`)).getByRole('img', { name });
+
+    it('picks the mark by the provider kind and names it by the configured provider', () => {
+      renderRail({ chats: rows, chatProviders: providers, chatsAvailable: true });
+      expect(mark('c1', 'prov-a').querySelector('path')?.getAttribute('d')).toMatch(/^M17\.3041/);
+      expect(mark('c1', 'prov-a').querySelector('title')?.textContent).toBe('prov-a');
+      expect(mark('c2', 'prov-b').querySelector('path')?.getAttribute('d')).toMatch(/^M16\.361/);
+    });
+
+    it('renders no text badge for the provider', () => {
+      renderRail({ chats: rows, chatProviders: providers, chatsAvailable: true });
+      for (const [id, name] of [['c1', 'prov-a'], ['c2', 'prov-b'], ['c3', 'prov-c']]) {
+        const row = screen.getByTestId(`rail-chat-${id}`);
+        // Own text nodes only: the mark's <title> is the accessible name, not a badge.
+        const own = Array.from(row.querySelectorAll('span')).map(sp => Array.from(sp.childNodes).filter(n => n.nodeType === 3).map(n => n.textContent).join(''));
+        expect(own).not.toContain(name);
+      }
+    });
+
+    it('keeps the chat glyph beside an unknown kind, and for a provider not listed', () => {
+      renderRail({ chats: [...rows, { id: 'c4', provider: 'prov-d', model: 'model-4' }], chatProviders: providers, chatsAvailable: true });
+      for (const id of ['c3', 'c4']) {
+        const row = screen.getByTestId(`rail-chat-${id}`);
+        expect(within(row).queryByRole('img')).toBeNull();
+        expect(row.querySelector('svg path')?.getAttribute('d')).toMatch(/^M21 12a8/);
+      }
+    });
   });
 });

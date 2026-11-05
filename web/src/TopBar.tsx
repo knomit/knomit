@@ -3,7 +3,7 @@ import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { AppState } from './state';
 import { isLensContext } from './state';
 import type { RepoInfo } from './api';
-import { BookIcon, ChatIcon, FleetIcon, GearIcon, LayersIcon } from './icons';
+import { BookIcon, FleetIcon, GearIcon, LayersIcon, ProviderIcon } from './icons';
 import { noMouseFocus } from './utils';
 import { useMatFocus } from './matFocus';
 import { otherRepoFailing } from './facets';
@@ -154,7 +154,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
     color: target.kind === 'lens' ? LENS_ACCENT : target.draft ? '#8ab6d6' : target.kind === 'fleet' ? FLEET_ACCENT : target.kind === 'chat' ? CHAT_ACCENT : '#7c9',
     icon: target.kind === 'lens' ? <LayersIcon color="currentColor" size={13} />
       : target.kind === 'fleet' ? <FleetIcon color="currentColor" size={13} />
-        : target.kind === 'chat' ? <ChatIcon color="currentColor" size={13} />
+        : target.kind === 'chat' ? <ProviderIcon kind={target.provider?.kind} name={target.provider?.name ?? ''} color="currentColor" size={13} />
           : <BookIcon color="currentColor" size={13} />,
   };
   // Where the gear returns to from the server pages: the target under them,
