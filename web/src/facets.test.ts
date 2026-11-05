@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { initView, viewReducer, railShown, facetsFor, useViewState, draftCancellable, displayedTarget, targetLabelFor, serverPagesFor, fleetChip, FLEET_FACETS } from './facets';
+import { initView, viewReducer, railShown, facetsFor, useViewState, draftCancellable, displayedTarget, targetLabelFor, serverPagesFor, fleetChip, FLEET_FACETS, CHAT_FACETS, DRAFT_NAME } from './facets';
 import type { ViewState } from './facets';
 import { RAIL_STORAGE_KEY, loadRailOpen, saveRailOpen } from './repoSelection';
 import type { RepoInfo, Lens, RepoCreateStatus } from './api';
@@ -478,5 +478,51 @@ describe('the fleet target', () => {
   it('a fleet draft is cancellable even with no repositories', () => {
     expect(draftCancellable('fleet', [])).toBe(true);
     expect(draftCancellable('repo', [])).toBe(false);
+  });
+});
+
+describe('a chat target', () => {
+  const repos = [{ name: 'ops-kb', uid: 'u-ops' }] as RepoInfo[];
+
+  it('facetsFor a chat target is exactly Chat and Settings; a repo target is unchanged', () => {
+    const f = facetsFor({ kind: 'chat', id: 'chat-a' }, repos, [], []);
+    expect(f).toEqual(['chat', 'settings']);
+    expect(f).toEqual(CHAT_FACETS);
+    const repoFacets = facetsFor({ kind: 'repo', repo: 'ops-kb' }, repos, [], []);
+    expect(repoFacets).toEqual(['browse', 'activity', 'settings']);
+    expect(repoFacets).not.toContain('chat');
+  });
+
+  it('pinning a chat lands on Chat and remembers Browse; leaving it restores Browse', () => {
+    const onBrowse = { ...initView(), facet: 'browse' as const };
+    const inChat = viewReducer(onBrowse, { type: 'SELECT_PINNED', target: { kind: 'chat', id: 'chat-a' }, available: CHAT_FACETS });
+    expect(inChat.pinned).toEqual({ kind: 'chat', id: 'chat-a' });
+    expect(inChat.facet).toBe('chat');
+    const back = viewReducer(inChat, { type: 'SELECT_CONTEXT_TARGET', available: ['browse', 'activity', 'settings'] });
+    expect(back.pinned).toBeNull();
+    expect(back.facet).toBe('browse');
+  });
+
+  it('leaving a chat for a repo from the chat Settings keeps Settings', () => {
+    const inChat = viewReducer({ ...initView(), facet: 'browse' }, { type: 'SELECT_PINNED', target: { kind: 'chat', id: 'chat-a' }, available: CHAT_FACETS });
+    const onSettings = viewReducer(inChat, { type: 'SET_FACET', facet: 'settings' });
+    const back = viewReducer(onSettings, { type: 'SELECT_CONTEXT_TARGET', available: ['browse', 'activity', 'settings'] });
+    expect(back.facet).toBe('settings');
+  });
+
+  it('the chat facet is never persisted', () => {
+    localStorage.clear();
+    const { result } = renderHook(() => useViewState());
+    act(() => { result.current[1]({ type: 'SELECT_PINNED', target: { kind: 'chat', id: 'chat-a' }, available: CHAT_FACETS }); });
+    expect(result.current[0].facet).toBe('chat');
+    expect(localStorage.getItem('knomit.facet')).not.toBe('chat');
+  });
+
+  it('is labelled by its model with its provider as the chip; a draft is New chat', () => {
+    const chats = [{ id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' }];
+    expect(targetLabelFor({ kind: 'chat', id: 'chat-a' }, repos, [], [], null, chats)).toEqual(
+      { kind: 'chat', name: 'claude-test-x', chip: { text: 'anthropic', tone: 'neutral' } });
+    expect(DRAFT_NAME.chat).toBe('New chat');
+    expect(targetLabelFor({ kind: 'draft', draft: 'chat' }, repos, [], [])).toEqual({ kind: 'chat', name: 'New chat', draft: true });
   });
 });

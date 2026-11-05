@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react';
 import type { BrowseContext } from './state';
 import { repoAvailable, brokenLensMember } from './api';
 import type { RepoInfo, Lens, ArchivedRepo, RepoCreateStatus, FleetStatus } from './api';
+import type { ChatInfo } from './chatApi';
 import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
 import { RepoOntologyChip } from './RepoOntologyChip';
@@ -10,7 +11,7 @@ import { CredentialChip } from './CredentialChip';
 import { RepoDot } from './settingsParts';
 import { PendingCreateRow } from './PendingCreateRow';
 import { useRepoCreates, activeCreateByRepo, createFlag, pendingCreates } from './useRepoCreates';
-import { BookIcon, LayersIcon, ArchiveIcon, PlusIcon, ChevronDownIcon, FleetIcon } from './icons';
+import { BookIcon, LayersIcon, ArchiveIcon, PlusIcon, ChevronDownIcon, FleetIcon, ChatIcon } from './icons';
 import { LENS, noMouseFocus } from './utils';
 import { remoteFailing, DRAFT_NAME } from './facets';
 import type { PinnedTarget, DraftKind } from './facets';
@@ -39,7 +40,12 @@ interface Props {
    *  not yet registered, an archived repo. */
   onPin?: (t: PinnedTarget) => void;
   /** Which draft rows exist. A draft row sits at the top of its section. */
-  drafts?: { repo: boolean; lens: boolean; fleet?: boolean };
+  drafts?: { repo: boolean; lens: boolean; fleet?: boolean; chat?: boolean };
+  /** The caller's live chats (GET /chats). The Chats group draws a row each. */
+  chats?: ChatInfo[];
+  /** Whether chat is served here: a provider is configured and the server is
+   *  not read-only. Without it the Chats group is absent, not disabled. */
+  chatsAvailable?: boolean;
   /** GET /fleet, or null before it answered. The Fleet section draws its one
    *  row from it (fleet_repo), and the fleet repository is not listed under
    *  Repositories: it is the fleet target. `local` decides whether the `+`
@@ -87,6 +93,7 @@ export function TargetRail({
   repos, lenses, context, currentRepo, remoteError, serverReadOnly, onSelect,
   archived = [], pinned = null, onPin, drafts = { repo: false, lens: false }, draftShown = null,
   onNewDraft, onPickDraft, focusRequest, onFocusHandled, locked = false, fleet = null, onPickFleet,
+  chats = [], chatsAvailable = false,
 }: Props) {
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
@@ -340,6 +347,43 @@ export function TargetRail({
           })}
         </div>
 
+        {/* Chats: a group beside the repositories and the lenses. A chat
+            is a pinned target (it has no store to browse), so a row pins it. */}
+        {chatsAvailable && (
+          <div data-testid="rail-chats">
+            <div style={sectionHeader}>
+              <ChatIcon color={CHAT_ACCENT} size={13} />
+              <span style={sectionTitle}>Chats</span>
+              <PlusButton testId="rail-new-chat" label="New chat" disabled={locked}
+                active={draftShown === 'chat'} onClick={() => { release(); onNewDraft?.('chat'); }} />
+            </div>
+            {drafts.chat && (
+              <DraftRow kind="chat" selected={draftShown === 'chat'} disabled={locked}
+                onClick={() => { release(); onPickDraft?.('chat'); }} />
+            )}
+            {chats.length === 0 && !drafts.chat && <div style={{ color: '#555', fontSize: 12, padding: '4px 10px' }}>None</div>}
+            {chats.map(c => {
+              const selected = pinned?.kind === 'chat' && pinned.id === c.id && draftShown === null;
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  data-testid={`rail-chat-${c.id}`}
+                  aria-current={selected || undefined}
+                  disabled={locked}
+                  onMouseDown={noMouseFocus}
+                  onClick={locked ? undefined : () => pin({ kind: 'chat', id: c.id })}
+                  style={row(selected ? 'chat' : null, false)}
+                >
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: CHAT_ACCENT, flexShrink: 0 }} />
+                  <span style={rowName}>{c.model}</span>
+                  <span style={badges}><span style={memberChip}>{c.provider}</span></span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* The fleet: one row once this instance is in one, with its role;
             otherwise the `+` that opens New fleet (create or join), which
             only the desktop app can act on (GET /fleet's `local`). */}
@@ -434,6 +478,8 @@ const LENS_ACCENT = '#b9a6f0';
 const DRAFT_BLUE = '#8ab6d6';
 // The fleet's teal (Q5): its section glyph, its row and the master chip.
 const FLEET_ACCENT = '#8ad6c8';
+// The chat group's amber: its glyph, its rows and the selected bar.
+const CHAT_ACCENT = '#e8c27a';
 
 const rail: CSSProperties = {
   width: 236, flexShrink: 0, minHeight: 0,
@@ -463,7 +509,7 @@ const sectionTitle: CSSProperties = { flex: 1, fontSize: 11, fontWeight: 600, le
 // A row is the manage rail's listItem in geometry. The selected treatment is
 // the spec's: the green-tinted row with an inset left bar for a repo, the lens
 // tint and bar for a lens.
-const row = (selected: 'repo' | 'lens' | 'fleet' | null, disabled: boolean): CSSProperties => ({
+const row = (selected: 'repo' | 'lens' | 'fleet' | 'chat' | null, disabled: boolean): CSSProperties => ({
   width: '100%', display: 'flex', alignItems: 'center', gap: 8,
   border: 'none', borderRadius: 4, padding: '7px 10px', fontSize: 13, textAlign: 'left',
   fontFamily: 'inherit',
@@ -474,12 +520,18 @@ const row = (selected: 'repo' | 'lens' | 'fleet' | null, disabled: boolean): CSS
       ? { background: '#1d1a2c', color: '#e6defc', boxShadow: `inset 2px 0 0 -0.5px ${LENS_ACCENT}` }
       : selected === 'fleet'
         ? { background: '#121f1d', color: '#dcefeb', boxShadow: `inset 2px 0 0 -0.5px ${FLEET_ACCENT}` }
+        : selected === 'chat'
+          ? { background: '#221e14', color: '#f1e6cc', boxShadow: `inset 2px 0 0 -0.5px ${CHAT_ACCENT}` }
         : { background: 'transparent', color: disabled ? '#6a6a6a' : '#bbb' }),
 });
 const draftRow = (kind: DraftKind, selected: boolean): CSSProperties => ({
   ...row(null, false),
   fontStyle: 'italic',
-  ...(kind !== 'lens'
+  ...(kind === 'chat'
+    ? selected
+      ? { background: '#221e14', color: '#f1e6cc', boxShadow: `inset 2px 0 0 -0.5px ${CHAT_ACCENT}` }
+      : { color: CHAT_ACCENT }
+    : kind !== 'lens'
     ? selected
       ? { background: '#14191f', color: '#cfe0f2', boxShadow: `inset 2px 0 0 -0.5px ${DRAFT_BLUE}` }
       : { color: DRAFT_BLUE }

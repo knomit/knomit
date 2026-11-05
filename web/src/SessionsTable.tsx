@@ -19,6 +19,18 @@ function relativeTime(iso: string, now: Date): string {
   return `${Math.round(h / 24)} d ago`;
 }
 
+// The client a chat registers under (internal/edge/web/api/chat): the version
+// is "<provider>/<model>", and a model name may itself hold a slash.
+const CHAT_CLIENT = 'knomit-chat';
+
+/** The Client cell's text: "name version", except for a chat, which reads
+ *  "Chat · provider · model". */
+function clientLabel(c: ClientSession['client']): string {
+  if (c.name !== CHAT_CLIENT) return `${c.name} ${c.version}`;
+  const i = c.version.indexOf('/');
+  return i < 0 ? `Chat · ${c.version}` : `Chat · ${c.version.slice(0, i)} · ${c.version.slice(i + 1)}`;
+}
+
 const STATE_COLOR: Record<ClientSession['state'], string> = { live: '#4ade80', idle: '#facc15', dead: '#555' };
 
 // ── the Binding column ───────────────────────────────────────────────────
@@ -198,7 +210,7 @@ export function SessionsTable({ rows, policy, error, now, target }: {
                 <tr data-testid="session-row" style={{ color: dead ? '#666' : '#ddd', borderTop: '1px solid #222' }}>
                   <td title={r.state}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 4, background: STATE_COLOR[r.state] }} /></td>
                   <td>
-                    {r.client.name ? `${r.client.name} ${r.client.version}` : <span style={{ color: '#777' }}>unknown</span>}
+                    {r.client.name ? clientLabel(r.client) : <span style={{ color: '#777' }}>unknown</span>}
                     {/* A row the server never saw initialize: it outlived a
                         restart and was rebuilt from request headers. */}
                     {!r.client.initialized && <span style={{ marginLeft: 6, color: '#a78bfa' }}>resumed</span>}

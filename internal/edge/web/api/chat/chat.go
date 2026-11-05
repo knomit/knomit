@@ -44,6 +44,22 @@ type viewItem struct {
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 	State     string          `json:"state,omitempty"` // running | done
 	IsError   bool            `json:"is_error,omitempty"`
+
+	// On a "user" item only: what the page shows for the turn it opens, so a
+	// snapshot is the whole truth about the turn and the page patches nothing.
+	Usage     *turnUsage `json:"usage,omitempty"`     // summed over the turn's requests
+	CostUSD   *float64   `json:"cost_usd,omitempty"`  // summed; absent without a price card
+	Warning   string     `json:"warning,omitempty"`   // the price-tier warning, worded
+	Error     string     `json:"error,omitempty"`     // how the turn ended, if it did not succeed
+	Cancelled bool       `json:"cancelled,omitempty"` // Error is the person's own Stop
+}
+
+// turnUsage is a turn's token counts, summed over its requests.
+type turnUsage struct {
+	Input      int64 `json:"input"`
+	CacheRead  int64 `json:"cache_read"`
+	CacheWrite int64 `json:"cache_write"`
+	Output     int64 `json:"output"`
 }
 
 // pendingApproval is a tool call waiting for the person.
@@ -56,6 +72,8 @@ type pendingApproval struct {
 	Destructive bool            `json:"destructive"`
 	Grantable   bool            `json:"grantable"`
 	Arguments   json.RawMessage `json:"arguments,omitempty"`
+	// Turn is the view index of the user item of the turn the call belongs to.
+	Turn int `json:"turn"`
 
 	pin string
 	ch  chan string // the decision: allow | decline | allow_session
@@ -104,6 +122,7 @@ type chat struct {
 	turnCancel context.CancelFunc
 	turns      sync.WaitGroup
 	view       []viewItem
+	turnAt     int // index in view of the running (or last) turn's user item
 	calls      map[string]llm.ToolUse
 	pending    map[string]*pendingApproval
 	grants     map[grantKey]grantInfo
@@ -116,6 +135,7 @@ type chat struct {
 	// request streamed text, and whether it streamed reasoning.
 	reqText, reqReasoning   bool
 	lastText, lastReasoning bool
+	usageSeq                int // requests whose usage was reported, for the usage event's seq
 
 	endOnce sync.Once
 	done    chan struct{}
@@ -128,12 +148,10 @@ var _ llm.CallGate = (*chat)(nil)
 // Decide implements llm.CallGate. mcp.ClassifyCall decides: a read-only call
 // runs. A side-effecting call looks up the grant (pin, tool, action); with
 // none it emits an approval event and blocks until the person answers, the
-// turn is cancelled or the chat ends. A side-effecting call whose handle does
-// not resolve is not prompted: it runs and the binding gate refuses it before
-// any handler code. A call whose handle lookup FAILED (the store errored)
-// fails closed: it asks, and cannot be granted, because the binding gate does
-// its own lookup and may succeed. An unknown tool or action always asks and is
-// never grantable.
+// turn is cancelled or the chat ends. A side-effecting call whose target does
+// not resolve (no handle, a handle that names nothing, or a failed lookup)
+// fails closed: it asks, and cannot be granted. An unknown tool or action
+// always asks and is never grantable.
 func (c *chat) Decide(ctx context.Context, call llm.ToolUse) (llm.Decision, error) {
 	var args map[string]any
 	_ = json.Unmarshal(call.Args, &args)
@@ -154,11 +172,15 @@ func (c *chat) Decide(ctx context.Context, call llm.ToolUse) (llm.Decision, erro
 		// the cancellation as its error).
 		return llm.Decision{}, err
 	}
-	unresolved := pinErr != nil
-	if unresolved {
+	// Fail closed: a write whose target did not resolve (the lookup failed,
+	// the call carries no handle, or the handle names nothing) asks and is not
+	// grantable. It is never run unprompted: the later binding gate refusing it
+	// is a second line, not the approval.
+	unresolved := pinErr != nil || !pinOK
+	if pinErr != nil {
 		log.Warn().Err(pinErr).Str("chat", c.id).Str("tool", call.Name).Msg("chat: cannot resolve the call's binding handle; asking")
 	} else if !pinOK {
-		return llm.Decision{Allow: true, Kind: "auto"}, nil
+		log.Warn().Str("chat", c.id).Str("tool", call.Name).Msg("chat: write call has no resolvable binding handle; asking")
 	}
 	var kind, name string
 	if !unresolved {
@@ -181,6 +203,7 @@ func (c *chat) Decide(ctx context.Context, call llm.ToolUse) (llm.Decision, erro
 	if len(call.Args) <= maxApprovalArgs {
 		p.Arguments = call.Args
 	}
+	p.Turn = c.turnAt
 	c.pending[call.ID] = p
 	c.mu.Unlock()
 
@@ -246,6 +269,23 @@ func (c *chat) grantList() []grantInfo {
 		return a.Action < b.Action
 	})
 	return out
+}
+
+// revokeGrant removes the grant g describes (as grantList shows it) and
+// reports whether there was one. Nothing else is touched: a grant for another
+// target, tool or action stays in force, and a call waiting for approval is
+// not decided by it.
+func (c *chat) revokeGrant(g grantInfo) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	found := false
+	for k, v := range c.grants {
+		if v == g {
+			delete(c.grants, k)
+			found = true
+		}
+	}
+	return found
 }
 
 func (c *chat) callMetaOf(callID string) (string, string) {
@@ -315,19 +355,22 @@ var errBusy = errors.New("a turn is already running")
 var errEnded = errors.New("the chat has ended")
 
 // startTurn runs one user turn on its own goroutine.
-func (c *chat) startTurn(text string) error {
+// It returns the view index of the turn's user item, which the 202 carries.
+func (c *chat) startTurn(text string) (int, error) {
 	c.mu.Lock()
 	if c.ended {
 		c.mu.Unlock()
-		return errEnded
+		return 0, errEnded
 	}
 	if c.running {
 		c.mu.Unlock()
-		return errBusy
+		return 0, errBusy
 	}
 	c.running = true
 	ctx, cancel := context.WithCancel(c.ctx)
 	c.turnCancel = cancel
+	c.turnAt = len(c.view)
+	turn := c.turnAt
 	c.view = append(c.view, viewItem{Kind: "user", Text: text})
 	c.turns.Add(1)
 	c.mu.Unlock()
@@ -339,14 +382,29 @@ func (c *chat) startTurn(text string) error {
 		res, err := c.loop.RunTurn(ctx, text)
 		c.finishTurn(ctx, res, err)
 	}()
-	return nil
+	return turn, nil
 }
 
 func (c *chat) finishTurn(ctx context.Context, res *llm.TurnResult, err error) {
+	// How the turn ended is worded once, recorded in the turn's view item in the
+	// same step that ends it (a snapshot cut after `running` is false has it),
+	// and then sent.
+	msg, cancelled := "", false
+	if err != nil {
+		msg = err.Error()
+		cancelled = errors.Is(err, llm.ErrCancelled) || ctx.Err() != nil
+	}
 	c.mu.Lock()
+	turn := c.turnAt // before running is false: the next send moves turnAt
 	c.running = false
 	c.turnCancel = nil
-	truncatedBare := errors.Is(err, llm.ErrTruncated) && c.lastReasoning && !c.lastText
+	if err != nil && errors.Is(err, llm.ErrTruncated) && c.lastReasoning && !c.lastText {
+		msg = reasoningTruncatedMessage
+	}
+	if err != nil && c.turnAt < len(c.view) {
+		c.view[c.turnAt].Error, c.view[c.turnAt].Cancelled = msg, cancelled && msg == err.Error()
+	}
+	truncatedBare := msg == reasoningTruncatedMessage
 	ended := c.ended
 	c.mu.Unlock()
 	c.store.appendTranscript(map[string]any{"turn_end": true, "error": errString(err)})
@@ -355,20 +413,16 @@ func (c *chat) finishTurn(ctx context.Context, res *llm.TurnResult, err error) {
 	}
 	if err == nil {
 		c.emit("turn_done", map[string]any{
-			"stop_reason": res.StopReason, "requests": res.Requests, "tool_calls": res.ToolCalls,
+			"turn": turn, "stop_reason": res.StopReason, "requests": res.Requests, "tool_calls": res.ToolCalls,
 			"usage": usageView(res.Usage), "cost_usd": res.Cost.USD,
 		})
 		return
 	}
-	msg := err.Error()
-	switch {
-	case truncatedBare:
-		msg = reasoningTruncatedMessage
-	case errors.Is(err, llm.ErrCancelled), ctx.Err() != nil:
-		c.emit("turn_error", map[string]any{"message": msg, "cancelled": true})
+	if !truncatedBare && cancelled {
+		c.emit("turn_error", map[string]any{"message": msg, "cancelled": true, "turn": turn})
 		return
 	}
-	c.emit("turn_error", map[string]any{"message": msg})
+	c.emit("turn_error", map[string]any{"message": msg, "turn": turn})
 }
 
 func errString(err error) string {
@@ -402,8 +456,9 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		} else {
 			c.view = append(c.view, viewItem{Kind: "assistant", Text: ev.Text})
 		}
+		turn := c.turnAt
 		c.mu.Unlock()
-		c.emit("text_delta", map[string]string{"text": ev.Text})
+		c.emit("text_delta", map[string]any{"text": ev.Text, "turn": turn})
 	case llm.LoopReasoning:
 		c.mu.Lock()
 		first := !c.reqReasoning
@@ -417,8 +472,9 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		c.mu.Lock()
 		c.calls[tu.ID] = tu
 		c.view = append(c.view, viewItem{Kind: "tool_call", ID: tu.ID, Name: tu.Name, Arguments: tu.Args, State: "running"})
+		turn := c.turnAt
 		c.mu.Unlock()
-		c.emit("tool_call", map[string]any{"id": tu.ID, "name": tu.Name, "state": "running"})
+		c.emit("tool_call", map[string]any{"id": tu.ID, "name": tu.Name, "state": "running", "turn": turn})
 	case llm.LoopToolResult:
 		r := ev.Result
 		c.mu.Lock()
@@ -428,24 +484,59 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 				c.view[i].State, c.view[i].IsError = "done", r.IsError
 			}
 		}
+		turn := c.turnAt
 		c.mu.Unlock()
 		if err := c.store.putCall(r.ToolUseID, callRecord{Name: tu.Name, Arguments: tu.Args, Result: r.Content, IsError: r.IsError, Elided: r.Elided}); err != nil {
 			log.Warn().Err(err).Str("chat", c.id).Msg("chat: could not store a tool call")
 		}
-		c.emit("tool_call", map[string]any{"id": r.ToolUseID, "name": tu.Name, "state": "done", "is_error": r.IsError})
+		c.emit("tool_call", map[string]any{"id": r.ToolUseID, "name": tu.Name, "state": "done", "is_error": r.IsError, "turn": turn})
 	case llm.LoopUsage:
 		c.mu.Lock()
 		c.lastText, c.lastReasoning = c.reqText, c.reqReasoning
 		c.reqText, c.reqReasoning = false, false
+		c.usageSeq++
+		seq := c.usageSeq
+		if c.turnAt < len(c.view) {
+			it := &c.view[c.turnAt]
+			// A NEW value every time: GET /chats/{id} copies the item under
+			// this lock but encodes it after releasing it, so what a view
+			// item points at must never change.
+			var u turnUsage
+			if it.Usage != nil {
+				u = *it.Usage
+			}
+			u.Input += ev.Usage.Input
+			u.CacheRead += ev.Usage.CacheRead
+			u.CacheWrite += ev.Usage.CacheWrite
+			u.Output += ev.Usage.Output
+			it.Usage = &u
+			if ev.Cost != nil {
+				usd := ev.Cost.USD
+				if it.CostUSD != nil {
+					usd += *it.CostUSD
+				}
+				it.CostUSD = &usd
+			}
+		}
+		turn := c.turnAt
 		c.mu.Unlock()
-		out := map[string]any{"usage": usageView(*ev.Usage)}
+		// seq numbers the chat's requests (1, 2, ...): a client that sees the
+		// same one twice has seen the same request's usage twice.
+		out := map[string]any{"usage": usageView(*ev.Usage), "seq": seq, "turn": turn}
 		if ev.Cost != nil {
 			out["cost_usd"] = ev.Cost.USD
 		}
 		c.emit("usage", out)
 	case llm.LoopWarning:
+		text := priceWarningText(*ev.Warning)
+		c.mu.Lock()
+		if c.turnAt < len(c.view) {
+			c.view[c.turnAt].Warning = text
+		}
+		turn := c.turnAt
+		c.mu.Unlock()
 		c.emit("warning", map[string]any{
-			"message": priceWarningText(*ev.Warning), "threshold": ev.Warning.Threshold,
+			"turn": turn, "message": text, "threshold": ev.Warning.Threshold,
 			"prompt_tokens": ev.Warning.PromptTokens, "model": ev.Warning.Model,
 		})
 	}

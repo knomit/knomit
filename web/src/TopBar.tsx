@@ -3,7 +3,7 @@ import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { AppState } from './state';
 import { isLensContext } from './state';
 import type { RepoInfo } from './api';
-import { BookIcon, FleetIcon, GearIcon, LayersIcon } from './icons';
+import { BookIcon, ChatIcon, FleetIcon, GearIcon, LayersIcon } from './icons';
 import { noMouseFocus } from './utils';
 import { useMatFocus } from './matFocus';
 import { otherRepoFailing } from './facets';
@@ -151,10 +151,11 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
     : { kind: 'repo', name: state.repo });
   const label = {
     name: target.name,
-    color: target.kind === 'lens' ? LENS_ACCENT : target.draft ? '#8ab6d6' : target.kind === 'fleet' ? FLEET_ACCENT : '#7c9',
+    color: target.kind === 'lens' ? LENS_ACCENT : target.draft ? '#8ab6d6' : target.kind === 'fleet' ? FLEET_ACCENT : target.kind === 'chat' ? CHAT_ACCENT : '#7c9',
     icon: target.kind === 'lens' ? <LayersIcon color="currentColor" size={13} />
       : target.kind === 'fleet' ? <FleetIcon color="currentColor" size={13} />
-        : <BookIcon color="currentColor" size={13} />,
+        : target.kind === 'chat' ? <ChatIcon color="currentColor" size={13} />
+          : <BookIcon color="currentColor" size={13} />,
   };
   // Where the gear returns to from the server pages: the target under them,
   // named in its tooltip so the destination is one hover away.
@@ -356,7 +357,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
 const RAIL_FOCUS = 'Repositories, lenses and fleet are unavailable while reading in Focus';
 const RAIL_HIDDEN = 'Repositories, lenses and fleet are hidden over the server pages';
 
-const FACET_LABEL: Record<Facet, string> = { browse: 'Browse', activity: 'Activity', settings: 'Settings', members: 'Members' };
+const FACET_LABEL: Record<Facet, string> = { browse: 'Browse', activity: 'Activity', settings: 'Settings', members: 'Members', chat: 'Chat' };
 const SERVER_LABEL: Record<ServerPage, string> = { logs: 'Logs', access: 'Access' };
 
 // The Access tab's waiting authorizations: the green badge it carried in Manage.
@@ -369,6 +370,7 @@ const tabBadge: CSSProperties = {
 const LENS_ACCENT = '#b9a6f0';
 // The fleet's teal (Q5): its row, its crumb and the master chip.
 const FLEET_ACCENT = '#8ad6c8';
+const CHAT_ACCENT = '#e8c27a';
 
 // The label's state chip: the rail's chip geometry, in the spec's tones —
 // archive warm, error red, creating blue.

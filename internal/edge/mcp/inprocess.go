@@ -136,8 +136,8 @@ func (s *InProcessSession) CallTool(ctx context.Context, name string, args json.
 // TargetPin resolves the call's `binding` handle to the repo or lens it
 // names ("repo:<uid>" or "lens:<uid>"), which is what a per-target approval
 // grant is keyed on. ok is false when the call carries no handle or the
-// handle does not resolve: such a call is not prompted, and the binding gate
-// refuses it before any handler code runs. err is non-nil when the lookup
+// handle does not resolve: the chat gate treats such a write as unresolved and
+// asks, without a grant (it never runs it unprompted). err is non-nil when the lookup
 // itself FAILED (a busy or closed store): the handle may well be valid, so
 // the caller must not treat the call as unresolvable. It must ask, because the
 // binding gate does its own lookup and may succeed where this one failed.

@@ -4,6 +4,7 @@ import App from './App';
 import { computed } from './cascade.testutil';
 import { installFakeEventSource, uninstallFakeEventSource, latestStream } from './testEventSource';
 import { __resetRepoCreatesForTest } from './useRepoCreates';
+import { stubFleetFetch } from './fleetTestFetch';
 
 // The target rail: the left column that replaced the top bar's repo/lens
 // dropdown. It PUSHES the content (it is a column of the body row, not an
@@ -380,5 +381,65 @@ describe('the Browse toolbar', () => {
     await mountApp();
     act(() => { fireEvent.keyDown(window, { key: '/' }); });
     expect(document.activeElement?.id).toBe('filter-input');
+  });
+});
+
+// Chats in the rail: a group beside the repositories and the lenses, present
+// only when chat is served (a provider is configured, the server is not
+// read-only).
+describe('the Chats group in the rail', () => {
+  beforeEach(() => { localStorage.setItem('knomit.rail', '1'); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  const PROVIDERS = { _embedded: { providers: [{ name: 'anthropic', kind: 'anthropic', models: [{ id: 'a1', available: true, tools: true }] }] } };
+
+  it('the + on Chats opens the New chat draft, and Cancel returns to the previous target', async () => {
+    await primeApi();
+    stubFleetFetch({
+      'GET /api/v1/chat-providers': { body: PROVIDERS },
+      'GET /api/v1/chats': { body: { _embedded: { chats: [] } } },
+    });
+    await mountApp();
+    const before = screen.getByTestId('target-label').textContent;
+    expect(before).toBeTruthy();
+
+    fireEvent.click(await screen.findByTestId('rail-new-chat'));
+    expect(screen.getByTestId('target-label')).toHaveTextContent('New chat');
+    expect(screen.getByTestId('rail-draft-chat')).toHaveAttribute('aria-current', 'true');
+    expect(await screen.findByTestId('chat-start-form')).toBeInTheDocument();
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+
+    fireEvent.click(screen.getByTestId('chat-cancel'));
+    await waitFor(() => expect(screen.queryByTestId('rail-draft-chat')).toBeNull());
+    expect(screen.getByTestId('target-label').textContent).toBe(before);
+    expect(screen.queryByTestId('draft-chat')).toBeNull();
+  });
+
+  it('is absent when no provider is configured', async () => {
+    await primeApi();
+    const fx = stubFleetFetch({
+      'GET /api/v1/chat-providers': { body: { _embedded: { providers: [] } } },
+      'GET /api/v1/chats': { body: { _embedded: { chats: [] } } },
+    });
+    await mountApp();
+    await waitFor(() => expect(fx.calls.some(c => c.route === 'GET /api/v1/chat-providers')).toBe(true));
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(screen.getByTestId('rail-lenses')).toBeInTheDocument();
+    expect(screen.queryByTestId('rail-chats')).toBeNull();
+  });
+
+  it('is absent, and nothing is asked of the chat routes, on a read-only server', async () => {
+    await primeApi();
+    const { fetchVersion } = await import('./api');
+    vi.mocked(fetchVersion).mockResolvedValue({ version: '0.0.0', commit: 'abc', full: '0.0.0.abc', readOnly: true });
+    const fx = stubFleetFetch({
+      'GET /api/v1/chat-providers': { body: PROVIDERS },
+      'GET /api/v1/chats': { body: { _embedded: { chats: [] } } },
+    });
+    await mountApp();
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(screen.getByTestId('rail-lenses')).toBeInTheDocument();
+    expect(screen.queryByTestId('rail-chats')).toBeNull();
+    expect(fx.calls.filter(c => c.route.includes('/chat'))).toEqual([]);
   });
 });

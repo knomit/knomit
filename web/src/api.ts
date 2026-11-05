@@ -24,7 +24,7 @@ function encodeBranch(name: string): string {
 // which silently parsed problem+json bodies as success and returned `{}` /
 // missing fields to callers — backend 500s became indistinguishable from
 // "no results" in the UI.
-async function fetchJSON<T = unknown>(url: string, init?: RequestInit): Promise<T> {
+export async function fetchJSON<T = unknown>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init);
   if (!r.ok) {
     // Best-effort: surface a problem+json `title`/`detail` if present. The

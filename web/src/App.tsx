@@ -22,6 +22,10 @@ import { TopBar } from './TopBar';
 import { isMatFocus } from './matFocus';
 import { TargetRail } from './TargetRail';
 import { BrowseFacet } from './BrowseFacet';
+import { ChatFacet } from './ChatFacet';
+import { ChatStartForm } from './ChatStartForm';
+import { useChats, useChatProviders } from './useChats';
+import type { ChatInfo } from './chatApi';
 import { ActivityFacet } from './ActivityFacet';
 import { SettingsFacet } from './SettingsFacet';
 import { FacetLayoutProvider } from './facetLayout';
@@ -1075,11 +1079,18 @@ export default function App() {
   // crumb's chip, the fleet target's pages).
   // Not while booting: nothing leaves the page until the boot is over.
   const { fleet, reload: reloadFleet } = useFleet(boot.phase === 'done' || noRepos);
+  // The chats: the backing list of a pinned chat target (GET /chats), and the
+  // providers behind the Chats group. Chat is not served by a read-only
+  // server, and the group is absent until a provider is configured.
+  const chatServed = (boot.phase === 'done' || noRepos) && !state.serverReadOnly;
+  const { chats, loaded: chatsLoaded, add: addChat, remove: removeChat } = useChats(chatServed);
+  const chatProviders = useChatProviders(chatServed);
+  const chatsAvailable = chatServed && (chatProviders?.length ?? 0) > 0;
   // The card the fleet's Members shows once after a create or a join.
   const [fleetLanding, setFleetLanding] = useState<FleetLanding | null>(null);
   const shownFacet: Facet | null = displayed.kind === 'draft' ? null : facets.includes(view.facet) ? view.facet : 'settings';
   const browseShown = view.server === null && onContext && shownFacet === 'browse';
-  const targetLabel = useMemo(() => targetLabelFor(displayed, repos, archived, creates, fleet), [displayed, repos, archived, creates, fleet]);
+  const targetLabel = useMemo(() => targetLabelFor(displayed, repos, archived, creates, fleet, chats), [displayed, repos, archived, creates, fleet, chats]);
   // The Settings tab's dot: the current repo's remote is failing, by the
   // banner's source OR by the listing. Only for a repo context — a lens's
   // Settings has no Remote block, and a dot pointing at nothing is a dead
@@ -1097,14 +1108,14 @@ export default function App() {
 
   // The rows the rail draws for drafts. The repository draft is also there
   // whenever there are no repositories, because then it is the target.
-  const drafts = useMemo(() => ({ repo: view.draft === 'repo' || noRepos, lens: view.draft === 'lens', fleet: view.draft === 'fleet' }), [view.draft, noRepos]);
+  const drafts = useMemo(() => ({ repo: view.draft === 'repo' || noRepos, lens: view.draft === 'lens', fleet: view.draft === 'fleet', chat: view.draft === 'chat' }), [view.draft, noRepos]);
   // With no repositories the draft is the target: make it a real draft, so
   // its registration lands like any other (DRAFT_REGISTERED) and picking a
   // pinned row and back again behaves as it does with repositories.
   useEffect(() => {
     // A fleet draft is left alone: a fresh instance may create or join a
     // fleet before it has a repository.
-    if (noRepos && view.draft !== 'repo' && view.draft !== 'fleet' && view.pinned?.kind !== 'fleet') dispatchView({ type: 'OPEN_DRAFT', kind: 'repo', from: stateRef.current.context });
+    if (noRepos && view.draft !== 'repo' && view.draft !== 'fleet' && view.draft !== 'chat' && view.pinned?.kind !== 'fleet' && view.pinned?.kind !== 'chat') dispatchView({ type: 'OPEN_DRAFT', kind: 'repo', from: stateRef.current.context });
   }, [noRepos, view.draft, view.pinned, dispatchView]);
   // The fleet repository is never the browse context (B3): whatever pointed
   // it there (a remembered context, a link, a rename), the context moves to a
@@ -1152,9 +1163,12 @@ export default function App() {
     const gone = (p.kind === 'fleet' && fleet !== null && !fleet.fleet_repo)
       || (p.kind === 'archived' && archivedLoaded && !archived.some(a => a.id === p.id))
       || (p.kind === 'unavailable' && reposLoaded && !repos.some(r => r.name === p.repo && !repoAvailable(r)))
-      || (p.kind === 'brokenLens' && reposLoaded && !lenses.some(l => l.name === p.name));
+      || (p.kind === 'brokenLens' && reposLoaded && !lenses.some(l => l.name === p.name))
+      // A chat is in its backing list (GET /chats) or it is over. Not before
+      // the list has loaded, and never for a chat added in this very render.
+      || (p.kind === 'chat' && chatsLoaded && !chats.some(c => c.id === p.id));
     if (gone) dispatchView({ type: 'SELECT_CONTEXT_TARGET', available: facetsFor(state.context, repos, lenses, creates), keepServer: true });
-  }, [view.pinned, archived, archivedLoaded, repos, reposLoaded, lenses, creates, state.context, dispatch, dispatchView, fleet]);
+  }, [view.pinned, archived, archivedLoaded, repos, reposLoaded, lenses, creates, state.context, dispatch, dispatchView, fleet, chats, chatsLoaded]);
 
   // The server pages, behind the gear. They show OVER the displayed target,
   // which stays exactly as it was, so the gear again (or any rail pick) is the
@@ -1411,8 +1425,23 @@ export default function App() {
   // A rail pick of a settings-only target: pinned over the context.
   const onPin = useCallback((t: PinnedTarget) => {
     if (viewRef.current.locked) return;
-    dispatchView({ type: 'SELECT_PINNED', target: t });
-  }, [dispatchView]);
+    dispatchView({ type: 'SELECT_PINNED', target: t, available: facetsFor(t, repos, lenses, creates) });
+  }, [dispatchView, repos, lenses, creates]);
+  // The chat draft made its chat. The chat joins its backing list in the SAME
+  // update that pins it (pin-backing-list): the dispatches below are one
+  // batched render, so the auto-unpin effect never sees a pin without its row.
+  // The chat exists whether or not its draft is still the one on screen.
+  const onChatCreated = useCallback((chat: ChatInfo) => {
+    addChat(chat);
+    const v = viewRef.current;
+    if (v.draft !== 'chat') return;
+    const shown = v.draftShown;
+    dispatchView({ type: 'DRAFT_REGISTERED', kind: 'chat', facet: 'chat' });
+    if (shown) dispatchView({ type: 'SELECT_PINNED', target: { kind: 'chat', id: chat.id }, available: facetsFor({ kind: 'chat', id: chat.id }, repos, lenses, creates) });
+  }, [addChat, dispatchView, repos, lenses, creates]);
+  // A chat ended (the server said so, or it is gone): it leaves the list, and
+  // the auto-unpin effect leaves it.
+  const onChatGone = useCallback((id: string) => removeChat(id), [removeChat]);
   // The fleet row: the fleet target, pinned over the context with its own
   // tabs (Members, Activity, Settings).
   const onPickFleet = useCallback(() => {
@@ -1760,6 +1789,8 @@ export default function App() {
               pinned={displayed.kind === 'draft' ? null : view.pinned}
               onPin={onPin}
               drafts={drafts}
+              chats={chats}
+              chatsAvailable={chatsAvailable}
               draftShown={draftShownKind}
               onNewDraft={onNewDraft}
               onPickDraft={onPickDraft}
@@ -1853,6 +1884,13 @@ export default function App() {
                 </ErrorBoundary>
               </div>
             )}
+            {drafts.chat && (
+              <div data-testid="draft-chat" style={draftBody(!serverOpen && draftShownKind === 'chat')}>
+                <ErrorBoundary variant="inline" label="New chat hit an error">
+                  <ChatStartForm providers={chatProviders ?? []} onCreated={onChatCreated} onCancel={onCancelDraft} />
+                </ErrorBoundary>
+              </div>
+            )}
             {drafts.fleet && (
               <div data-testid="draft-fleet" style={draftBody(!serverOpen && draftShownKind === 'fleet')}>
                 <ErrorBoundary variant="inline" label="New fleet hit an error">
@@ -1874,7 +1912,19 @@ export default function App() {
                 )}
               </ErrorBoundary>
             )}
-            {!serverOpen && pinnedOrContext && pinnedOrContext.kind !== 'fleet' && shownFacet === 'browse' && (
+            {/* Every live chat stays mounted (hidden when it is not the
+                displayed target), so its stream, transcript and any waiting
+                approval survive a detour to a repository: a chat lives as long
+                as its tab. */}
+            {chats.map(c => (
+              <div key={c.id} data-testid={`chat-body-${c.id}`}
+                style={draftBody(!serverOpen && displayed.kind === 'chat' && displayed.id === c.id)}>
+                <ErrorBoundary variant="inline" label="The chat hit an error">
+                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} />
+                </ErrorBoundary>
+              </div>
+            ))}
+            {!serverOpen && pinnedOrContext && pinnedOrContext.kind !== 'fleet' && pinnedOrContext.kind !== 'chat' && shownFacet === 'browse' && (
               <BrowseFacet
                 state={state}
                 dispatch={dispatch}
@@ -1889,7 +1939,7 @@ export default function App() {
                 onEnterBranch={enterBranch}
               />
             )}
-            {!serverOpen && pinnedOrContext && pinnedOrContext.kind !== 'fleet' && shownFacet === 'activity' && (
+            {!serverOpen && pinnedOrContext && pinnedOrContext.kind !== 'fleet' && pinnedOrContext.kind !== 'chat' && shownFacet === 'activity' && (
               <ErrorBoundary variant="inline" label="Activity hit an error">
                 <ActivityFacet
                   // Keyed on the target so a switch starts a fresh read
@@ -1901,7 +1951,7 @@ export default function App() {
                 />
               </ErrorBoundary>
             )}
-            {!serverOpen && pinnedOrContext && pinnedOrContext.kind !== 'fleet' && shownFacet === 'settings' && (
+            {!serverOpen && pinnedOrContext && pinnedOrContext.kind !== 'fleet' && pinnedOrContext.kind !== 'chat' && shownFacet === 'settings' && (
               <ErrorBoundary variant="inline" label="Settings hit an error">
                 <SettingsFacet
                   target={pinnedOrContext}

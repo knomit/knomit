@@ -62,7 +62,23 @@ const (
 // DefaultMaxCalls is the runaway guard (plan P20): tool calls per user turn.
 const DefaultMaxCalls = 500
 
+// RepeatFailureLimit is how many times in a row, within one turn, the model
+// may make the same failing tool call (same tool, byte-identical arguments,
+// same error text) before the turn is ended. It is a policy, not a measurement.
+// The first failure is information and the second is a fair retry after
+// reading the error; a third identical failure shows the model is not acting
+// on what the tool said, and each further attempt only spends tokens and
+// repeats whatever the call does. Three is the smallest count that allows one
+// retry.
+const RepeatFailureLimit = 3
+
+// RepeatedFailureMessage is the sentence the user is shown when the turn
+// is ended by the repeat guard.
+const RepeatedFailureMessage = "The model kept making the same failing tool call (%s, %d times with the same error), so the turn was stopped. The last error was: %s"
+
 var (
+	// ErrRepeatedFailure: the model repeated one failing call RepeatFailureLimit times in a row.
+	ErrRepeatedFailure = errors.New("llm: the model repeated the same failing tool call")
 	// ErrTooManyCalls: the turn asked for more tool calls than Loop.MaxCalls.
 	ErrTooManyCalls = errors.New("llm: the turn exceeded its tool call limit")
 	// ErrCancelled: the caller's context ended the turn.
@@ -270,6 +286,7 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 	}
 	var runErr error
 	pauses := 0
+	guard := &repeatGuard{}
 
 	maxCalls := l.MaxCalls
 	if maxCalls <= 0 {
@@ -304,7 +321,11 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 				l.keepPartialText(streamed.String())
 				runErr = &turnError{msg: "The turn was cancelled.", err: ErrCancelled}
 			} else if errors.Is(err, ErrContextFull) {
-				runErr = &turnError{msg: contextFullMessage, err: err}
+				if caps := l.Model.Caps(); isOpening(snap) && caps.ContextWindow > 0 {
+					runErr = l.openingRefused(est, caps.ContextWindow, err)
+				} else {
+					runErr = &turnError{msg: contextFullMessage, err: err}
+				}
 			} else {
 				runErr = err
 			}
@@ -373,7 +394,7 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 			}
 			break
 		}
-		results, approvals, err := l.runCalls(ctx, calls, res, maxCalls)
+		results, approvals, err := l.runCalls(ctx, calls, res, maxCalls, guard)
 		if ferr := l.finishResults(results, approvals); ferr != nil {
 			runErr = ferr
 			break
@@ -391,7 +412,7 @@ const contextFullMessage = "This conversation no longer fits the model's context
 // runCalls answers every call in order and returns the tool_result blocks. It
 // stops early (still answering the rest) on cancellation, the call limit or a
 // gate failure, and returns the error that ended the turn.
-func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, maxCalls int) ([]Block, []Approval, error) {
+func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, maxCalls int, guard *repeatGuard) ([]Block, []Approval, error) {
 	var results []Block
 	var approvals []Approval
 	answer := func(c ToolUse, content string, isErr bool) {
@@ -422,6 +443,12 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 			msg := fmt.Sprintf("The arguments for %s are not valid JSON, so the call was not run. Received: %s", c.Name, c.RawArgs)
 			answer(c, msg, true)
 			l.logCall(c, msg, true)
+			// Malformed JSON repeated byte for byte is the same runaway as a
+			// failing call: keyed by the raw bytes and a fixed error.
+			if n := guard.observeKey(c.Name+"\x00"+string(c.RawArgs)+"\x00invalid JSON", true); n >= RepeatFailureLimit {
+				abort(i+1, SkippedResult)
+				return results, approvals, repeatedFailure(c.Name, n, "the arguments are not valid JSON")
+			}
 			continue
 		}
 
@@ -444,6 +471,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 				l.Log.Approval(ApprovalLog{CallID: c.ID, Tool: c.Name, Decision: kind})
 			}
 			if !d.Allow {
+				guard.reset() // a decline is new information: the model was told no
 				answer(c, DeclinedResult, true)
 				l.logCall(c, DeclinedResult, true)
 				continue
@@ -465,8 +493,58 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 		}
 		answer(c, out.Content, out.IsError)
 		l.logCall(c, out.Content, out.IsError)
+		if n := guard.observe(c, out); n >= RepeatFailureLimit {
+			// End the turn the way the call limit does: answer the rest of
+			// this reply's calls so every tool_use stays paired (settle then
+			// flushes the turn).
+			abort(i+1, SkippedResult)
+			return results, approvals, repeatedFailure(c.Name, n, truncateForMessage(out.Content, 300))
+		}
 	}
 	return results, approvals, nil
+}
+
+// repeatGuard counts consecutive identical failing calls within one turn.
+// Identity is the tool name, the byte-identical arguments and the error text.
+// Any success, a different call or a different error starts the count over.
+type repeatGuard struct {
+	key string
+	n   int
+}
+
+// observe records an executed call's outcome and returns the current streak.
+func (g *repeatGuard) observe(c ToolUse, out ToolOutcome) int {
+	return g.observeKey(c.Name+"\x00"+string(c.Args)+"\x00"+out.Content, out.IsError)
+}
+
+// observeKey counts key as the next identical failure, or resets on success.
+func (g *repeatGuard) observeKey(key string, isErr bool) int {
+	if !isErr {
+		g.reset()
+		return 0
+	}
+	if key == g.key {
+		g.n++
+	} else {
+		g.key, g.n = key, 1
+	}
+	return g.n
+}
+
+func (g *repeatGuard) reset() { g.key, g.n = "", 0 }
+
+func repeatedFailure(tool string, n int, lastErr string) error {
+	return &turnError{
+		msg: fmt.Sprintf(RepeatedFailureMessage, tool, n, lastErr),
+		err: ErrRepeatedFailure,
+	}
+}
+
+func truncateForMessage(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return strings.ToValidUTF8(s[:n], "") + "..."
 }
 
 func (l *Loop) logCall(c ToolUse, content string, isErr bool) {
@@ -606,6 +684,9 @@ func (l *Loop) checkBudget(snap Snapshot, est int) error {
 	}
 	reserve := replyReserve(caps)
 	if est+reserve > caps.ContextWindow {
+		if isOpening(snap) {
+			return l.openingTooBig(est, reserve, caps.ContextWindow)
+		}
 		return &turnError{
 			msg: fmt.Sprintf("%s (about %d prompt tokens plus %d reserved for the reply, window %d)",
 				contextFullMessage, est, reserve, caps.ContextWindow),
@@ -613,6 +694,60 @@ func (l *Loop) checkBudget(snap Snapshot, est int) error {
 		}
 	}
 	return nil
+}
+
+// OpeningTooBigMessage is shown when the very first request of a chat
+// (tool definitions, instructions and the first message, with nothing said
+// yet) does not fit the window. The arguments are the estimated opening size,
+// the window, the reply reserve and the room left after it.
+const OpeningTooBigMessage = "The opening of this chat (the tool definitions, the repo instructions and your message) needs about %d tokens, but the context window of %s is %d and %d of it is reserved for the reply, which leaves %d. Use a model with a larger window%s."
+
+// OllamaRaiseNumCtxHint is appended for an Ollama provider.
+const OllamaRaiseNumCtxHint = ", or raise num_ctx for this provider in knomit.toml"
+
+// isOpening reports whether snap is a chat's first request: nothing in the
+// conversation hook and only the first user entry in the turn hook.
+func isOpening(snap Snapshot) bool {
+	return len(snap.Hooks[HookConversation]) == 0 && len(snap.Hooks[HookTurn]) <= 1
+}
+
+// openingTooBig is the pre-send error for an opening whose estimate plus the
+// reply reserve exceeds the window. It names the sizes so the user knows what
+// to change; it never suggests a number, because the toolset's size varies
+// with the repos and the permissions.
+func (l *Loop) openingTooBig(est, reserve, window int) error {
+	hint := ""
+	if l.Model.Provider() == "ollama" {
+		hint = OllamaRaiseNumCtxHint
+	}
+	left := max(window-reserve, 0)
+	return &turnError{
+		msg: fmt.Sprintf(OpeningTooBigMessage, est, l.Model.Model(), window, reserve, left, hint),
+		err: ErrContextFull,
+	}
+}
+
+// OpeningRefusedByServerMessage is shown when the server refused an
+// opening that the local estimate says fits the window the model reports: the
+// estimate and the window are therefore not what the server enforces. The
+// arguments are the estimate, the model, the reported window and a hint.
+const OpeningRefusedByServerMessage = "The server refused the opening of this chat even though its estimated size (about %d tokens) fits the context window reported for %s (%d)%s."
+
+// OllamaServerContextHint is appended for an Ollama provider.
+const OllamaServerContextHint = ". The server's context (num_ctx) is likely smaller than the opening, so raise num_ctx for this provider in knomit.toml"
+
+// openingRefused is the error for an opening the adapter (the server) refused
+// with ErrContextFull although the local estimate fit. It makes no claim about
+// room left, because by the estimate there is room.
+func (l *Loop) openingRefused(est, window int, cause error) error {
+	hint := ""
+	if l.Model.Provider() == "ollama" {
+		hint = OllamaServerContextHint
+	}
+	return &turnError{
+		msg: fmt.Sprintf(OpeningRefusedByServerMessage, est, l.Model.Model(), window, hint),
+		err: cause,
+	}
 }
 
 func conversationItems(s Snapshot) []Item {
