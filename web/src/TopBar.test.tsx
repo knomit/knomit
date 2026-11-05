@@ -555,3 +555,15 @@ describe('TopBar — the rail toggle in the materialize view\'s Focus', () => {
     expect(onToggleRail).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('TopBar — a chat target', () => {
+  it('chat target shows only Chat and Settings tabs', () => {
+    render(bar({ facets: ['chat', 'settings'], facet: 'chat', label: { kind: 'chat', name: 'claude-test-x', chip: { text: 'anthropic', tone: 'neutral' } } }));
+    const tabs = within(screen.getByTestId('facet-tabs')).getAllByRole('tab');
+    expect(tabs.map(t => t.textContent)).toEqual(['Chat', 'Settings']);
+    expect(screen.queryByText('Browse')).toBeNull();
+    expect(screen.queryByText('Activity')).toBeNull();
+    expect(screen.getByTestId('facet-tab-chat')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('target-label')).toHaveTextContent('claude-test-x');
+  });
+});

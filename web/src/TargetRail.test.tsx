@@ -496,3 +496,55 @@ describe('TargetRail: the Fleet section', () => {
     expect(screen.queryByTestId('rail-fleet-health')).toBeNull();
   });
 });
+
+describe('TargetRail — chats', () => {
+  const chats = [
+    { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' },
+    { id: 'chat-b', provider: 'local', model: 'o1' },
+  ];
+
+  it('renders a Chats group beside repos and lenses', () => {
+    const onPin = vi.fn();
+    renderRail({ chats, chatsAvailable: true, onPin });
+    const group = screen.getByTestId('rail-chats');
+    expect(within(group).getAllByTestId(/^rail-chat-chat-/).map(r => r.getAttribute('data-testid'))).toEqual(['rail-chat-chat-a', 'rail-chat-chat-b']);
+    expect(within(group).getByTestId('rail-chat-chat-a')).toHaveTextContent('claude-test-x');
+    expect(within(group).getByTestId('rail-chat-chat-a')).toHaveTextContent('anthropic');
+    const order = ['rail-repos', 'rail-lenses', 'rail-chats'].map(id => screen.getByTestId(id));
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    fireEvent.click(screen.getByTestId('rail-chat-chat-b'));
+    expect(onPin).toHaveBeenCalledTimes(1);
+    expect(onPin).toHaveBeenCalledWith({ kind: 'chat', id: 'chat-b' });
+  });
+
+  it('marks the pinned chat as the selected row', () => {
+    renderRail({ chats, chatsAvailable: true, pinned: { kind: 'chat', id: 'chat-b' } });
+    expect(screen.getByTestId('rail-chat-chat-b')).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByTestId('rail-chat-chat-a')).not.toHaveAttribute('aria-current');
+  });
+
+  it('is absent when chat is not available (no provider, or a read-only server)', () => {
+    renderRail({ chats, chatsAvailable: false });
+    expect(screen.queryByTestId('rail-chats')).toBeNull();
+    expect(screen.queryByTestId('rail-new-chat')).toBeNull();
+  });
+
+  it('the + opens the chat draft, and a draft row appears when it exists', () => {
+    const onNewDraft = vi.fn();
+    const onPickDraft = vi.fn();
+    renderRail({ chats: [], chatsAvailable: true, onNewDraft, drafts: { repo: false, lens: false, chat: true }, draftShown: 'chat', onPickDraft });
+    fireEvent.click(screen.getByTestId('rail-new-chat'));
+    expect(onNewDraft).toHaveBeenCalledWith('chat');
+    expect(screen.getByTestId('rail-draft-chat')).toHaveTextContent('New chat');
+    expect(screen.getByTestId('rail-draft-chat')).toHaveAttribute('aria-current', 'true');
+    fireEvent.click(screen.getByTestId('rail-draft-chat'));
+    expect(onPickDraft).toHaveBeenCalledWith('chat');
+  });
+
+  it('the + is off on a locked rail', () => {
+    renderRail({ chats: [], chatsAvailable: true, locked: true });
+    expect(screen.getByTestId('rail-new-chat')).toBeDisabled();
+  });
+});

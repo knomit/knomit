@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { listChats } from './chatApi';
-import type { ChatInfo } from './chatApi';
+import { listChats, listChatProviders } from './chatApi';
+import type { ChatInfo, ChatProvider } from './chatApi';
 
 /**
  * useChats is GET /chats: the caller's live chats, which is the BACKING LIST of
@@ -10,6 +10,8 @@ import type { ChatInfo } from './chatApi';
  *
  * An add() or remove() made while a read is in flight survives that read's
  * answer: the answer was cut before it and does not know about it.
+ *
+ * The list is read again when the window regains focus.
  *
  * `loaded` is false until the first answer (or while `enabled` is false). A
  * caller must not unpin a chat because it is missing from a list that has not
@@ -27,23 +29,30 @@ export function useChats(enabled = true): {
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
-    const startedAt = rev.current;
-    listChats().then(list => {
-      if (cancelled) return;
-      const gone = (id: string) => (removed.current.get(id) ?? -1) > startedAt;
-      setChats(prev => {
-        const out = list.filter(c => !gone(c.id));
-        for (const c of prev) {
-          if ((added.current.get(c.id) ?? -1) > startedAt && !out.some(o => o.id === c.id)) out.push(c);
-        }
-        return out;
+    const load = () => {
+      const startedAt = rev.current;
+      listChats().then(list => {
+        if (cancelled) return;
+        const gone = (id: string) => (removed.current.get(id) ?? -1) > startedAt;
+        setChats(prev => {
+          const out = list.filter(c => !gone(c.id));
+          for (const c of prev) {
+            if ((added.current.get(c.id) ?? -1) > startedAt && !out.some(o => o.id === c.id)) out.push(c);
+          }
+          return out;
+        });
+        setLoaded(true);
+      }).catch(() => {
+        // An unreadable list leaves it as it was. Never loaded, so nothing is
+        // unpinned on its account.
       });
-      setLoaded(true);
-    }).catch(() => {
-      // An unreadable list leaves it empty: a rail with no Chats rows. Not
-      // loaded, so nothing is unpinned on its account.
-    });
-    return () => { cancelled = true; };
+    };
+    load();
+    // Back to this tab: a chat may have ended while it was away (the server
+    // ends one nobody is attached to), so the list is read again.
+    const onFocus = () => load();
+    window.addEventListener('focus', onFocus);
+    return () => { cancelled = true; window.removeEventListener('focus', onFocus); };
   }, [enabled]);
 
   const add = useCallback((c: ChatInfo) => {
@@ -59,4 +68,20 @@ export function useChats(enabled = true): {
     setChats(prev => (prev.some(p => p.id === id) ? prev.filter(p => p.id !== id) : prev));
   }, []);
   return { chats, loaded, add, remove };
+}
+
+/**
+ * useChatProviders is GET /chat-providers: null until it answers (or when it
+ * cannot be read), else the configured providers. The rail shows the Chats
+ * group only when there is at least one.
+ */
+export function useChatProviders(enabled = true): ChatProvider[] | null {
+  const [providers, setProviders] = useState<ChatProvider[] | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    listChatProviders().then(p => { if (!cancelled) setProviders(p); }).catch(() => { /* no chat here */ });
+    return () => { cancelled = true; };
+  }, [enabled]);
+  return providers;
 }

@@ -36,6 +36,19 @@ describe('useChats', () => {
     expect(result.current.chats.map(c => c.id).sort()).toEqual(['chat-a', 'chat-b']);
   });
 
+  it('reads the list again on window focus: a chat the server dropped leaves, one it gained joins', async () => {
+    let body = listBody(A, B);
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => body.clone());
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useChats());
+    await waitFor(() => expect(result.current.chats.map(c => c.id)).toEqual(['chat-a', 'chat-b']));
+
+    body = listBody(B, { id: 'chat-c', provider: 'local', model: 'o2' });
+    act(() => { window.dispatchEvent(new Event('focus')); });
+    await waitFor(() => expect(result.current.chats.map(c => c.id)).toEqual(['chat-b', 'chat-c']));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('does not fetch when disabled, and is not loaded', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

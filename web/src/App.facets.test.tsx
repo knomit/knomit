@@ -4,6 +4,7 @@ import App from './App';
 import { installFakeEventSource, uninstallFakeEventSource, streamsMatching, latestStream } from './testEventSource';
 import { __resetRepoCreatesForTest } from './useRepoCreates';
 import { SUBSCRIPTION_TITLE } from './state';
+import { stubFleetFetch } from './fleetTestFetch';
 
 // The facets of a target: Browse, Activity and Settings, as tabs in the top
 // bar. facetsFor decides which exist; the facet is remembered under
@@ -1238,5 +1239,77 @@ describe('browsing a subscription on a writable instance', () => {
     expect(screen.getByTestId('rail-new-lens')).toBeEnabled();
     await act(async () => { fireEvent.click(screen.getByTestId('server-toggle')); });
     expect(await screen.findByTestId('server-tab-logs')).toBeInTheDocument();
+  });
+});
+
+// A chat is a pinned target whose backing list is GET /chats (useChats). The
+// pin-backing-list invariant: it is in that list no later than the render that
+// pins it, or the auto-unpin effect drops it at once.
+describe('a chat target', () => {
+  beforeEach(() => { localStorage.setItem('knomit.rail', '1'); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  const PROVIDERS = { _embedded: { providers: [{ name: 'anthropic', kind: 'anthropic', models: [{ id: 'a1', available: true, tools: true }] }] } };
+  const CHAT_A = { id: 'chat-a', provider: 'anthropic', model: 'a1' };
+
+  function chatRoutes(initial: unknown[] = []) {
+    const server = { chats: initial as unknown[] };
+    const fx = stubFleetFetch({
+      'GET /api/v1/chat-providers': { body: PROVIDERS },
+      'GET /api/v1/chats': () => ({ body: { _embedded: { chats: server.chats } } }),
+      'POST /api/v1/chats': () => { server.chats = [CHAT_A]; return { status: 201, body: CHAT_A }; },
+      'GET /api/v1/chats/chat-a': { body: { ...CHAT_A, running: false, items: [], pending_approvals: [], grants: [] } },
+    });
+    return { fx, server };
+  }
+  const createChatThroughTheForm = async () => {
+    fireEvent.click(await screen.findByTestId('rail-new-chat'));
+    expect(screen.getByTestId('target-label')).toHaveTextContent('New chat');
+    fireEvent.click(await screen.findByTestId('chat-model-anthropic-a1'));
+    await waitFor(() => expect(screen.getByTestId('rail-chat-chat-a')).toHaveAttribute('aria-current', 'true'));
+  };
+
+  it('a chat pinned in the same render it is added is not auto-unpinned', async () => {
+    await primeApi();
+    const { fx } = chatRoutes();
+    await mountApp();
+    await createChatThroughTheForm();
+    expect(tabNames()).toEqual(['Chat', 'Settings']);
+    expect(screen.getByTestId('target-label')).toHaveTextContent('a1');
+    // Let every effect run: a pin without its row would be dropped by now.
+    await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+    expect(screen.getByTestId('rail-chat-chat-a')).toHaveAttribute('aria-current', 'true');
+    expect(tabNames()).toEqual(['Chat', 'Settings']);
+    // The row came from add(), not from a re-read of the list.
+    expect(fx.calls.filter(c => c.route === 'POST /api/v1/chats')).toHaveLength(1);
+    expect(fx.calls.filter(c => c.route === 'GET /api/v1/chats')).toHaveLength(1);
+  });
+
+  it('a pinned chat that leaves the list is unpinned: the view returns to the browse context', async () => {
+    await primeApi();
+    const { server } = chatRoutes();
+    await mountApp();
+    await createChatThroughTheForm();
+
+    server.chats = [];
+    act(() => { window.dispatchEvent(new Event('focus')); });
+    await waitFor(() => expect(screen.queryByTestId('rail-chat-chat-a')).toBeNull());
+    expect(screen.getByTestId('target-label').textContent).toBe('ops-kb');
+    expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']);
+  });
+
+  it('picking a chat from the rail pins it with Chat and Settings; a repo row leaves it, on Browse', async () => {
+    await primeApi();
+    chatRoutes([CHAT_A]);
+    await mountApp();
+    fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+    await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
+    expect(screen.getByTestId('facet-tab-chat')).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.click(screen.getByTestId('rail-repo-core-kb'));
+    await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+    expect(screen.getByTestId('facet-tab-browse')).toHaveAttribute('aria-selected', 'true');
+    // The chat is still in the rail: leaving it does not end it.
+    expect(screen.getByTestId('rail-chat-chat-a')).toBeInTheDocument();
   });
 });

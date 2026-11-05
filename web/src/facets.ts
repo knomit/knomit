@@ -16,6 +16,7 @@ import type { Dispatch } from 'react';
 import { loadRailOpen, saveRailOpen, loadLastFacet, saveLastFacet } from './repoSelection';
 import { repoAvailable, brokenLensMember } from './api';
 import type { RepoInfo, Lens, RepoCreateStatus, ArchivedRepo, FleetStatus } from './api';
+import type { ChatInfo } from './chatApi';
 import type { BrowseContext } from './state';
 import { activeCreateByRepo, createFlag } from './useRepoCreates';
 
@@ -34,7 +35,7 @@ export function otherRepoFailing(repos: RepoInfo[], current: string): boolean {
 
 /** A page of a target. Code joins this only if the terminal ships. The
  *  fleet target's first page is Members (its Browse); no other target has it. */
-export type Facet = 'browse' | 'activity' | 'settings' | 'members';
+export type Facet = 'browse' | 'activity' | 'settings' | 'members' | 'chat';
 
 /**
  * A target that can NOT be the browse context, because it has no store to read:
@@ -59,9 +60,13 @@ export type PinnedTarget =
   /** The fleet this instance is in: a target of its own (Members, Activity,
    *  Settings), shown over the context like every other pinned target,
    *  because it reads the fleet routes, never the browse context's store. */
-  | { kind: 'fleet' };
+  | { kind: 'fleet' }
+  /** A live chat. Its backing list is GET /chats (useChats): it must be in
+   *  that list no later than the render that pins it, or App's auto-unpin
+   *  effect drops it at once. It ends with the chat, and leaves the list. */
+  | { kind: 'chat'; id: string };
 
-export type DraftKind = 'repo' | 'lens' | 'fleet';
+export type DraftKind = 'repo' | 'lens' | 'fleet' | 'chat';
 
 /** A server page behind the gear. Not a target: nothing on it belongs to a
  *  repository, a lens or the fleet. */
@@ -78,6 +83,8 @@ export interface ReturnTo { context: BrowseContext; pinned: PinnedTarget | null;
 const ALL_FACETS: Facet[] = ['browse', 'activity', 'settings'];
 /** The fleet target's tabs, in order: Members is its Browse. */
 export const FLEET_FACETS: Facet[] = ['members', 'activity', 'settings'];
+/** A chat target's tabs, in order. Settings shows what the chat has authorized. */
+export const CHAT_FACETS: Facet[] = ['chat', 'settings'];
 
 /**
  * facetsFor is the SINGLE authority on which facets (tabs) a target has. The
@@ -96,6 +103,8 @@ export const FLEET_FACETS: Facet[] = ['members', 'activity', 'settings'];
  * - A pinned target (archived, a create not yet registered, a registered repo
  *   with no store, a lens with a mount that has no store): Settings only. There is no store to browse and nobody
  *   bound to it.
+ * - A chat: Chat and Settings. It has no store to browse and no sessions
+ *   page of its own; the Sessions tab lists it under the target it binds.
  * - A draft: nothing. It is a form, not a thing with pages.
  *
  * A listed repo with no store as the CONTEXT (which only a stale persisted
@@ -107,6 +116,7 @@ export const FLEET_FACETS: Facet[] = ['members', 'activity', 'settings'];
 export function facetsFor(target: Target, repos: RepoInfo[], lenses: Lens[], creates: RepoCreateStatus[]): Facet[] {
   if (target.kind === 'draft') return [];
   if (target.kind === 'fleet') return FLEET_FACETS;
+  if (target.kind === 'chat') return CHAT_FACETS;
   if (target.kind === 'archived' || target.kind === 'pending' || target.kind === 'unavailable'
     || target.kind === 'brokenLens') return ['settings'];
   if (target.kind === 'repo') {
@@ -221,6 +231,8 @@ function applyFacetRule(s: ViewState, available: Facet[]): ViewState {
  *  first tab, Browse when it has one. */
 function landingFacet(current: Facet, available: Facet[]): Facet {
   if (available[0] === 'members') return 'members';
+  if (available[0] === 'chat') return 'chat';
+  if (current === 'chat' && available.includes('browse')) return 'browse';
   if (current === 'members' && available.includes('browse')) return 'browse';
   return 'settings';
 }
@@ -375,7 +387,7 @@ export function displayedTarget(view: ViewState, context: BrowseContext, noRepos
  *  icon and colour), its name, and for a target with only Settings the state
  *  chip that explains why. A draft is labelled by what it will create. */
 export interface TargetLabel {
-  kind: 'repo' | 'lens' | 'fleet';
+  kind: 'repo' | 'lens' | 'fleet' | 'chat';
   name: string;
   chip?: { text: string; tone: 'archived' | 'bad' | 'creating' | 'fleet' | 'neutral' | 'pending' };
   draft?: boolean;
@@ -394,7 +406,7 @@ export function fleetChip(fleet: Pick<FleetStatus, 'master' | 'record_state' | '
 }
 
 /** What a draft is called in the rail, the crumb and its index heading. */
-export const DRAFT_NAME: Record<DraftKind, string> = { repo: 'New repository', lens: 'New lens', fleet: 'New fleet' };
+export const DRAFT_NAME: Record<DraftKind, string> = { repo: 'New repository', lens: 'New lens', fleet: 'New fleet', chat: 'New chat' };
 
 /** The chip word for a repo with no store: "store missing" for the common
  *  case, the state's own word otherwise (RepoStateChip's wording). */
@@ -404,13 +416,18 @@ function unavailableWord(state: string | undefined): string {
 
 export function targetLabelFor(
   target: Target, repos: RepoInfo[], archived: ArchivedRepo[], creates: RepoCreateStatus[],
-  fleet: FleetStatus | null = null,
+  fleet: FleetStatus | null = null, chats: ChatInfo[] = [],
 ): TargetLabel {
   switch (target.kind) {
     case 'draft':
       return { kind: target.draft, name: DRAFT_NAME[target.draft], draft: true };
     case 'fleet':
       return { kind: 'fleet', name: fleet?.fleet_repo || 'fleet', chip: fleetChip(fleet) };
+    case 'chat': {
+      // A chat is named by its model, with its provider as the chip.
+      const chat = chats.find(c => c.id === target.id);
+      return { kind: 'chat', name: chat?.model ?? '', ...(chat ? { chip: { text: chat.provider, tone: 'neutral' as const } } : {}) };
+    }
     case 'archived':
       return { kind: 'repo', name: archived.find(a => a.id === target.id)?.name ?? '', chip: { text: 'archived', tone: 'archived' } };
     case 'unavailable':
@@ -443,6 +460,6 @@ export function useViewState(): [ViewState, Dispatch<ViewAction>] {
   useEffect(() => { saveRailOpen(view.railOpen); }, [view.railOpen]);
   // Members is the fleet's, and the fleet is never remembered across a
   // reload (a pinned target), so it is not stored either.
-  useEffect(() => { if (view.facet !== 'members') saveLastFacet(view.facet); }, [view.facet]);
+  useEffect(() => { if (view.facet !== 'members' && view.facet !== 'chat') saveLastFacet(view.facet); }, [view.facet]);
   return [view, dispatch];
 }
