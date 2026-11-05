@@ -274,6 +274,14 @@ func (s *Service) SetOntologyRoot(root string) { s.rh.SetFactRoot(strings.Trim(r
 // mutated afterwards, which is why the bool needs no lock.
 func (s *Service) SetReadOnly(ro bool) { s.rh.SetReadOnly(ro) }
 
+// SetOntologyUnusable makes every FACT write on this store fail with
+// facts.ErrOntologyUnusable while err is non-nil (nil lifts it): the repo's
+// ontology cannot be used, so no fact may be written with its validations
+// skipped, by any in-process writer. Writes that touch no fact pass. It does
+// not survive store.Open; the repo re-applies it at every Identify and live
+// reload (repos.RepoInstance.setIdentity).
+func (s *Service) SetOntologyUnusable(err error) { s.rh.SetOntologyUnusable(err) }
+
 // Remote returns the remotesync index for git remote configuration and sync,
 // the origin and the consensus-branch record.
 func (s *Service) Remote() *remotesync.Index { return s.ri }

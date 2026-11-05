@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,18 +11,19 @@ import (
 
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 	"knomit/internal/engine/store/storetest"
 )
 
 // GET /repos/{name} names the ontology file in force (#429: ontology changes
 // that arrive through git are applied live, so "which ontology" is no longer
 // "the one at the last mount"): its commit, rung and blob. A changed ontology
-// on the read branch replaces it with no restart; an unusable one is not
-// applied, and both the single GET (ontology.reload_error) and the list row
-// (ontology_reload_error) say why.
+// on the read branch replaces it with no restart; an unusable one makes the
+// repo unwritable (ontology.usable false, ontology.error, the list row's
+// ontology_error) and an in-process write fails; the fix restores it.
 //
 // Sabotage: drop the `ontology` block from repoView → red at the first check;
-// drop OntologyReloadError from summaryFor → red at the list check.
+// keep the old ontology on an unusable file → usable never turns false → red.
 func TestGetRepo_OntologyStatusFollowsTheReadBranch(t *testing.T) {
 	const agentBranch = "machine/test"
 	s := &Server{Manager: newRealManager(t)}
@@ -78,21 +80,43 @@ func TestGetRepo_OntologyStatusFollowsTheReadBranch(t *testing.T) {
 		t.Fatalf("zeta not writable after the live reload: %v", err)
 	}
 
-	// An unparseable one: the old stays in force, and status says why.
+	// An unparseable one (#429 decision 1): the repo is UNWRITABLE, and both
+	// the single GET and the list row say why.
 	write("topics: [::\n", "garble")
-	waitFor(t, func() bool { _, ok := ontologyOf()["reload_error"]; return ok }, "a reload error")
+	waitFor(t, func() bool { return ontologyOf()["usable"] == false }, "the repo to turn unwritable")
+	_, blob2 := blobAt()
 	o = ontologyOf()
-	if o["blob"] != blob1 || !strings.Contains(o["reload_error"].(string), "does not parse") {
-		t.Fatalf("ontology = %v, want blob %s in force and a parse reload_error", o, blob1)
+	if o["blob"] != blob2 || !strings.Contains(o["error"].(string), "does not parse") {
+		t.Fatalf("ontology = %v, want the garbled blob %s named and a parse error", o, blob2)
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos", nil))
 	row := repoRow(t, rec.Body.Bytes(), "live")
-	if got, _ := row["ontology_reload_error"].(string); !strings.Contains(got, "does not parse") {
-		t.Fatalf("list row ontology_reload_error = %q", got)
+	if got, _ := row["ontology_error"].(string); !strings.Contains(got, "does not parse") {
+		t.Fatalf("list row ontology_error = %q, want the parse error", got)
 	}
-	if _, ok := row["ontology_error"]; ok {
-		t.Fatalf("the repo still has an ontology in force; ontology_error must stay absent: %v", row)
+	if ri.WritableBranch(agentBranch) {
+		t.Fatalf("an unusable consensus ontology must make the repo unwritable")
+	}
+	var werr error
+	if err := ri.WithRead(func(svc *store.Service) {
+		_, werr = svc.Facts().WriteFact(context.Background(), agentBranch, "kb/zeta/a/b.md",
+			"---\ntype: observation\nconfidence: 0.5\n---\n# T\n\nbody\n", "w", "learn")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(werr, facts.ErrOntologyUnusable) {
+		t.Fatalf("an in-process fact write = %v, want ErrOntologyUnusable (no fact is written unjudged)", werr)
+	}
+
+	// Consensus fixes it: usable and writable again, no restart.
+	write(changed, "fix")
+	waitFor(t, func() bool { return ontologyOf()["usable"] == true }, "the repo to turn writable again")
+	if !ri.WritableBranch(agentBranch) {
+		t.Fatalf("the fixed ontology must make the repo writable again")
+	}
+	if _, ok := ontologyOf()["error"]; ok {
+		t.Fatalf("a usable ontology carries no error: %v", ontologyOf())
 	}
 }
 

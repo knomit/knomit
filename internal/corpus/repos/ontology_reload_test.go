@@ -3,10 +3,11 @@ package repos
 // knomit/knomit#429: an ontology change that arrives through git is applied
 // live, after the sync round that brings it, with no restart. The rule
 // (reloadOntology, stages.go): consensus is honoured IN FULL — added and
-// removed topics, every attribute — and only an ontology that cannot be used
-// at all (missing, empty, unparseable, a symlink, or the reserved fleet id on
-// a repo that is not the fleet repository) is not applied; then the ontology
-// in force stays, and the repo's status says why.
+// removed topics, every attribute. An ontology that cannot be used at all
+// (missing, empty, unparseable, a symlink) makes the repo UNWRITABLE until
+// consensus fixes it (decision 1); the reserved fleet id on a repo that is
+// not the fleet repository makes it UNAVAILABLE, fleet_conflict (decision
+// 2). A read error is neither: it changes nothing and is retried.
 //
 // Real transport, real rounds: a bare origin advanced with git itself
 // (ghOrigin, conflicts_matrix_test.go), one instance cloning it, and
@@ -27,6 +28,7 @@ import (
 
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
+	"knomit/internal/engine/store/facts"
 )
 
 const reloadBase = `id: live
@@ -46,6 +48,9 @@ func (o *ghOrigin) commit(t *testing.T, msg string, files map[string]string) {
 	runGit(t, o.work, "checkout", "-B", o.branch, "origin/"+o.branch)
 	for p, content := range files {
 		require.NoError(t, os.MkdirAll(filepath.Join(o.work, filepath.Dir(p)), 0o755))
+		// Removed first, so a path that is a symlink is REPLACED by a file
+		// rather than written through.
+		_ = os.Remove(filepath.Join(o.work, p))
 		require.NoError(t, os.WriteFile(filepath.Join(o.work, p), []byte(content), 0o644))
 	}
 	runGit(t, o.work, "add", "-A")
@@ -97,7 +102,7 @@ func TestOntologyReload_AddedTopicIsWritableAfterSync(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, blob, st.Blob, "status names the blob in force: the synced one")
 	require.Equal(t, OntologyPath, st.Path)
-	require.Empty(t, st.ReloadError)
+	require.Empty(t, st.Error)
 }
 
 // A REMOVED topic is refused after the sync: consensus is honoured in full,
@@ -131,92 +136,6 @@ func TestOntologyReload_ChangedAttributesAreHonoured(t *testing.T) {
 
 	require.True(t, g.ri.Ontology().LearnDedupOff("alpha"), "learn_dedup: off is in force")
 	require.Equal(t, "log", g.ri.Ontology().Attributes[fact.AttrVerifySignatures], "verify_signatures arrives by consensus and is in force")
-}
-
-// An UNPARSEABLE ontology at the new tip keeps the ontology in force, keeps
-// the repo writable, and reports the error in status; a later usable one is
-// applied and clears it.
-func TestOntologyReload_UnparseableKeepsTheOldAndReports(t *testing.T) {
-	t.Parallel()
-	o, g := newReloadFixture(t)
-	before := g.ri.Ontology()
-	st0, _ := g.ri.OntologyStatus()
-
-	o.commit(t, "break it", map[string]string{OntologyPath: "topics: [::\n"})
-	syncRound(t, g)
-
-	require.Same(t, before, g.ri.Ontology(), "an unusable ontology is not applied")
-	require.True(t, g.ri.WritableBranch(g.branch), "the repo stays writable on the ontology in force")
-	tipCommit, tipBlob := readTipBlob(t, g.ri)
-	st, ok := g.ri.OntologyStatus()
-	require.True(t, ok)
-	require.Equal(t, st0.Blob, st.Blob, "status still names the blob in force")
-	require.Contains(t, st.ReloadError, "does not parse")
-	require.Equal(t, tipCommit, st.ReloadCommit)
-	require.Equal(t, tipBlob, st.ReloadBlob)
-
-	// Another round on the same broken blob changes nothing.
-	syncRound(t, g)
-	require.Same(t, before, g.ri.Ontology())
-
-	o.commit(t, "fix it", map[string]string{OntologyPath: reloadBase + "  gamma:\n    description: gamma\n"})
-	syncRound(t, g)
-	require.NoError(t, placementOK(g.ri, "gamma"))
-	st, _ = g.ri.OntologyStatus()
-	require.Empty(t, st.ReloadError, "the fixed ontology is in force and the error is gone")
-}
-
-// An EMPTY ontology at the tip is unusable too.
-func TestOntologyReload_EmptyKeepsTheOld(t *testing.T) {
-	t.Parallel()
-	o, g := newReloadFixture(t)
-	before := g.ri.Ontology()
-	o.commit(t, "empty it", map[string]string{OntologyPath: ""})
-	syncRound(t, g)
-	require.Same(t, before, g.ri.Ontology())
-	st, _ := g.ri.OntologyStatus()
-	require.Contains(t, st.ReloadError, "is empty")
-}
-
-// A SYMLINKED ontology arriving by sync keeps the ontology in force and is
-// reported; the running repo is not turned Unavailable (its next mount
-// refuses it, as Identify always has).
-func TestOntologyReload_SymlinkKeepsTheOldAndReports(t *testing.T) {
-	t.Parallel()
-	o, g := newReloadFixture(t)
-	before := g.ri.Ontology()
-	runGit(t, o.work, "fetch", "origin")
-	runGit(t, o.work, "checkout", "-B", o.branch, "origin/"+o.branch)
-	require.NoError(t, os.WriteFile(filepath.Join(o.work, "other.yaml"), []byte(reloadBase), 0o644))
-	p := filepath.Join(o.work, OntologyPath)
-	require.NoError(t, os.Remove(p))
-	require.NoError(t, os.Symlink("../other.yaml", p))
-	runGit(t, o.work, "add", "-A")
-	runGit(t, o.work, "commit", "-m", "symlink it")
-	runGit(t, o.work, "push", "origin", o.branch)
-	syncRound(t, g)
-
-	require.Same(t, before, g.ri.Ontology())
-	require.True(t, g.ri.WritableBranch(g.branch))
-	st, _ := g.ri.OntologyStatus()
-	require.Contains(t, st.ReloadError, "symlink")
-	require.Equal(t, OntologyPath, st.ReloadPath)
-}
-
-// The reserved fleet id arriving on a repo that is not the fleet repository
-// is not applied: it would make the repo IsFleet and hand it to the fleet
-// code. It is reported like an unusable file.
-func TestOntologyReload_FleetIDOnANonFleetRepoIsNotApplied(t *testing.T) {
-	t.Parallel()
-	o, g := newReloadFixture(t)
-	before := g.ri.Ontology()
-	o.commit(t, "become the fleet", map[string]string{OntologyPath: "id: fleet\nname: Fleet\ntopics:\n  alpha:\n    description: alpha\n"})
-	syncRound(t, g)
-
-	require.Same(t, before, g.ri.Ontology())
-	require.False(t, g.ri.IsFleet())
-	st, _ := g.ri.OntologyStatus()
-	require.Contains(t, st.ReloadError, ErrFleetOntologyReserved.Error())
 }
 
 // An UNCHANGED ontology blob does no re-parse: a round that brings other
@@ -328,7 +247,8 @@ func TestOntologyReload_TransientReadErrorRetriesAndApplies(t *testing.T) {
 	syncRound(t, g)
 	require.Same(t, before, g.ri.Ontology(), "an unreadable file is not applied")
 	st, _ := g.ri.OntologyStatus()
-	require.Empty(t, st.ReloadError, "a read error is not a verdict on the file and is not reported as one")
+	require.Empty(t, st.Error, "a read error is not a verdict on the file and is not reported as one")
+	require.True(t, g.ri.WritableBranch(g.branch), "a read error never makes a working repo unwritable")
 	require.NoError(t, g.ri.OntologyError())
 
 	countReads(g, 0)
@@ -361,37 +281,144 @@ func TestOntologyReload_TransientReadErrorOnARepoWithNoOntology(t *testing.T) {
 	require.True(t, g.ri.WritableBranch(g.branch))
 }
 
-// The tip REVERTING to the file in force clears the reported reload error.
-// SABOTAGE: drop the clear in reloadOntology's sameFile(cur.src) branch → the
-// error stays → red.
-func TestOntologyReload_RevertToTheFileInForceClearsTheError(t *testing.T) {
+// remove deletes path on the origin's consensus branch.
+func (o *ghOrigin) remove(t *testing.T, msg, path string) {
+	t.Helper()
+	runGit(t, o.work, "fetch", "origin")
+	runGit(t, o.work, "checkout", "-B", o.branch, "origin/"+o.branch)
+	runGit(t, o.work, "rm", "-q", path)
+	runGit(t, o.work, "commit", "-m", msg)
+	runGit(t, o.work, "push", "origin", o.branch)
+}
+
+// symlink replaces path on the origin's consensus branch with a symlink to a
+// file whose TEXT is itself a usable ontology, so a reader that followed it
+// would apply it.
+func (o *ghOrigin) symlink(t *testing.T, path string) {
+	t.Helper()
+	runGit(t, o.work, "fetch", "origin")
+	runGit(t, o.work, "checkout", "-B", o.branch, "origin/"+o.branch)
+	require.NoError(t, os.WriteFile(filepath.Join(o.work, "other.yaml"), []byte(reloadBase), 0o644))
+	p := filepath.Join(o.work, path)
+	require.NoError(t, os.Remove(p))
+	require.NoError(t, os.Symlink("../other.yaml", p))
+	runGit(t, o.work, "add", "-A")
+	runGit(t, o.work, "commit", "-m", "symlink it")
+	runGit(t, o.work, "push", "origin", o.branch)
+}
+
+// writeFactAttempt is an in-process fact write straight through the store,
+// below every authored-write gate: the review pipeline, a trigger and the
+// fleet code write this way.
+func writeFactAttempt(t *testing.T, g *ghInstance, n string) error {
+	t.Helper()
+	_, err := testService(t, g.ri).Facts().WriteFact(context.Background(), g.branch, "kb/alpha/x/"+n+".md",
+		cmBody(t, "a fact "+n, 0.7), "write "+n, "learn")
+	return err
+}
+
+// UNUSABLE CONSENSUS ONTOLOGY -> UNWRITABLE, and back (user decision 1).
+// Every kind readOntology refuses — missing at every rung, an empty first
+// rung, a fatal parse error, a symlink — makes the running repo unwritable
+// at the round that brings it: no ontology in force, WritableBranch false,
+// an in-process store write refused (no fact written unjudged), status
+// reporting the reason. When consensus fixes the file, the next round makes
+// it writable again under the NEW ontology, no restart.
+//
+// SABOTAGE: keep the old ontology on an unusable file (the PR's first
+// behaviour) → Ontology not nil, writable → red; drop setIdentity's store
+// gate → the store write lands for "missing" → red.
+func TestOntologyReload_UnusableMakesTheRepoUnwritableUntilFixed(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name  string
+		brk   func(t *testing.T, o *ghOrigin)
+		error string
+	}{
+		{"missing", func(t *testing.T, o *ghOrigin) { o.remove(t, "drop the ontology", OntologyPath) }, "no ontology at"},
+		{"empty", func(t *testing.T, o *ghOrigin) { o.commit(t, "empty it", map[string]string{OntologyPath: ""}) }, "is empty"},
+		{"unparseable", func(t *testing.T, o *ghOrigin) {
+			o.commit(t, "garble it", map[string]string{OntologyPath: "topics: [::\n"})
+		}, "does not parse"},
+		{"symlink", func(t *testing.T, o *ghOrigin) { o.symlink(t, OntologyPath) }, "symlink"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			o, g := newReloadFixture(t)
+			// Not for the symlink: a local commit would make the round a
+			// real MERGE of main into the agent branch, and the store's merge
+			// writes a symlink back as a regular file holding the link text
+			// (a separate, pre-existing bug, reported on the PR); a
+			// fast-forward keeps the mode.
+			if c.name != "symlink" {
+				require.NoError(t, writeFactAttempt(t, g, "before"), "a usable ontology: the write lands")
+			}
+
+			c.brk(t, o)
+			syncRound(t, g)
+
+			require.Nil(t, g.ri.Ontology(), "the old ontology is NOT kept in force")
+			require.ErrorContains(t, g.ri.OntologyError(), c.error)
+			require.False(t, g.ri.WritableBranch(g.branch), "every authored write is refused")
+			require.ErrorIs(t, writeFactAttempt(t, g, "during"), facts.ErrOntologyUnusable,
+				"an in-process write is refused too: no fact is written with its validations skipped")
+			st, ok := g.ri.OntologyStatus()
+			require.True(t, ok)
+			require.Contains(t, st.Error, c.error, "status reports the repo unwritable and why")
+			tipCommit, _ := readTipBlobAllowingErrors(t, g.ri)
+			require.Equal(t, tipCommit, st.Commit, "status names the commit judged")
+
+			o.commit(t, "fix it", map[string]string{OntologyPath: reloadBase + "  gamma:\n    description: gamma\n"})
+			syncRound(t, g)
+
+			require.NoError(t, g.ri.OntologyError())
+			require.True(t, g.ri.WritableBranch(g.branch), "the fix arrives: writable again, no restart")
+			require.NoError(t, placementOK(g.ri, "gamma"), "under the NEW ontology")
+			require.NoError(t, writeFactAttempt(t, g, "after"))
+			st, _ = g.ri.OntologyStatus()
+			require.Empty(t, st.Error)
+		})
+	}
+}
+
+// readTipBlobAllowingErrors is readTipBlob for a tip whose ontology may be a
+// symlink (OntologyBlobAt returns the commit with the error).
+func readTipBlobAllowingErrors(t *testing.T, ri *RepoInstance) (commit, blob string) {
+	t.Helper()
+	c, _, b, _ := testService(t, ri).OntologyBlobAt(context.Background(), ri.ReadBranch())
+	return c, b
+}
+
+// Reverting to the very file that was in force before the break is a fix
+// like any other: its blob differs from the unusable one the repo's state
+// now names, so it is read and applied.
+func TestOntologyReload_RevertingTheBreakRestoresWritability(t *testing.T) {
 	t.Parallel()
 	o, g := newReloadFixture(t)
-	before := g.ri.Ontology()
+	st0, _ := g.ri.OntologyStatus()
 	o.commit(t, "break it", map[string]string{OntologyPath: "topics: [::\n"})
 	syncRound(t, g)
-	st, _ := g.ri.OntologyStatus()
-	require.NotEmpty(t, st.ReloadError)
+	require.False(t, g.ri.WritableBranch(g.branch))
 
 	o.commit(t, "revert", map[string]string{OntologyPath: reloadBase})
 	syncRound(t, g)
-	st, _ = g.ri.OntologyStatus()
-	require.Empty(t, st.ReloadError, "the tip holds the file in force again: nothing is refused")
-	require.Empty(t, st.ReloadCommit)
-	require.Same(t, before, g.ri.Ontology(), "the same blob: kept, not re-parsed")
+	require.True(t, g.ri.WritableBranch(g.branch))
+	st, _ := g.ri.OntologyStatus()
+	require.Equal(t, st0.Blob, st.Blob, "the original blob is in force again")
+	require.Empty(t, st.Error)
 }
 
-// A blob already refused is not read again on later triggers. SABOTAGE: drop
-// the refused-blob skip (cur.reloadSrc) → the second round reads and parses
-// it again → red.
-func TestOntologyReload_RefusedBlobIsNotReadAgain(t *testing.T) {
+// An unusable blob already judged is not read again on later triggers: the
+// repo's state names it (src), and the blob comparison skips it. SABOTAGE:
+// record an unusable file without its src (identity{ontologyErr: err}) → the
+// next round reads it again → red.
+func TestOntologyReload_UnusableBlobIsNotReadAgain(t *testing.T) {
 	t.Parallel()
 	o, g := newReloadFixture(t)
 	o.commit(t, "break it", map[string]string{OntologyPath: "topics: [::\n"})
 	reads := countReads(g, 0)
 	syncRound(t, g)
-	st, _ := g.ri.OntologyStatus()
-	require.NotEmpty(t, st.ReloadError)
+	require.Error(t, g.ri.OntologyError())
 	afterFirst := reads.Load()
 	require.GreaterOrEqual(t, afterFirst, int32(1))
 	id := g.ri.ident.Load()
@@ -399,8 +426,49 @@ func TestOntologyReload_RefusedBlobIsNotReadAgain(t *testing.T) {
 	o.commit(t, "unrelated", map[string]string{"notes.txt": "hello\n"})
 	syncRound(t, g)
 	syncRound(t, g)
-	require.Equal(t, afterFirst, reads.Load(), "the refused blob is not read again")
+	require.Equal(t, afterFirst, reads.Load(), "the judged blob is not read again")
 	require.Same(t, id, g.ri.ident.Load(), "nothing is stored again")
+}
+
+// THE FLEET ID ON A REPO THAT IS NOT THE FLEET REPOSITORY -> UNAVAILABLE,
+// fleet_conflict (user decision 2), as a mount of it is: it leaves the live
+// maps and is listed unavailable with CauseFleetConflict. Not applied as a
+// fleet repository, not kept writable. Its way back is the mount's (archive
+// and purge; a fix on the origin cannot reach a repo that no longer syncs,
+// exactly as after a refused boot), so the test pins the state and that a
+// fresh mount of the same store refuses it the same way.
+//
+// SABOTAGE: drop the retireFleetConflict hand-off → the repo stays in
+// Manager.Get → red; apply the ontology instead (skip admitFleetOntology) →
+// IsFleet true → red.
+func TestOntologyReload_FleetIDOnANonFleetRepoIsUnavailableFleetConflict(t *testing.T) {
+	t.Parallel()
+	o, g := newReloadFixture(t)
+	m := g.ri.env.m
+	name := g.ri.Name()
+	o.commit(t, "become the fleet", map[string]string{OntologyPath: "id: fleet\nname: Fleet\ntopics:\n  alpha:\n    description: alpha\n"})
+	syncRound(t, g)
+
+	require.False(t, g.ri.IsFleet(), "never applied as a fleet repository")
+	require.False(t, g.ri.WritableBranch(g.branch), "never kept writable (unwritable at once, then unmounted)")
+	require.Eventually(t, func() bool { return m.Get(name) == nil }, 10*time.Second, 20*time.Millisecond,
+		"the repo leaves the live maps")
+	var found *Unavailable
+	for _, u := range m.Unavailable() {
+		if u.Record.Name == name {
+			u := u
+			found = &u
+		}
+	}
+	require.NotNil(t, found, "listed unavailable")
+	require.Equal(t, CauseFleetConflict, found.Cause)
+	require.Equal(t, "unopenable", found.Reason)
+	require.Contains(t, found.Detail, "reserved")
+	require.Nil(t, m.fleetRepo(), "never the instance's fleet repository")
+
+	// The mount's verdict on the same store is the same.
+	_, err := m.mountExisting(name, g.ri.UID(), nil, false)
+	require.ErrorIs(t, err, ErrFleetOntologyReserved, "a mount of it is refused the same way")
 }
 
 // An unchanged blob is not even READ (counted at the file read).

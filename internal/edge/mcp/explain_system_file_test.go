@@ -36,7 +36,7 @@ const (
 var sysFiles = map[string]string{
 	sysClaims:   "const WINDOW_SECONDS = 30;\nexport function offer() {}\n",
 	sysSkill:    "---\nname: program-knomit\ndescription: How to program knomit.\n---\nBody of the skill.\n",
-	sysOntology: "topics:\n  architecture: {}\n",
+	sysOntology: "id: sys\nname: Sys\ntopics:\n  architecture: {}\n",
 	sysBinary:   "\x00\xff\xfe\x01not utf-8",
 	sysBig:      strings.Repeat("a", explainFileContentMax+1),
 	sysState:    "v1\n",

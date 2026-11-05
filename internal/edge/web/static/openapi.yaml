@@ -6003,20 +6003,12 @@ components:
             path, an empty ontology file, or one that does not parse. Such a
             repo is readable but refuses every write. Absent when the repo has
             an ontology, while it has not been identified yet (a repo being
-            created), and on a non-active row. A symlinked ontology is not
-            reported here: it refuses the repo, which is then `unopenable` —
-            unless a repo that had no usable ontology receives a symlinked
-            one by sync, when this carries its error until the next mount.
-        ontology_reload_error:
-          type: string
-          description: |
-            Why the ontology at a later tip of the read branch was NOT
-            applied: it is missing, empty, unparseable, a symlink, or the
-            reserved fleet id on a repo that is not the fleet repository.
-            Ontology changes that arrive through git are otherwise applied
-            live, in full; an unusable one leaves the ontology in force (and
-            the repo writable). Absent when the tip's ontology is in force.
-            `GET /repos/{name}` carries the detail under `ontology`.
+            created), and on a non-active row. It follows the read branch
+            live: an unusable ontology arriving by sync sets it (the repo
+            becomes unwritable) and the fixed one arriving clears it, with no
+            restart. A symlinked ontology at mount refuses the repo, which is
+            then `unopenable`; one arriving by sync on a running repo is
+            reported here, and the next mount refuses the repo.
         fleet:
           type: boolean
           description: |
@@ -6120,23 +6112,20 @@ components:
         ontology:
           type: object
           description: >
-            Which ontology file is in force: ontology changes that arrive
-            through git (sync, a merge into the read branch) are applied live,
-            so this names the file the repo is using now. Omitted before the
-            repo is identified. The `reload_*` keys are present only while the
-            ontology at a later tip of the read branch could not be used (it
-            is missing, empty, unparseable, a symlink, or the reserved fleet
-            id), in which case the file named by `commit`/`path`/`blob` stays
-            in force.
-          required: [commit]
+            Which ontology file the repo's state comes from: ontology changes
+            that arrive through git (sync, a merge into the read branch) are
+            applied live, so this names the file the repo is using now. When
+            that file is unusable (missing, empty, unparseable, or a symlink)
+            `usable` is false, `error` says why, and the repo is UNWRITABLE
+            until consensus fixes the file; the fix is applied on arrival.
+            Omitted before the repo is identified.
+          required: [usable]
           properties:
-            commit: { type: string, description: "Read-branch commit the ontology in force was read at." }
+            usable: { type: boolean, description: "false while the read branch's ontology cannot be used; every write is then refused." }
+            error:  { type: string, description: "Why the ontology is unusable; same text as ontology_error. Present only when usable is false." }
+            commit: { type: string, description: "Read-branch commit the ontology state was read at; omitted when nothing could be read." }
             path:   { type: string, description: "Ontology rung read (e.g. .knomit/ontology.yaml); omitted when that commit has none." }
-            blob:   { type: string, description: "Git blob id of the ontology file in force; omitted when that commit has none." }
-            reload_error:  { type: string, description: "Why the ontology at reload_commit was not applied." }
-            reload_commit: { type: string, description: "Read-branch commit whose ontology was not applied." }
-            reload_path:   { type: string }
-            reload_blob:   { type: string }
+            blob:   { type: string, description: "Git blob id of that file; omitted when that commit has none." }
         _links: { $ref: "#/components/schemas/LinkMap" }
         _embedded:
           type: object

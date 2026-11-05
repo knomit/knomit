@@ -347,7 +347,7 @@ func (identifyStage) Enter(ctx context.Context, _ *Life, r *RepoInstance) error 
 		r.ontMu.Unlock()
 		return err
 	}
-	r.ident.Store(&identity{ontology: ont, ontologyErr: ontErr, src: src})
+	r.setIdentity(svc, &identity{ontology: ont, ontologyErr: ontErr, src: src})
 	r.ontMu.Unlock()
 	r.seedWatermarks(ctx, svc)
 
@@ -443,11 +443,11 @@ func (r *RepoInstance) afterFetch(ctx context.Context, svc *store.Service, rewou
 // round), a merge, a raw push — is covered by one of the two, and a store
 // swap re-runs Identify itself. An index rebuild moves no ref.
 //
-// THE COMPARISON. The tip's first rung present is compared with the file in
-// force by path and blob id (identity.src). Equal: nothing is read or
-// parsed — almost every commit leaves the ontology alone. Equal to the file
-// a previous reload already refused (identity.reloadSrc): nothing either;
-// the error is already reported. Only a new blob is read and parsed.
+// THE COMPARISON. The tip's first rung present is compared with the file the
+// repo's state came from by path and blob id (identity.src) — usable or not.
+// Equal: nothing is read or parsed — almost every commit leaves the ontology
+// alone, and an unusable file already judged stays judged. Only a new blob
+// is read and parsed.
 //
 // CONSENSUS IS HONOURED IN FULL (user ruling on #429,
 // kb/decisions/repos/ontology/consensus-reload-honors-all). The main branch
@@ -464,27 +464,37 @@ func (r *RepoInstance) afterFetch(ctx context.Context, svc *store.Service, rewou
 // path with a different author. Nor does a reload run either refresh: it
 // writes nothing.
 //
-// UNUSABLE IS NOT APPLIED. A tip whose ontology cannot be used at all —
-// missing, empty, unparseable, or a symlink — is not a different ontology but
-// the absence of one. The repo keeps the ontology in force, stays writable,
-// and reports the error in its status (identity.reloadErr, OntologyStatus;
-// GET /repos and GET /repos/{name}). A symlink is NOT turned into the
-// refusal Identify makes of it (Unavailable): the sync loop cannot send to
-// its own machine, and taking a working repo down mid-flight for a file a
-// later commit can fix is worse than keeping the last good ontology; the
-// next mount still refuses it, as before. The same holds for the reserved
-// fleet id arriving on a repo that is not the fleet repository
-// (admitFleetOntology): applying it would make the repo IsFleet and hand it
-// to the fleet code (Manager.fleetRepo finds the fleet by ontology id), so
-// it is refused like an unusable file and reported, and the next mount
-// refuses the repo as Identify always has. A fleet repository whose
-// consensus ontology changes — to a newer fleet ontology, or away from the
-// fleet id — has it applied like any repo's: that is exactly what its next
-// mount would load.
+// UNUSABLE MAKES THE REPO UNWRITABLE (user decision 1 on #429's review). A
+// tip whose ontology cannot be used at all — missing at every rung, an empty
+// first rung, a fatal parse error, or a symlink: exactly what readOntology
+// refuses — is the state a restart would give: the repo has NO ontology in
+// force (OntologyError), WritableBranch refuses every authored write, and
+// the store refuses every fact write by any writer (SetOntologyUnusable ->
+// validateWrite), so nothing is written with its validations skipped. The
+// previous ontology is NOT kept: the repo cannot run on content it cannot
+// read, and a stale ontology would silently diverge from consensus. Status
+// reports it (OntologyStatus.Error; GET /repos ontology_error, GET
+// /repos/{name} ontology.error). When consensus fixes the file — a new blob
+// — the next reload applies it and the repo is writable again, no restart.
+// A symlink makes the live repo unwritable, not Unavailable: Identify's
+// refusal of it still applies at the next mount.
 //
-// A repo with NO usable ontology in force (OntologyError set at Identify, or
-// by an earlier reload) has nothing to keep: a usable tip makes it writable,
-// and an unusable one replaces its OntologyError with the tip's.
+// A READ error is not unusable: the file could not be read at all, which
+// says nothing about it (ontologyReadError). It changes and records nothing,
+// and the next round or commit tries again.
+//
+// THE FLEET ID on a repo that is not the fleet repository (user decision 2):
+// the repo becomes UNAVAILABLE with cause fleet_conflict, exactly as a mount
+// of it is (admitFleetOntology at Identify). It is never applied as a fleet
+// repository (Manager.fleetRepo finds the fleet by ontology id) and never
+// kept writable. The reload marks it unwritable at once and hands the
+// unmount to the Manager on another goroutine (retireFleetConflict): the
+// unmount drains the Sync stage this reload may be running in. Its way back
+// is the mount's: archive and purge, or a store whose read branch no longer
+// carries the fleet id. A fleet repository (the fleet door) whose consensus
+// ontology changes — to a newer fleet ontology, or away from the fleet id —
+// has it applied like any repo's, with a Warn naming the transition: that is
+// what its next mount would load.
 //
 // EVERYTHING DOWNSTREAM FOLLOWS because it reads ri.Ontology() (or the git
 // file itself) per operation, never a copy: write placement, context and
@@ -519,41 +529,34 @@ func (r *RepoInstance) reloadOntology(ctx context.Context, svc *store.Service) {
 		return
 	}
 	if tip.sameFile(cur.src) {
-		if cur.reloadErr != nil {
-			// The tip is back on the file in force (the bad commit was
-			// reverted): the reported error no longer describes the tip.
-			r.ident.Store(&identity{ontology: cur.ontology, ontologyErr: cur.ontologyErr, src: cur.src})
-		}
-		return
-	}
-	if cur.reloadErr != nil && tip.sameFile(cur.reloadSrc) {
 		return
 	}
 	ont, src, err := r.readOntology(ctx, svc)
 	var unread ontologyReadError
 	if errors.As(err, &unread) {
-		// Unknown, not unusable: record NOTHING (no reloadErr, no
-		// reloadSrc, no OntologyError), so the refused-blob skip above never
-		// sees this blob as judged and the next round or commit reads it
-		// again. A read error must never keep usable consensus content out.
+		// Unknown, not unusable: record NOTHING, so src never names a blob
+		// that was not judged and the next round or commit reads it again.
+		// A read error must never keep usable consensus content out, nor
+		// make a working repo unwritable.
 		log.Warn().Err(err).Str("repo", r.Name()).Str("commit", tip.Commit).Str("blob", tip.Blob).
 			Msg("ontology reload: the read branch's ontology could not be read; nothing changed, retrying on the next round or commit")
 		return
 	}
-	if err == nil {
-		if aerr := admitFleetOntology(r, ont); aerr != nil {
-			err = fmt.Errorf("ontology at %s on %s: %w", src.Path, r.ReadBranch(), aerr)
-		}
-	}
 	if err != nil {
-		if cur.ontologyErr != nil {
-			r.ident.Store(&identity{ontologyErr: err, src: src})
-			return
+		log.Error().Err(err).Str("repo", r.Name()).Str("commit", src.Commit).Str("path", src.Path).Str("blob", src.Blob).
+			Str("previous_blob", cur.src.Blob).
+			Msg("ontology reload: the read branch's ontology is unusable; the repository is UNWRITABLE until consensus fixes it")
+		r.setIdentity(svc, &identity{ontologyErr: err, src: src})
+		return
+	}
+	if aerr := admitFleetOntology(r, ont); aerr != nil {
+		ferr := fmt.Errorf("ontology at %s on %s: %w", src.Path, r.ReadBranch(), aerr)
+		log.Error().Err(ferr).Str("repo", r.Name()).Str("commit", src.Commit).Str("blob", src.Blob).
+			Msg("ontology reload: the read branch's ontology took the reserved fleet id on a repository that is not the fleet repository; it is unavailable (fleet_conflict), as a mount of it would be")
+		r.setIdentity(svc, &identity{ontologyErr: ferr, src: src})
+		if m := r.env.m; m != nil && r.fleetConflictRetired.CompareAndSwap(false, true) {
+			go m.retireFleetConflict(r, ferr)
 		}
-		log.Error().Err(err).Str("repo", r.Name()).Str("commit", src.Commit).Str("blob", src.Blob).
-			Str("in_force_commit", cur.src.Commit).Str("in_force_blob", cur.src.Blob).
-			Msg("ontology reload: the read branch's ontology is unusable; keeping the ontology in force")
-		r.ident.Store(&identity{ontology: cur.ontology, src: cur.src, reloadErr: err, reloadSrc: src})
 		return
 	}
 	// A FLEET TRANSITION is applied like any consensus change (that is what
@@ -576,7 +579,19 @@ func (r *RepoInstance) reloadOntology(ctx context.Context, svc *store.Service) {
 	log.Info().Str("repo", r.Name()).Str("commit", src.Commit).Str("path", src.Path).Str("blob", src.Blob).
 		Str("previous_blob", cur.src.Blob).Str("ontology_id", ont.ID).
 		Msg("ontology reload: the read branch holds a different ontology; it is now in force")
-	r.ident.Store(&identity{ontology: ont, src: src})
+	r.setIdentity(svc, &identity{ontology: ont, src: src})
+}
+
+// setIdentity installs id as the repo's identity and tells the store whether
+// fact writes are possible: an identity with no usable ontology refuses every
+// fact write on the store (svc.SetOntologyUnusable), whoever the writer, so
+// the advertised flag (WritableBranch) and the store's write seam can never
+// disagree. The caller holds ontMu.
+func (r *RepoInstance) setIdentity(svc *store.Service, id *identity) {
+	r.ident.Store(id)
+	if svc != nil {
+		svc.SetOntologyUnusable(id.ontologyErr)
+	}
 }
 
 // identityConflict is Identify's fatal error: the knowledge base is already

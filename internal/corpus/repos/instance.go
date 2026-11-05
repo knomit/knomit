@@ -73,15 +73,10 @@ type identity struct {
 	ontologyErr error
 	// src is where ontology (or ontologyErr) was read: the read branch's
 	// commit, the rung and its blob id. The live reload compares the tip's
-	// blob with src.Blob and does nothing more when they match.
+	// blob with src.Blob and does nothing more when they match — for an
+	// unusable file too, so a file already judged is not judged again.
+	// Empty when nothing could be READ (a read error is never a verdict).
 	src ontologySource
-	// reloadErr is why the file at reloadSrc — a later tip of the read branch
-	// — was NOT applied: it is unusable (missing, empty, unparseable, a
-	// symlink, or the reserved fleet id on a repo without the fleet door),
-	// so ontology is still the one read at src. nil when the tip's ontology
-	// is the one in force. Reported in the repo's status (OntologyStatus).
-	reloadErr error
-	reloadSrc ontologySource
 }
 
 // ontologySource names one ontology file in git: the commit it was read at,
@@ -195,12 +190,16 @@ type RepoInstance struct {
 	// ontologyReadHook (nil in production) runs before readOntology reads
 	// the ontology file's bytes; a non-nil error it returns is that read's
 	// error. Tests count reads with it and inject a transient read failure.
-	ontologyReadHook    atomic.Pointer[func() error]
-	embedder            model.BatchEmbedder
-	ontologyRoot        string
-	methodologyMinScore float64
-	clusterResolution   float64
-	clusterMinCommunity int
+	ontologyReadHook atomic.Pointer[func() error]
+	// fleetConflictRetired is set once a live reload has handed this
+	// instance to Manager.retireFleetConflict, so a second trigger racing
+	// the unmount does not hand it over again.
+	fleetConflictRetired atomic.Bool
+	embedder             model.BatchEmbedder
+	ontologyRoot         string
+	methodologyMinScore  float64
+	clusterResolution    float64
+	clusterMinCommunity  int
 	// clusterNeighborKinds: see ClusterNeighborKinds.
 	clusterNeighborKinds []string
 	// Discovery dial + verification thresholds (emergent-fact discovery).
@@ -632,34 +631,33 @@ func (ri *RepoInstance) IdentifiedOntologyError() error {
 	return err
 }
 
-// OntologyStatus is which ontology file a repo has in force, and why a newer
-// one was not applied: the repo's status surface for the live reload.
+// OntologyStatus is which ontology file a repo's state comes from: the
+// repo's status surface for the live reload.
 type OntologyStatus struct {
-	// Commit, Path and Blob name the file the ontology in force was read
-	// from: the read branch's commit at that read, the rung, the blob id.
-	// On a repo with no usable ontology they name the file (or the commit
-	// with no file) whose error OntologyError reports.
+	// Commit, Path and Blob name the file the repo's state was read from:
+	// the read branch's commit at that read, the rung, the blob id. With a
+	// usable ontology that is the ontology in force; with an unusable one it
+	// is the file (or the commit with no file) Error describes. All empty
+	// when the ontology could not be READ at Identify.
 	Commit, Path, Blob string
-	// ReloadError is why the ontology at a LATER tip of the read branch
-	// (ReloadCommit, ReloadPath, ReloadBlob) was not applied — it is missing,
-	// empty, unparseable, a symlink, or the reserved fleet id on a repo that
-	// is not the fleet repository — so the one above stays in force. "" when
-	// the tip's ontology is the one in force.
-	ReloadError                          string
-	ReloadCommit, ReloadPath, ReloadBlob string
+	// Error is why the repo has no usable ontology and is therefore
+	// UNWRITABLE — the file is missing, empty, unparseable or a symlink —
+	// until consensus fixes the file. "" when the ontology is usable. The
+	// same text as IdentifiedOntologyError.
+	Error string
 }
 
-// OntologyStatus reports the ontology file in force (see OntologyStatus the
-// type); ok is false before Identify has established anything.
+// OntologyStatus reports where the repo's ontology state comes from (see
+// OntologyStatus the type); ok is false before Identify has established
+// anything.
 func (ri *RepoInstance) OntologyStatus() (st OntologyStatus, ok bool) {
 	id := ri.ident.Load()
 	if id == nil || errors.Is(id.ontologyErr, errNotIdentified) {
 		return OntologyStatus{}, false
 	}
 	st = OntologyStatus{Commit: id.src.Commit, Path: id.src.Path, Blob: id.src.Blob}
-	if id.reloadErr != nil {
-		st.ReloadError = id.reloadErr.Error()
-		st.ReloadCommit, st.ReloadPath, st.ReloadBlob = id.reloadSrc.Commit, id.reloadSrc.Path, id.reloadSrc.Blob
+	if id.ontologyErr != nil {
+		st.Error = id.ontologyErr.Error()
 	}
 	return st, true
 }

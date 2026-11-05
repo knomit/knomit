@@ -35,6 +35,24 @@ func (e *FactInvalidError) Is(target error) bool {
 	return target == ErrFactInvalid
 }
 
+// ErrOntologyUnusable matches *OntologyUnusableError with errors.Is.
+var ErrOntologyUnusable = errors.New("the repository's ontology is unusable; no fact can be written until it is fixed")
+
+// OntologyUnusableError is a fact write refused because the repository's
+// ontology cannot be used (missing, empty, unparseable, a symlink): no rule
+// could judge the fact. Nothing was written. Err says why.
+type OntologyUnusableError struct {
+	Err error
+}
+
+func (e *OntologyUnusableError) Error() string {
+	return fmt.Sprintf("%v: %v", ErrOntologyUnusable, e.Err)
+}
+func (e *OntologyUnusableError) Unwrap() error { return e.Err }
+func (e *OntologyUnusableError) Is(target error) bool {
+	return target == ErrOntologyUnusable
+}
+
 type carriedOverKey struct{}
 
 // WithCarriedOver marks ctx's writes as a BYTE-IDENTICAL copy of content that
@@ -88,6 +106,16 @@ func (rh *Repo) validateWrite(head plumbing.Hash, files map[string]string, delet
 	if len(paths) == 0 {
 		return nil
 	}
+	// The repository's ontology is unusable (#429 decision 1: missing, empty,
+	// unparseable or a symlink at the read branch's tip, as the repo judged
+	// it at Identify or on a live reload): NO fact is written, by any writer
+	// — the review pipeline, a trigger, the fleet code — not only the
+	// authored ones WritableBranch already refuses. A write here would be a
+	// fact no ontology validated. A write that touches no fact (the
+	// ontology's own repair, a dot path) never reaches this line.
+	if uerr := rh.vr.OntologyUnusable(); uerr != nil {
+		return &OntologyUnusableError{Err: uerr}
+	}
 	c, err := object.GetCommit(rh.vr.Storer(), head)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
@@ -101,11 +129,12 @@ func (rh *Repo) validateWrite(head plumbing.Hash, files map[string]string, delet
 	}
 	ont, err := rh.vr.OntologyCache().Parse(raw)
 	if err != nil {
-		// No rule can be read. Whether such a repository takes writes at all
-		// is decided where it is opened (repos.loadOntology: unwritable), and
-		// every entry path refuses a commit judged against it; refusing here
-		// too would only stop a repair of the ontology's own branch.
-		return nil
+		// No rule can be read, so no fact can be judged: the write is
+		// REFUSED, never let through with its validations skipped (#429
+		// decision 1; this used to return nil). A repair of the ontology
+		// writes no fact and returned above, so it is not stopped. An
+		// empty file is here too: it parses to an error.
+		return &OntologyUnusableError{Err: fmt.Errorf("the ontology at %s does not parse: %w", head, err)}
 	}
 	tree, err := c.Tree()
 	if err != nil {

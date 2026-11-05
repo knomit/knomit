@@ -89,6 +89,24 @@ func (rh *Repo) ReadOnly() bool { return rh.readOnly }
 // SetReadOnly sets ReadOnly.
 func (rh *Repo) SetReadOnly(ro bool) { rh.readOnly = ro }
 
+// SetOntologyUnusable records why the repository's ontology cannot be used
+// (nil: it can). See Repo.ontologyUnusable.
+func (rh *Repo) SetOntologyUnusable(err error) {
+	if err == nil {
+		rh.ontologyUnusable.Store(nil)
+		return
+	}
+	rh.ontologyUnusable.Store(&err)
+}
+
+// OntologyUnusable is the error SetOntologyUnusable recorded, or nil.
+func (rh *Repo) OntologyUnusable() error {
+	if p := rh.ontologyUnusable.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
 // SetSigner sets the commit signer. The field is an atomic pointer, so a
 // concurrent CommitSigner (the trigger dispatcher reads it on its own
 // goroutine) is race-free; production still configures it right after Open,

@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/rs/zerolog/log"
+
+	"knomit/internal/corpus/repos/control"
 	"knomit/internal/domain/fact"
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/pki"
@@ -141,6 +144,38 @@ func refuseReservedOntology(spec CreateSpec) error {
 		}
 	}
 	return nil
+}
+
+// retireFleetConflict is the live half of admitFleetOntology (#429, user
+// decision 2): a mounted repo that is not the fleet repository, whose read
+// branch's consensus ontology took the fleet id, leaves the live maps and is
+// listed unavailable with CauseFleetConflict — the state a mount of it gives
+// (Start: mountExisting fails at Identify, unavailableReason maps it). The
+// two map changes happen under one lock, so GET /repos never shows the repo
+// both absent and not unavailable. Then it is unmounted. It runs on its own
+// goroutine (reloadOntology starts it): the unmount drains the Sync stage,
+// and the reload may be running inside that stage. A repo the maps no longer
+// hold as ri (archived, removed, replaced meanwhile) is left alone.
+func (m *Manager) retireFleetConflict(ri *RepoInstance, err error) {
+	rec := control.RepoRecord{UID: ri.uid, Name: ri.Name()}
+	if reg := m.Repos(); reg != nil {
+		if got, ok, gerr := reg.Get(ri.uid); gerr == nil && ok {
+			rec = got
+		}
+	}
+	reason, cause, detail := unavailableReason(&StageError{Stage: StageIdentify, Err: err})
+	m.mu.Lock()
+	if m.repos[rec.Name] != ri {
+		m.mu.Unlock()
+		return
+	}
+	delete(m.repos, rec.Name)
+	delete(m.byUID, ri.uid)
+	m.unavailable[ri.uid] = Unavailable{Record: rec, Reason: reason, Detail: m.redactHome(detail), Cause: cause}
+	m.mu.Unlock()
+	log.Warn().Str("repo", rec.Name).Str("uid", rec.UID).Str("reason", reason).Str("cause", string(cause)).Str("detail", detail).
+		Msg("repo is unavailable: its consensus ontology took the reserved fleet id (fleet_conflict); it is unmounted, as a mount of it would be refused")
+	unmount(ri, "fleet conflict")
 }
 
 // admitFleetOntology is the Identify half: r's ontology is ont. A fleet-id

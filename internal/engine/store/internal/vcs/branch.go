@@ -122,6 +122,15 @@ type Repo struct {
 	// writable again.
 	readOnly bool
 
+	// ontologyUnusable, when it holds a non-nil error, refuses every FACT
+	// write at validateWrite: the repository's ontology cannot be used
+	// (missing, empty, unparseable, a symlink), so no fact may be committed
+	// with its validations skipped (#429 decision 1). Set and cleared by the
+	// repo on every identity change (repos.RepoInstance.setIdentity); an
+	// atomic because the repo flips it while writers run. It does not
+	// survive store.Open: Identify re-applies it on every (re)open.
+	ontologyUnusable atomic.Pointer[error]
+
 	name string // repo name, derived from dbPath at Open time
 
 	// factRoot is the ontology root — the one directory facts live under, and
