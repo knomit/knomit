@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -125,6 +126,37 @@ func TestLLMProviders_RefuseEmptyAllowlist(t *testing.T) {
 	writeConfig(t, "[llm.providers.anthropic]\nkind = \"anthropic\"\n")
 	_, err := Load()
 	require.ErrorContains(t, err, "models is empty")
+}
+
+// A key placed in api_key_env does NOT fail the load; the problem text names
+// the provider and never holds the value or any 8-character piece of it.
+func TestLLMProviders_APIKeyEnvHoldingAKeyLoadsAndReportsWithoutEchoingIt(t *testing.T) {
+	const key = "sk-ant-api03-Zq9xT7mK2vLpR4wB"
+	writeConfig(t, "[llm.providers.prov-x]\nkind = \"anthropic\"\nmodels = [\"a1\"]\napi_key_env = \""+key+"\"\n[llm.providers.prov-y]\nkind = \"anthropic\"\nmodels = [\"a2\"]\napi_key_env = \"MY_SECRET_KEY\"\n")
+	cfg, err := Load()
+	require.NoError(t, err)
+	problems := cfg.LLM.APIKeyEnvProblems()
+	require.Equal(t, []string{fmt.Sprintf(APIKeyEnvNotANameMessage, "prov-x")}, problems)
+	for i := 0; i+8 <= len(key); i++ {
+		require.NotContains(t, problems[0], key[i:i+8], "the message leaks part of the value")
+	}
+}
+
+func TestLLMProviders_APIKeyEnvNameShapes(t *testing.T) {
+	for _, ok := range []string{"", "ANTHROPIC_API_KEY", "_x9", "my_Key_2"} {
+		require.True(t, validEnvVarName(ok), ok)
+	}
+	for _, bad := range []string{"sk-ant-x", "9KEY", "A B", "A=B", "Kéy"} {
+		require.False(t, validEnvVarName(bad), bad)
+	}
+}
+
+func TestLLMProviders_APIKeyEnvValidNameAndEmptyLoad(t *testing.T) {
+	writeConfig(t, "[llm.providers.prov-x]\nkind = \"anthropic\"\nmodels = [\"a1\"]\napi_key_env = \"MY_SECRET_KEY\"\n[llm.providers.prov-y]\nkind = \"ollama\"\nmodels = [\"o1\"]\napi_key_env = \"\"\n")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "MY_SECRET_KEY", cfg.LLM.Providers["prov-x"].APIKeyEnv)
+	require.Equal(t, "", cfg.LLM.Providers["prov-y"].APIKeyEnv)
 }
 
 func TestLLMProviders_RefuseUnbuiltKind(t *testing.T) {

@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -74,6 +75,32 @@ func TestRegistry_ListMarksUnavailableAndToolless(t *testing.T) {
 			{ID: "o1", Available: true, Tools: false, Reason: "model does not support tool calling (capabilities: completion)"},
 		}},
 	}, got)
+}
+
+// A key placed in api_key_env marks every model of THAT provider unavailable
+// with the message as the reason (what GET /chat-providers shows); the other
+// provider stays available, and the reason never holds the value.
+//
+// SABOTAGE: drop the APIKeyEnvProblem check in List → red.
+func TestRegistry_APIKeyEnvHoldingAKeyMakesOnlyThatProviderUnavailable(t *testing.T) {
+	const key = "sk-ant-api03-Zq9xT7mK2vLpR4wB"
+	an, _ := fakeAnthropicModels(t, "a1", "a2", "a3")
+	r := NewRegistry(map[string]config.LLMProviderConfig{
+		"prov-x": {Kind: "anthropic", BaseURL: an.URL, APIKeyEnv: key, Models: []string{"a1", "a2"}},
+		"prov-y": {Kind: "anthropic", BaseURL: an.URL, APIKey: "sk-test-1", Models: []string{"a3"}},
+	})
+	got := r.List(context.Background())
+	want := fmt.Sprintf(config.APIKeyEnvNotANameMessage, "prov-x")
+	require.Equal(t, []ProviderStatus{
+		{Name: "prov-x", Kind: "anthropic", Models: []ModelStatus{{ID: "a1", Reason: want}, {ID: "a2", Reason: want}}},
+		{Name: "prov-y", Kind: "anthropic", Models: []ModelStatus{{ID: "a3", Available: true, Tools: true}}},
+	}, got)
+	for i := 0; i+8 <= len(key); i++ {
+		require.NotContains(t, want, key[i:i+8])
+	}
+	_, err := r.Open(context.Background(), "prov-x", "a1")
+	require.ErrorIs(t, err, ErrNoCredentials)
+	require.NotContains(t, err.Error(), key[:8])
 }
 
 func TestRegistry_ListIsCachedFor60Seconds(t *testing.T) {
