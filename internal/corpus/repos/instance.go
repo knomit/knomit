@@ -62,10 +62,36 @@ func newStoreHandle(svc *store.Service) *storeHandle {
 
 // identity is what the Identify stage established about the repo: its
 // ontology, or why there is none. Swapped as a whole (Identify enters and
-// exits on a live repo while readers read it lock-free).
+// exits on a live repo, and the live reload replaces it, while readers read
+// it lock-free): a reader that Loads it once holds ONE ontology for as long
+// as it keeps the pointer, which is what makes a write validate against
+// exactly one ontology however many swaps happen around it. Writers of the
+// pointer (Identify's Enter and Exit, reloadOntology) hold
+// RepoInstance.ontMu; readers never do.
 type identity struct {
 	ontology    *fact.Ontology
 	ontologyErr error
+	// src is where ontology (or ontologyErr) was read: the read branch's
+	// commit, the rung and its blob id. The live reload compares the tip's
+	// blob with src.Blob and does nothing more when they match — for an
+	// unusable file too, so a file already judged is not judged again.
+	// Empty when nothing could be READ (a read error is never a verdict).
+	src ontologySource
+}
+
+// ontologySource names one ontology file in git: the commit it was read at,
+// the rung present there ("" when none) and that file's blob id ("" when
+// none). All hex.
+type ontologySource struct {
+	Commit, Path, Blob string
+}
+
+// sameFile reports whether s and o name the same ontology file content: the
+// same rung holding the same blob. The commit is deliberately not compared —
+// almost every commit leaves the ontology alone, and re-parsing on each one is
+// what the blob comparison exists to avoid.
+func (s ontologySource) sameFile(o ontologySource) bool {
+	return s.Path == o.Path && s.Blob == o.Blob
 }
 
 // errNotIdentified is the ontology error of a repo whose Identify stage has
@@ -151,12 +177,29 @@ type RepoInstance struct {
 	// ident is the Identify stage's result; nil reads as not identified. A
 	// non-nil ontologyErr makes the repo readable but not writable — see
 	// WritableBranch.
-	ident               atomic.Pointer[identity]
-	embedder            model.BatchEmbedder
-	ontologyRoot        string
-	methodologyMinScore float64
-	clusterResolution   float64
-	clusterMinCommunity int
+	ident atomic.Pointer[identity]
+	// ontMu serialises the WRITERS of ident: Identify (its whole ontology
+	// read, so a reload cannot slip a newer tip in between Identify's read
+	// and its store and then be overwritten by the older one), Identify's
+	// Exit, and reloadOntology (its compare, read and store). Readers never
+	// take it. It is never held while waiting for a branch lock held by
+	// someone who could wait on it: the reload runs from the commit
+	// observer's goroutine and after a sync round, never under a writer's
+	// branch lock.
+	ontMu sync.Mutex
+	// ontologyReadHook (nil in production) runs before readOntology reads
+	// the ontology file's bytes; a non-nil error it returns is that read's
+	// error. Tests count reads with it and inject a transient read failure.
+	ontologyReadHook atomic.Pointer[func() error]
+	// fleetConflictRetired is set once a live reload has handed this
+	// instance to Manager.retireFleetConflict, so a second trigger racing
+	// the unmount does not hand it over again.
+	fleetConflictRetired atomic.Bool
+	embedder             model.BatchEmbedder
+	ontologyRoot         string
+	methodologyMinScore  float64
+	clusterResolution    float64
+	clusterMinCommunity  int
 	// clusterNeighborKinds: see ClusterNeighborKinds.
 	clusterNeighborKinds []string
 	// Discovery dial + verification thresholds (emergent-fact discovery).
@@ -543,8 +586,13 @@ func (ri *RepoInstance) writableExperiment(branch string) bool {
 	return writable
 }
 
-// Ontology returns the ontology loaded from this repo's git store at open time,
-// or NIL when it could not be established.
+// Ontology returns the ontology in force for this repo, or NIL when it could
+// not be established. It is read from the read branch at Identify and
+// replaced live whenever a later tip of that branch holds a different, usable
+// ontology file (reloadOntology, kb/decisions/repos/ontology/
+// consensus-reload-honors-all). So a caller must Load it ONCE per operation
+// and use that value throughout: two calls in one write may return two
+// ontologies.
 //
 // Nil is the honest answer and callers must handle it. The alternative — the
 // default taxonomy, which is what this returned before — is a different
@@ -581,6 +629,37 @@ func (ri *RepoInstance) IdentifiedOntologyError() error {
 		return nil
 	}
 	return err
+}
+
+// OntologyStatus is which ontology file a repo's state comes from: the
+// repo's status surface for the live reload.
+type OntologyStatus struct {
+	// Commit, Path and Blob name the file the repo's state was read from:
+	// the read branch's commit at that read, the rung, the blob id. With a
+	// usable ontology that is the ontology in force; with an unusable one it
+	// is the file (or the commit with no file) Error describes. All empty
+	// when the ontology could not be READ at Identify.
+	Commit, Path, Blob string
+	// Error is why the repo has no usable ontology and is therefore
+	// UNWRITABLE — the file is missing, empty, unparseable or a symlink —
+	// until consensus fixes the file. "" when the ontology is usable. The
+	// same text as IdentifiedOntologyError.
+	Error string
+}
+
+// OntologyStatus reports where the repo's ontology state comes from (see
+// OntologyStatus the type); ok is false before Identify has established
+// anything.
+func (ri *RepoInstance) OntologyStatus() (st OntologyStatus, ok bool) {
+	id := ri.ident.Load()
+	if id == nil || errors.Is(id.ontologyErr, errNotIdentified) {
+		return OntologyStatus{}, false
+	}
+	st = OntologyStatus{Commit: id.src.Commit, Path: id.src.Path, Blob: id.src.Blob}
+	if id.ontologyErr != nil {
+		st.Error = id.ontologyErr.Error()
+	}
+	return st, true
 }
 
 // Embedder returns the batch embedder for this repo, or nil if unavailable.

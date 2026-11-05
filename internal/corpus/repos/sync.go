@@ -321,14 +321,16 @@ func shouldBroadcastPushOK(pushed, wasFailing bool) bool { return pushed || wasF
 // the own push main is advanced to the agent branch and pushed without force.
 // On every other round, and every other repo, it changes nothing.
 //
-// rewound (nil: nothing) runs after a successful fetch round that
-// force-updated the consensus branch: the Sync stage passes
-// RepoInstance.reidentifyAfterRewind, which records the repo's possibly new
-// knowledge base at once.
+// fetched (nil: nothing) runs after EVERY successful fetch round, with
+// rewound true when the round force-updated the consensus branch: the Sync
+// stage passes RepoInstance.afterFetch, which re-records the repo's possibly
+// new knowledge base on a rewound round (reidentifyAfterRewind) and, on every
+// round, applies an ontology the round brought in (reloadOntology), before
+// the round's push and before the loop waits again.
 //
 // once runs the immediate first round and returns: the Synchronous mode the
 // test harness uses, where no loop may race its assertions.
-func runReconcileLoop(ctx context.Context, svc *store.Service, pub *events.TaskPublisher, edges remoteEdgeSink, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}, breakers *syncBreakers, mode *syncMode, peers *fleetPeers, rewound func(context.Context, *store.Service), once bool) {
+func runReconcileLoop(ctx context.Context, svc *store.Service, pub *events.TaskPublisher, edges remoteEdgeSink, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}, breakers *syncBreakers, mode *syncMode, peers *fleetPeers, fetched func(ctx context.Context, svc *store.Service, rewound bool), once bool) {
 	defer mode.clear()
 
 	// Initial config read for logging context; a failed one only loses the
@@ -550,8 +552,8 @@ func runReconcileLoop(ctx context.Context, svc *store.Service, pub *events.TaskP
 					syncFails = 0
 				}
 				recordStep("fetch", &fetchBrk, true, base)
-				if rewound != nil && syncResult.Main.Mode == merge.ModeRewound {
-					rewound(ctx, svc)
+				if fetched != nil {
+					fetched(ctx, svc, syncResult.Main.Mode == merge.ModeRewound)
 				}
 				if shouldBroadcastSyncOK(syncResult, wasSyncFailing) {
 					pub.BroadcastSyncOK("origin", syncResult)
@@ -704,7 +706,7 @@ func (ri *RepoInstance) OriginRoundForTest(ctx context.Context) error {
 	cfg := ri.env.cfg
 	runReconcileLoop(ctx, svc, ri.pub, ri.remoteEdgeSink(), ri.Name(), ri.agentBranch,
 		makeRemoteAuthFn(cfg.Remote, ri.env.keyPath, ri.env.secrets), cfg.LocalOriginRoot, cfg.ReadOnly,
-		ri.env.onPush, nil, nil, nil, nil, ri.peers, ri.reidentifyAfterRewind, true)
+		ri.env.onPush, nil, nil, nil, nil, ri.peers, ri.afterFetch, true)
 	return nil
 }
 

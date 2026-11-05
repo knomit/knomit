@@ -57,9 +57,12 @@ type Options struct {
 	// UnmountDrainBound overrides DefaultUnmountDrainBound (class-2 budget).
 	UnmountDrainBound time.Duration
 	// Hook is the test seam, nil in production. It is called at the start of
-	// every stage Enter (point "enter") and inside the index job after its
-	// plan (point "index-job"). A hook that blocks MUST also select on ctx —
-	// the life's context — so a held stage still unmounts.
+	// every stage Enter (point "enter"), inside the index job after its
+	// plan (point "index-job"), and in exitStages just before a drained
+	// stage's Exit (point "exit", with that life's already-cancelled ctx). A
+	// hook that blocks MUST also select on ctx — the life's context — so a
+	// held stage still unmounts; an "exit" hook that blocks holds the driver
+	// mid-unmount on purpose (the fleet-conflict retire tests).
 	Hook func(stage StageID, point string, ctx context.Context)
 }
 
@@ -518,6 +521,9 @@ func (m *Machine) exitStages(ks ...StageID) {
 			continue
 		}
 		l.wg.Wait()
+		if h := m.opts.Hook; h != nil {
+			h(k, "exit", l.ctx)
+		}
 		stages[k].Exit(m.r)
 		m.lives[k] = nil
 		m.pending[k] = 0

@@ -177,6 +177,11 @@ func (fi *Index) writeFileExact(ctx context.Context, branch, path, content, mess
 	if current != "" && current == plumbing.ComputeHash(plumbing.BlobObject, []byte(content)).String() {
 		return WriteFactResult{CommitHash: headHash.String(), BlobHash: current, Unchanged: true}, nil
 	}
+	// No fact mutation while the ontology is unusable (#429), carried over
+	// or not.
+	if err := fi.rh.refuseWhileOntologyUnusable(map[string]string{path: content}, nil); err != nil {
+		return WriteFactResult{}, fmt.Errorf("WriteFile: %w", err)
+	}
 	// RuleValidation at the source, before any object is written (not for a
 	// copy of content that already exists: WithCarriedOver).
 	if !carriedOver(ctx) {
@@ -237,6 +242,13 @@ func (fi *Index) deleteFile(ctx context.Context, branch, path, message, operatio
 
 	unlock := fi.rh.vr.LockBranch(branch)
 	defer unlock()
+
+	// A delete is a fact mutation too: refused while the ontology is
+	// unusable (#429), so a review prune or a dedup loser cannot remove a
+	// fact from a repository that is unwritable.
+	if err := fi.rh.refuseWhileOntologyUnusable(nil, []string{path}); err != nil {
+		return "", fmt.Errorf("DeleteFile: %w", err)
+	}
 
 	headHash, err := fi.rh.vr.ResolveRef(ctx, branch)
 	if err != nil {
@@ -417,6 +429,11 @@ func (fi *Index) batchWriteLocked(ctx context.Context, branch string, files map[
 		if len(missing) > 0 {
 			return plumbing.ZeroHash, nil, &RetractMissingError{Paths: missing}
 		}
+	}
+	// No fact mutation — write, delete or retract — while the ontology is
+	// unusable (#429), carried over or not.
+	if err := fi.rh.refuseWhileOntologyUnusable(files, deletes); err != nil {
+		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: %w", err)
 	}
 	// RuleValidation at the source, before any object is written (not for a
 	// copy of content that already exists: WithCarriedOver).

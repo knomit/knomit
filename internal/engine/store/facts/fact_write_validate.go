@@ -35,6 +35,24 @@ func (e *FactInvalidError) Is(target error) bool {
 	return target == ErrFactInvalid
 }
 
+// ErrOntologyUnusable matches *OntologyUnusableError with errors.Is.
+var ErrOntologyUnusable = errors.New("the repository's ontology is unusable; no fact can be written until it is fixed")
+
+// OntologyUnusableError is a fact write refused because the repository's
+// ontology cannot be used (missing, empty, unparseable, a symlink): no rule
+// could judge the fact. Nothing was written. Err says why.
+type OntologyUnusableError struct {
+	Err error
+}
+
+func (e *OntologyUnusableError) Error() string {
+	return fmt.Sprintf("%v: %v", ErrOntologyUnusable, e.Err)
+}
+func (e *OntologyUnusableError) Unwrap() error { return e.Err }
+func (e *OntologyUnusableError) Is(target error) bool {
+	return target == ErrOntologyUnusable
+}
+
 type carriedOverKey struct{}
 
 // WithCarriedOver marks ctx's writes as a BYTE-IDENTICAL copy of content that
@@ -54,6 +72,45 @@ func WithCarriedOver(ctx context.Context) context.Context {
 func carriedOver(ctx context.Context) bool {
 	v, _ := ctx.Value(carriedOverKey{}).(bool)
 	return v
+}
+
+// refuseWhileOntologyUnusable is the store's half of #429 decision 1: while
+// the repository's ontology is unusable (missing, empty, unparseable or a
+// symlink at the read branch's tip, as the repo judged it at Identify or on a
+// live reload, recorded by Service.SetOntologyUnusable), the repository is
+// UNWRITABLE for facts — literally: NO fact mutation lands, by any writer.
+// That is a write, an empty-content write, a DELETE (deleteFile: a REST
+// delete, a review prune retract, a dedup loser) and every batch (retracts
+// and moves included), from the review pipeline, a trigger, the fleet code
+// or an authored path WritableBranch somehow let through.
+//
+// It is checked in all three write cores (writeFileExact, deleteFile,
+// batchWriteLocked) under the branch lock and BEFORE the WithCarriedOver
+// exemption, which waives RuleValidation, not this: a byte-identical replay
+// is still a mutation of the branch. (Replay's target is a freshly cloned
+// store the repo has never called SetOntologyUnusable on, so in practice it
+// never meets the gate; if one ever did, refusing is the honest answer.) A
+// write that touches no fact path — the ontology file's own repair, any
+// other dot path or root file — passes: the repair is how the repository
+// becomes writable again. A byte-identical write is a no-op that commits
+// nothing and is answered before this check.
+func (rh *Repo) refuseWhileOntologyUnusable(files map[string]string, deletes []string) error {
+	uerr := rh.vr.OntologyUnusable()
+	if uerr == nil {
+		return nil
+	}
+	root := rh.vr.OntologyRoot()
+	for p := range files {
+		if verify.IsFactPathUnder(root, p) {
+			return &OntologyUnusableError{Err: uerr}
+		}
+	}
+	for _, p := range deletes {
+		if verify.IsFactPathUnder(root, p) {
+			return &OntologyUnusableError{Err: uerr}
+		}
+	}
+	return nil
 }
 
 // validateWrite is RuleValidation at the source, for EVERY in-process writer
@@ -101,11 +158,12 @@ func (rh *Repo) validateWrite(head plumbing.Hash, files map[string]string, delet
 	}
 	ont, err := rh.vr.OntologyCache().Parse(raw)
 	if err != nil {
-		// No rule can be read. Whether such a repository takes writes at all
-		// is decided where it is opened (repos.loadOntology: unwritable), and
-		// every entry path refuses a commit judged against it; refusing here
-		// too would only stop a repair of the ontology's own branch.
-		return nil
+		// No rule can be read, so no fact can be judged: the write is
+		// REFUSED, never let through with its validations skipped (#429
+		// decision 1; this used to return nil). A repair of the ontology
+		// writes no fact and returned above, so it is not stopped. An
+		// empty file is here too: it parses to an error.
+		return &OntologyUnusableError{Err: fmt.Errorf("the ontology at %s does not parse: %w", head, err)}
 	}
 	tree, err := c.Tree()
 	if err != nil {

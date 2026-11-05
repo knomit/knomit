@@ -637,9 +637,12 @@ func TestDispatch_ErrorLoggedOncePerBlob(t *testing.T) {
 }
 
 // ReloadOnHeadOntology (D-b): a commit that adds a trigger makes it active
-// from the next advance without a restart; a broken ontology at the head
-// keeps the last good set. Sabotage: read ri.Ontology() (the open-time
-// snapshot, which never changes).
+// from the next advance without a restart; a broken ontology at the head is
+// reported once by the dispatcher. Since #429 decision 1 a broken ontology
+// also stops every fact write (the store refuses a fact no ontology can
+// judge), so nothing more can fire until it is fixed; the fix brings the
+// triggers back. Sabotage: read ri.Ontology() (the open-time snapshot,
+// which never changes).
 func TestDispatch_ReloadOnHeadOntology(t *testing.T) {
 	logs := captureLogs(t, zerolog.ErrorLevel)
 	m := newTestManager(t)
@@ -653,10 +656,15 @@ func TestDispatch_ReloadOnHeadOntology(t *testing.T) {
 	r, err := testService(t, ri).Facts().WriteFact(context.Background(), trigAgent, OntologyPath, "id: [broken\n", "break", "updated")
 	require.NoError(t, err)
 	waitTriggerHead(t, ri, r.CommitHash)
-	write(t, ri, "kb/tasks/two.md")
-	write(t, ri, "kb/tasks/three.md")
-	require.Len(t, firesOf(t, ri, "all"), 3, "the last good trigger set keeps firing")
+	_, werr := testService(t, ri).Facts().WriteFact(context.Background(), trigAgent, "kb/tasks/two.md",
+		factBody("kb/tasks/two.md"), "write", "learn")
+	require.ErrorIs(t, werr, facts.ErrOntologyUnusable, "no fact is written while no ontology can judge it")
 	require.Equal(t, 1, countLines(logs, "ontology at head unusable"), "%s", logs.String())
+
+	// The fix: triggers fire again from the next advance.
+	setOntology(t, ri, triggerOntology("", trig("all", "learn", "", "")))
+	write(t, ri, "kb/tasks/three.md")
+	require.Len(t, firesOf(t, ri, "all"), 2, "the fixed ontology's triggers fire")
 }
 
 // ---- Branch filter, kick, ordering

@@ -70,9 +70,12 @@ type repoSummary struct {
 	// OntologyError says why an ACTIVE repo has no usable ontology — none,
 	// empty, or unparseable — so it is readable but refuses every write.
 	// Absent when it has one, before Identify has run (a repo being created),
-	// and on an unavailable row. A symlinked ontology never appears here: it
-	// refuses the repo, which is then listed "unopenable" with the message
-	// as its detail.
+	// and on an unavailable row. It follows the read branch live (#429): an
+	// unusable ontology arriving by sync sets it, the fix arriving clears it.
+	// A symlinked ontology at MOUNT refuses the repo, which is then listed
+	// "unopenable"; one arriving on a running repo by sync makes it
+	// unwritable with the symlink's message here, and its next mount
+	// refuses it.
 	OntologyError string `json:"ontology_error,omitempty"`
 
 	// Fleet marks this instance's fleet repository (its ontology id is
@@ -318,6 +321,29 @@ func repoView(b hal.URLBuilder, r *http.Request, name string, ri *repos.RepoInst
 	// has an ontology — an empty string would read as an error with no words.
 	if err := ri.IdentifiedOntologyError(); err != nil {
 		body["ontology_error"] = err.Error()
+	}
+	// ontology: WHICH ontology file the repo's state comes from — the read
+	// branch's commit it was read at, its rung and blob id — whether it is
+	// usable, and if not, why the repo is unwritable (#429: ontology changes
+	// that arrive through git are applied live, so "which ontology is this
+	// repo using" is no longer "the one at its last mount"). Omitted before
+	// Identify has run. commit, path and blob are omitted when empty (no file
+	// at that commit, or nothing could be read); error only when unusable.
+	if st, ok := ri.OntologyStatus(); ok {
+		o := map[string]any{"usable": st.Error == ""}
+		if st.Commit != "" {
+			o["commit"] = st.Commit
+		}
+		if st.Path != "" {
+			o["path"] = st.Path
+		}
+		if st.Blob != "" {
+			o["blob"] = st.Blob
+		}
+		if st.Error != "" {
+			o["error"] = st.Error
+		}
+		body["ontology"] = o
 	}
 	// description is the verbatim README.md root manifest read at the repo's
 	// READ branch tip — the agent branch, or the followed upstream for a

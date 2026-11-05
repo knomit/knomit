@@ -328,7 +328,13 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 		// context key there, so a context is refused outright — the same
 		// answer knomit_learn and knomit_update give — instead of being judged
 		// against the made-up topic "artifacts/<area>".
-		ctxOntology := ri.Ontology()
+		//
+		// The ontology is loaded ONCE for the whole write: a sync can swap it
+		// live (repos.reloadOntology), and a context judged against one
+		// ontology and a placement against another would be a write no single
+		// ontology accepted.
+		ont := ri.Ontology()
+		ctxOntology := ont
 		if knomitfact.IsUnderArtifactsRoot(path) {
 			ctxOntology = nil
 		}
@@ -368,7 +374,7 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 		// A repo with no usable ontology is skipped: in production it is
 		// read-only (WritableBranch refuses every branch), so this only
 		// spares bare test instances.
-		if o := ri.Ontology(); o != nil && !exists && !knomitfact.IsUnderArtifactsRoot(path) {
+		if o := ont; o != nil && !exists && !knomitfact.IsUnderArtifactsRoot(path) {
 			if err := putPlacement(o, ontologyRoot, path); err != nil {
 				writePlacementProblem(w, r, err)
 				return
