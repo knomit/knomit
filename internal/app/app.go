@@ -172,7 +172,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		a.closers = append(a.closers, e.Close)
 	}
 
-	// The chat's providers (the v2 harness). Nothing is contacted until the
+	// The chat's providers (the LLM harness). Nothing is contacted until the
 	// chat lists or opens a model.
 	var llmRegistry *llm.Registry
 	if len(cfg.LLM.Providers) > 0 {

@@ -14,9 +14,9 @@ import (
 	"time"
 )
 
-// This file is the v2 Ollama adapter: hand-written HTTP against /api/chat
+// This file is the Ollama adapter: hand-written HTTP against /api/chat
 // (NDJSON streaming, tools). The capability probe below began as a copy of the
-// request the v1 adapter made; that adapter is deleted and this is the only
+// request the earlier adapter made; that adapter is deleted and this is the only
 // /api/show probe.
 //
 // Ollama has no cache breakpoints. Its prompt cache is the runner's KV cache
@@ -34,7 +34,7 @@ const (
 	// defaultOllamaNumCtx is sent on EVERY request, together with
 	// truncate:false. Without num_ctx Ollama loads the model with its own
 	// default context, and without truncate:false it silently drops the oldest
-	// messages of a prompt that does not fit (see ollamaChatRequestV2).
+	// messages of a prompt that does not fit (see ollamaChatRequest).
 	defaultOllamaNumCtx = 32768
 	defaultOllamaHost   = "http://localhost:11434"
 	// ollamaUnlimited is num_predict -1: no output cap (see ollamaUncapped in
@@ -75,7 +75,7 @@ func (o OllamaOptions) withDefaults() OllamaOptions {
 	return o
 }
 
-// OllamaChat is the v2 Ollama adapter.
+// OllamaChat is the Ollama adapter.
 type OllamaChat struct {
 	client *http.Client
 	model  string
@@ -178,7 +178,7 @@ type ollamaToolFn struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 
-type ollamaToolV2 struct {
+type ollamaTool struct {
 	Type     string       `json:"type"`
 	Function ollamaToolFn `json:"function"`
 }
@@ -193,9 +193,9 @@ type ollamaCall struct {
 	Function ollamaCallFn `json:"function"`
 }
 
-// ollamaMsgV2 is one request message. Content has no omitempty: an assistant
+// ollamaMsg is one request message. Content has no omitempty: an assistant
 // message that only calls tools is sent with "content":"" as in the API docs.
-type ollamaMsgV2 struct {
+type ollamaMsg struct {
 	Role      string       `json:"role"`
 	Content   string       `json:"content"`
 	Thinking  string       `json:"thinking,omitempty"`
@@ -207,19 +207,19 @@ type ollamaMsgV2 struct {
 	ToolCallID string `json:"tool_call_id,omitempty"`
 }
 
-type ollamaOptsV2 struct {
+type ollamaOpts struct {
 	NumCtx     int `json:"num_ctx"`
 	NumPredict int `json:"num_predict"`
 }
 
-type ollamaChatRequestV2 struct {
-	Model     string         `json:"model"`
-	Messages  []ollamaMsgV2  `json:"messages"`
-	Tools     []ollamaToolV2 `json:"tools,omitempty"`
-	Think     *bool          `json:"think,omitempty"`
-	Stream    bool           `json:"stream"`
-	KeepAlive string         `json:"keep_alive"`
-	Options   ollamaOptsV2   `json:"options"`
+type ollamaChatRequest struct {
+	Model     string       `json:"model"`
+	Messages  []ollamaMsg  `json:"messages"`
+	Tools     []ollamaTool `json:"tools,omitempty"`
+	Think     *bool        `json:"think,omitempty"`
+	Stream    bool         `json:"stream"`
+	KeepAlive string       `json:"keep_alive"`
+	Options   ollamaOpts   `json:"options"`
 	// Truncate is ALWAYS sent, as false (user decision, 2026-11-04). Ollama's
 	// default drops the oldest messages of a chat that does not fit num_ctx
 	// without an error (server/prompt.go chatPrompt, v0.40.14); false makes it
@@ -231,7 +231,7 @@ type ollamaChatRequestV2 struct {
 	// output reaches num_ctx WHILE GENERATING, llama-server then silently
 	// discards the middle of the KV cache (keeping only num_keep, default 4,
 	// tokens) and the response still ends done_reason "stop". With shift:false
-	// it stops with "length", which streamV2 maps to ErrTruncated. This does
+	// it stops with "length", which Stream maps to ErrTruncated. This does
 	// NOT affect an over-long PROMPT: that is refused with a 400 either way
 	// (see ollamaContextFull). Trade-off: shift is a runner launch attribute,
 	// so another client of the same Ollama that sends a different shift value
@@ -256,27 +256,27 @@ type ollamaChatRequestV2 struct {
 // It renders a tool result whose tool_use is not in the snapshot with an empty
 // tool_name; Stream refuses such a snapshot before sending (renderOllamaChecked's
 // error), so that form never reaches the wire.
-func renderOllama(s Snapshot, model string, o OllamaOptions) ollamaChatRequestV2 {
+func renderOllama(s Snapshot, model string, o OllamaOptions) ollamaChatRequest {
 	req, _ := renderOllamaChecked(s, model, o, false)
 	return req
 }
 
-func renderOllamaChecked(s Snapshot, model string, o OllamaOptions, thinks bool) (ollamaChatRequestV2, error) {
+func renderOllamaChecked(s Snapshot, model string, o OllamaOptions, thinks bool) (ollamaChatRequest, error) {
 	o = o.withDefaults()
 	numPredict := ollamaUnlimited
 	if o.MaxOutput > 0 {
 		numPredict = o.MaxOutput
 	}
-	req := ollamaChatRequestV2{
+	req := ollamaChatRequest{
 		Model: model, Stream: true, KeepAlive: o.KeepAlive, Truncate: false, Shift: false,
-		Options: ollamaOptsV2{NumCtx: o.NumCtx, NumPredict: numPredict},
+		Options: ollamaOpts{NumCtx: o.NumCtx, NumPredict: numPredict},
 	}
 	if thinks {
 		t := true
 		req.Think = &t
 	}
 	for _, it := range s.Hooks[HookTools] {
-		req.Tools = append(req.Tools, ollamaToolV2{Type: "function", Function: ollamaToolFn{
+		req.Tools = append(req.Tools, ollamaTool{Type: "function", Function: ollamaToolFn{
 			Name: it.Tool.Name, Description: it.Tool.Description, Parameters: it.Tool.Schema,
 		}})
 	}
@@ -289,7 +289,7 @@ func renderOllamaChecked(s Snapshot, model string, o OllamaOptions, thinks bool)
 		}
 	}
 	if len(sys) > 0 {
-		req.Messages = append(req.Messages, ollamaMsgV2{Role: "system", Content: strings.Join(sys, "\n\n")})
+		req.Messages = append(req.Messages, ollamaMsg{Role: "system", Content: strings.Join(sys, "\n\n")})
 	}
 
 	names := map[string]ollamaCallRef{} // knomit tool_use id -> the call it answers
@@ -298,7 +298,7 @@ func renderOllamaChecked(s Snapshot, model string, o OllamaOptions, thinks bool)
 		for _, it := range s.Hooks[h] {
 			if it.Entry == nil {
 				if it.Text != "" {
-					req.Messages = append(req.Messages, ollamaMsgV2{Role: "user", Content: it.Text})
+					req.Messages = append(req.Messages, ollamaMsg{Role: "user", Content: it.Text})
 				}
 				continue
 			}
@@ -319,11 +319,11 @@ func renderOllamaChecked(s Snapshot, model string, o OllamaOptions, thinks bool)
 					if !ok && firstErr == nil {
 						firstErr = fmt.Errorf("ollama: tool result %q answers no tool call in the conversation", b.ToolResult.ToolUseID)
 					}
-					req.Messages = append(req.Messages, ollamaMsgV2{Role: "tool", ToolName: ref.name, ToolCallID: ref.id, Content: b.ToolResult.Content})
+					req.Messages = append(req.Messages, ollamaMsg{Role: "tool", ToolName: ref.name, ToolCallID: ref.id, Content: b.ToolResult.Content})
 				}
 			}
 			if len(text) > 0 {
-				req.Messages = append(req.Messages, ollamaMsgV2{Role: "user", Content: strings.Join(text, "\n\n")})
+				req.Messages = append(req.Messages, ollamaMsg{Role: "user", Content: strings.Join(text, "\n\n")})
 			}
 		}
 	}
@@ -336,8 +336,8 @@ type ollamaCallRef struct{ name, id string }
 
 // ollamaAssistant converts one assistant entry; it records each tool_use's
 // name and wire id under its knomit id for the results that follow.
-func ollamaAssistant(e Entry, names map[string]ollamaCallRef) ollamaMsgV2 {
-	m := ollamaMsgV2{Role: "assistant"}
+func ollamaAssistant(e Entry, names map[string]ollamaCallRef) ollamaMsg {
+	m := ollamaMsg{Role: "assistant"}
 	var text []string
 	for _, b := range e.Blocks {
 		switch b.Kind {
@@ -372,23 +372,23 @@ func ollamaAssistant(e Entry, names map[string]ollamaCallRef) ollamaMsgV2 {
 // this package compare the bytes Ollama actually receives.
 func OllamaPrefixJSON(s Snapshot, model string) ([]byte, error) {
 	req := renderOllama(s, model, OllamaOptions{})
-	var system *ollamaMsgV2
+	var system *ollamaMsg
 	if len(req.Messages) > 0 && req.Messages[0].Role == "system" {
 		system = &req.Messages[0]
 	}
 	// json.Marshal, not encodeCanonical: the wire form escapes <, > and &, and
 	// this export must be those exact bytes.
 	return json.Marshal(struct {
-		System *ollamaMsgV2   `json:"system"`
-		Tools  []ollamaToolV2 `json:"tools"`
+		System *ollamaMsg   `json:"system"`
+		Tools  []ollamaTool `json:"tools"`
 	}{system, req.Tools})
 }
 
 // ---- streaming ----
 
-// ollamaStreamLineV2 is one NDJSON frame. Error is the mid-stream error
+// ollamaStreamLine is one NDJSON frame. Error is the mid-stream error
 // object ({"error":"…"}) the API docs describe; its HTTP status is already 200.
-type ollamaStreamLineV2 struct {
+type ollamaStreamLine struct {
 	Message struct {
 		Content   string `json:"content"`
 		Thinking  string `json:"thinking"`
@@ -458,7 +458,7 @@ func (c *OllamaChat) Stream(ctx context.Context, s Snapshot, o StreamOptions, si
 		blocks         []Block
 		reasoned       bool // the reasoning block has been emitted
 		toolBlocks     []Block
-		final          *ollamaStreamLineV2
+		final          *ollamaStreamLine
 	)
 	flushReasoning := func() {
 		if reasoned || thinking.Len() == 0 {
@@ -473,7 +473,7 @@ func (c *OllamaChat) Stream(ctx context.Context, s Snapshot, o StreamOptions, si
 
 	dec := json.NewDecoder(resp.Body)
 	for final == nil {
-		var ln ollamaStreamLineV2
+		var ln ollamaStreamLine
 		if err := dec.Decode(&ln); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				return nil, errors.New("ollama: stream ended before the done line")
@@ -586,7 +586,7 @@ func ollamaContextFull(msg string) bool {
 // estimate (Snapshot.Record) minus that count, never below 0. Only then is
 // Estimated set, with EstimatedFields naming "cache_read" alone
 // (user decision, 2026-11-04).
-func usageFromFinal(s Snapshot, f *ollamaStreamLineV2) Usage {
+func usageFromFinal(s Snapshot, f *ollamaStreamLine) Usage {
 	if f.PromptEvalCachedCount != nil {
 		cached := *f.PromptEvalCachedCount
 		return Usage{
