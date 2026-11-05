@@ -196,10 +196,13 @@ func (m *manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 type chatView struct {
 	chatItem
-	Running bool               `json:"running"`
-	Items   []viewItem         `json:"items"`
-	Pending []*pendingApproval `json:"pending_approvals"`
-	Grants  []grantInfo        `json:"grants"`
+	Running bool `json:"running"`
+	// UsageSeq is the seq of the last usage event the items include, so a page
+	// that holds this snapshot ignores the live usage events it already has.
+	UsageSeq int                `json:"usage_seq"`
+	Items    []viewItem         `json:"items"`
+	Pending  []*pendingApproval `json:"pending_approvals"`
+	Grants   []grantInfo        `json:"grants"`
 }
 
 func (m *manager) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -208,7 +211,7 @@ func (m *manager) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.mu.Lock()
-	v := chatView{chatItem: itemOf(c), Running: c.running, Items: append([]viewItem{}, c.view...), Pending: []*pendingApproval{}}
+	v := chatView{chatItem: itemOf(c), Running: c.running, UsageSeq: c.usageSeq, Items: append([]viewItem{}, c.view...), Pending: []*pendingApproval{}}
 	for _, p := range c.pending {
 		v.Pending = append(v.Pending, p)
 	}

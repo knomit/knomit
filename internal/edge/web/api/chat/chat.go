@@ -44,6 +44,22 @@ type viewItem struct {
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 	State     string          `json:"state,omitempty"` // running | done
 	IsError   bool            `json:"is_error,omitempty"`
+
+	// On a "user" item only: what the page shows for the turn it opens, so a
+	// snapshot is the whole truth about the turn and the page patches nothing.
+	Usage     *turnUsage `json:"usage,omitempty"`     // summed over the turn's requests
+	CostUSD   *float64   `json:"cost_usd,omitempty"`  // summed; absent without a price card
+	Warning   string     `json:"warning,omitempty"`   // the price-tier warning, worded
+	Error     string     `json:"error,omitempty"`     // how the turn ended, if it did not succeed
+	Cancelled bool       `json:"cancelled,omitempty"` // Error is the person's own Stop
+}
+
+// turnUsage is a turn's token counts, summed over its requests.
+type turnUsage struct {
+	Input      int64 `json:"input"`
+	CacheRead  int64 `json:"cache_read"`
+	CacheWrite int64 `json:"cache_write"`
+	Output     int64 `json:"output"`
 }
 
 // pendingApproval is a tool call waiting for the person.
@@ -104,6 +120,7 @@ type chat struct {
 	turnCancel context.CancelFunc
 	turns      sync.WaitGroup
 	view       []viewItem
+	turnAt     int // index in view of the running (or last) turn's user item
 	calls      map[string]llm.ToolUse
 	pending    map[string]*pendingApproval
 	grants     map[grantKey]grantInfo
@@ -346,6 +363,7 @@ func (c *chat) startTurn(text string) error {
 	c.running = true
 	ctx, cancel := context.WithCancel(c.ctx)
 	c.turnCancel = cancel
+	c.turnAt = len(c.view)
 	c.view = append(c.view, viewItem{Kind: "user", Text: text})
 	c.turns.Add(1)
 	c.mu.Unlock()
@@ -361,10 +379,24 @@ func (c *chat) startTurn(text string) error {
 }
 
 func (c *chat) finishTurn(ctx context.Context, res *llm.TurnResult, err error) {
+	// How the turn ended is worded once, recorded in the turn's view item in the
+	// same step that ends it (a snapshot cut after `running` is false has it),
+	// and then sent.
+	msg, cancelled := "", false
+	if err != nil {
+		msg = err.Error()
+		cancelled = errors.Is(err, llm.ErrCancelled) || ctx.Err() != nil
+	}
 	c.mu.Lock()
 	c.running = false
 	c.turnCancel = nil
-	truncatedBare := errors.Is(err, llm.ErrTruncated) && c.lastReasoning && !c.lastText
+	if err != nil && errors.Is(err, llm.ErrTruncated) && c.lastReasoning && !c.lastText {
+		msg = reasoningTruncatedMessage
+	}
+	if err != nil && c.turnAt < len(c.view) {
+		c.view[c.turnAt].Error, c.view[c.turnAt].Cancelled = msg, cancelled && msg == err.Error()
+	}
+	truncatedBare := msg == reasoningTruncatedMessage
 	ended := c.ended
 	c.mu.Unlock()
 	c.store.appendTranscript(map[string]any{"turn_end": true, "error": errString(err)})
@@ -378,11 +410,7 @@ func (c *chat) finishTurn(ctx context.Context, res *llm.TurnResult, err error) {
 		})
 		return
 	}
-	msg := err.Error()
-	switch {
-	case truncatedBare:
-		msg = reasoningTruncatedMessage
-	case errors.Is(err, llm.ErrCancelled), ctx.Err() != nil:
+	if !truncatedBare && cancelled {
 		c.emit("turn_error", map[string]any{"message": msg, "cancelled": true})
 		return
 	}
@@ -457,6 +485,25 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		c.reqText, c.reqReasoning = false, false
 		c.usageSeq++
 		seq := c.usageSeq
+		if c.turnAt < len(c.view) {
+			it := &c.view[c.turnAt]
+			u := it.Usage
+			if u == nil {
+				u = &turnUsage{}
+			}
+			u.Input += ev.Usage.Input
+			u.CacheRead += ev.Usage.CacheRead
+			u.CacheWrite += ev.Usage.CacheWrite
+			u.Output += ev.Usage.Output
+			it.Usage = u
+			if ev.Cost != nil {
+				usd := ev.Cost.USD
+				if it.CostUSD != nil {
+					usd += *it.CostUSD
+				}
+				it.CostUSD = &usd
+			}
+		}
 		c.mu.Unlock()
 		// seq numbers the chat's requests (1, 2, ...): a client that sees the
 		// same one twice has seen the same request's usage twice.
@@ -466,8 +513,14 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		}
 		c.emit("usage", out)
 	case llm.LoopWarning:
+		text := priceWarningText(*ev.Warning)
+		c.mu.Lock()
+		if c.turnAt < len(c.view) {
+			c.view[c.turnAt].Warning = text
+		}
+		c.mu.Unlock()
 		c.emit("warning", map[string]any{
-			"message": priceWarningText(*ev.Warning), "threshold": ev.Warning.Threshold,
+			"message": text, "threshold": ev.Warning.Threshold,
 			"prompt_tokens": ev.Warning.PromptTokens, "model": ev.Warning.Model,
 		})
 	}

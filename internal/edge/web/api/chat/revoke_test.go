@@ -2,9 +2,11 @@ package chat
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -173,4 +175,90 @@ func TestChat_UsageSeqIncreasesAcrossAPauseTurnContinuation(t *testing.T) {
 	}
 	require.Equal(t, 1, done, "both responses belong to one turn: "+strings.Join(names(evs), ","))
 	require.Equal(t, []int{1, 2}, seqs, "two responses in one turn give two usage events with distinct, increasing seq")
+}
+
+// The snapshot (GET /chats/{id}) is the whole truth about every turn: each user
+// item carries the turn's summed usage and cost, its price warning, and how it
+// ended, so a page that holds one patches nothing.
+type snapTurn struct {
+	Kind      string     `json:"kind"`
+	Text      string     `json:"text"`
+	Usage     *turnUsage `json:"usage"`
+	CostUSD   *float64   `json:"cost_usd"`
+	Warning   string     `json:"warning"`
+	Error     string     `json:"error"`
+	Cancelled bool       `json:"cancelled"`
+}
+
+func userTurns(t *testing.T, h *harness, id string) ([]snapTurn, int) {
+	t.Helper()
+	code, body := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
+	require.Equal(t, http.StatusOK, code, string(body))
+	var v struct {
+		UsageSeq int        `json:"usage_seq"`
+		Items    []snapTurn `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(body, &v))
+	var out []snapTurn
+	for _, it := range v.Items {
+		if it.Kind == "user" {
+			out = append(out, it)
+		}
+	}
+	return out, v.UsageSeq
+}
+
+// SABOTAGE: chat.go onLoopEvent LoopUsage, drop the `it.Usage = u` assignment
+// (or LoopWarning's `Warning = text`, or finishTurn's `Error, Cancelled`
+// assignment) -> the matching assertion below fails.
+func TestChat_SnapshotCarriesEachTurnsUsageCostWarningAndEnd(t *testing.T) {
+	h := newHarness(t)
+	small := llm.Usage{Input: 11, CacheRead: 22, CacheWrite: 33, Output: 44}
+	big := llm.Usage{Input: 60000, CacheRead: 30001, CacheWrite: 7003, Output: 5} // prompt 97004: warns
+	h.queue("a1",
+		toolStep("tu_r", "knomit_repos", map[string]any{}, small), textStep("one", big), // turn 1: two requests
+		step{err: errors.New("provider exploded"), resp: nil}, // turn 2: fails
+		step{block: true}) // turn 3: stopped
+	id := h.create("uid:501", "a1")
+	s := h.attach("uid:501", id)
+
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "first"))
+	drive(t, h, "uid:501", id, s, nil)
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "second"))
+	drive(t, h, "uid:501", id, s, nil)
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "third"))
+	// Wait until the third turn is running, then stop it.
+	for i := 0; i < 200; i++ {
+		_, body := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
+		if strings.Contains(string(body), `"running":true`) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	code, _ := h.do("uid:501", http.MethodPost, "/chats/"+id+"/cancel", nil)
+	require.Equal(t, http.StatusNoContent, code)
+	evs := s.until("turn_error")
+	require.NotEmpty(t, evs)
+
+	turns, seq := userTurns(t, h, id)
+	require.Len(t, turns, 3)
+
+	// Turn 1: both requests summed, priced, with the one warning.
+	require.Equal(t, &turnUsage{Input: 60011, CacheRead: 30023, CacheWrite: 7036, Output: 49}, turns[0].Usage)
+	require.NotNil(t, turns[0].CostUSD, "a price card prices the turn")
+	require.Greater(t, *turns[0].CostUSD, 0.0)
+	require.Equal(t, "This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save.", turns[0].Warning)
+	require.Empty(t, turns[0].Error)
+
+	// Turn 2: failed, not cancelled, no usage of its own, no warning.
+	require.Contains(t, turns[1].Error, "provider exploded")
+	require.False(t, turns[1].Cancelled)
+	require.Nil(t, turns[1].Usage)
+	require.Empty(t, turns[1].Warning, "the one warning belongs to the turn it fired in")
+
+	// Turn 3: the person's Stop.
+	require.NotEmpty(t, turns[2].Error)
+	require.True(t, turns[2].Cancelled)
+
+	require.Equal(t, 2, seq, "usage_seq counts the two requests the items include")
 }
