@@ -151,7 +151,7 @@ func wirePrefixOllama(t *testing.T, s llm.Snapshot) []byte {
 		}
 	}))
 	defer srv.Close()
-	chat, err := llm.NewOllamaChat(context.Background(), "ollama-test-x", llm.OllamaOptions{Host: srv.URL})
+	chat, err := llm.NewOllamaChat(context.Background(), "ollama-test-x", llm.OllamaOptions{Host: srv.URL, NumCtx: 32768})
 	require.NoError(t, err)
 	require.Empty(t, chat.UnusableReason())
 	_, err = chat.Stream(context.Background(), s, llm.StreamOptions{}, nil)

@@ -11,6 +11,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,21 +33,22 @@ import (
 const (
 	ollamaProvider         = "ollama"
 	defaultOllamaKeepAlive = "30m"
-	// defaultOllamaNumCtx is sent on EVERY request, together with
-	// truncate:false. Without num_ctx Ollama loads the model with its own
-	// default context, and without truncate:false it silently drops the oldest
-	// messages of a prompt that does not fit (see ollamaChatRequest).
-	defaultOllamaNumCtx = 32768
-	defaultOllamaHost   = "http://localhost:11434"
+	// num_ctx is sent on EVERY request, together with truncate:false: without
+	// it Ollama loads the model with its own default context, and without
+	// truncate:false it silently drops the oldest messages of a prompt that
+	// does not fit (see ollamaChatRequest). There is no default value here:
+	// the configured num_ctx wins, otherwise numctx.go derives one.
+	defaultOllamaHost = "http://localhost:11434"
 	// ollamaUnlimited is num_predict -1: no output cap (see ollamaUncapped in
 	// ollama.go for why a cap buys nothing on a local model).
 	ollamaUnlimited = -1
 )
 
 // OllamaOptions configures an OllamaChat. Host defaults to OLLAMA_HOST, then
-// http://localhost:11434. KeepAlive defaults to "30m" and NumCtx to 32768;
-// NumCtx is also the context window the loop budgets against (Caps), capped
-// at the model's trained context when /api/show reports one.
+// http://localhost:11434. KeepAlive defaults to "30m". NumCtx is the
+// configured context size and always wins; 0 means "derive it" (numctx.go).
+// It is also the context window the loop budgets against (Caps), capped at
+// the model's trained context when /api/show reports one.
 // MaxOutput is an explicit reply cap: when > 0 it is sent as num_predict and
 // the loop reserves it. 0 (and a negative value) means no cap: num_predict -1
 // is sent, and the loop's pre-send reserve is a quarter of the effective
@@ -53,6 +56,11 @@ const (
 type OllamaOptions struct {
 	Host, KeepAlive   string
 	NumCtx, MaxOutput int
+	// Memory is a test seam: the memory usable for the KV cache after the
+	// model weights, in bytes, and whether it is known. nil means detect it
+	// (memlimit.Detect minus the weights' size from /api/tags). It is only
+	// consulted for a loopback host with NumCtx unset.
+	Memory func(ctx context.Context) (int64, bool)
 }
 
 func (o OllamaOptions) withDefaults() OllamaOptions {
@@ -69,8 +77,8 @@ func (o OllamaOptions) withDefaults() OllamaOptions {
 	if o.KeepAlive == "" {
 		o.KeepAlive = defaultOllamaKeepAlive
 	}
-	if o.NumCtx <= 0 {
-		o.NumCtx = defaultOllamaNumCtx
+	if o.NumCtx < 0 {
+		o.NumCtx = 0
 	}
 	return o
 }
@@ -85,6 +93,14 @@ type OllamaChat struct {
 	tools   bool   // the model advertises the "tools" capability
 	thinks  bool   // the model advertises "thinking"
 	reason  string // why the model is unusable, "" when it is usable
+
+	// ctxUnresolved: no num_ctx is configured and none could be derived
+	// (reason says why). The model is then unavailable, not merely toolless.
+	ctxUnresolved bool
+	how           string // how the window was resolved: NumCtxHow*; "" when unresolved
+
+	spillOnce sync.Once
+	spill     atomic.Bool // /api/ps showed layers on the CPU after the first request
 }
 
 var _ ChatModel = (*OllamaChat)(nil)
@@ -100,58 +116,67 @@ func NewOllamaChat(ctx context.Context, model string, o OllamaOptions) (*OllamaC
 		return nil, errors.New("ollama: no model name")
 	}
 	c := &OllamaChat{client: &http.Client{}, model: model, o: o.withDefaults()}
-	caps, trained, err := c.probe(ctx)
+	show, err := c.probe(ctx)
 	switch {
 	case err != nil:
 		c.reason = "capability probe failed: " + err.Error()
-	case !slices.Contains(caps, "tools"):
-		c.reason = "model does not support tool calling (capabilities: " + strings.Join(caps, ", ") + ")"
+	case !slices.Contains(show.caps, "tools"):
+		c.reason = "model does not support tool calling (capabilities: " + strings.Join(show.caps, ", ") + ")"
 	default:
 		c.tools = true
 	}
-	c.thinks = slices.Contains(caps, "thinking")
-	c.trained = trained
+	c.thinks = slices.Contains(show.caps, "thinking")
+	c.trained = show.trained
+	c.resolveNumCtx(ctx, show, err == nil)
 	return c, nil
 }
 
-// probe asks /api/show for the model's capabilities and trained context
-// length (model_info["<general.architecture>.context_length"], 0 when the
-// response does not carry it).
-func (c *OllamaChat) probe(ctx context.Context) ([]string, int, error) {
+// ollamaShow is what /api/show tells knomit about a model.
+type ollamaShow struct {
+	caps    []string
+	trained int            // model_info["<arch>.context_length"], 0 when absent
+	arch    string         // model_info["general.architecture"]
+	info    map[string]any // the whole model_info
+}
+
+// probe asks /api/show for the model's capabilities, trained context length
+// and the model_info keys numctx.go sizes the KV cache from.
+func (c *OllamaChat) probe(ctx context.Context) (ollamaShow, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	body, err := json.Marshal(map[string]string{"model": c.model})
 	if err != nil {
-		return nil, 0, err
+		return ollamaShow{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.o.Host+"/api/show", bytes.NewReader(body))
 	if err != nil {
-		return nil, 0, err
+		return ollamaShow{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return ollamaShow{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, 0, fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(b))
+		return ollamaShow{}, fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(b))
 	}
 	var show struct {
 		Capabilities []string       `json:"capabilities"`
 		ModelInfo    map[string]any `json:"model_info"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&show); err != nil {
-		return nil, 0, fmt.Errorf("unreadable response: %w", err)
+		return ollamaShow{}, fmt.Errorf("unreadable response: %w", err)
 	}
-	trained := 0
+	out := ollamaShow{caps: show.Capabilities, info: show.ModelInfo}
 	if arch, ok := show.ModelInfo["general.architecture"].(string); ok {
+		out.arch = arch
 		if n, ok := show.ModelInfo[arch+".context_length"].(float64); ok && n > 0 {
-			trained = int(n)
+			out.trained = int(n)
 		}
 	}
-	return show.Capabilities, trained, nil
+	return out, nil
 }
 
 func (c *OllamaChat) Provider() string { return ollamaProvider }
@@ -521,6 +546,7 @@ func (c *OllamaChat) Stream(ctx context.Context, s Snapshot, o StreamOptions, si
 		return nil, &StopError{Reason: StopMaxTokens, Response: out}
 	}
 	sink(Event{Kind: EventDone})
+	c.checkSpillOnce(ctx)
 	return out, nil
 }
 

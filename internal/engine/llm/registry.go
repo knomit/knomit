@@ -194,6 +194,11 @@ func (r *Registry) ollamaStatus(ctx context.Context, p config.LLMProviderConfig)
 			out = append(out, ModelStatus{ID: m, Reason: err.Error()})
 			continue
 		}
+		if c.ContextUnresolved() {
+			// No num_ctx configured and none derivable: unavailable, not merely toolless.
+			out = append(out, ModelStatus{ID: m, Reason: c.UnusableReason()})
+			continue
+		}
 		out = append(out, ModelStatus{ID: m, Available: true, Tools: c.Caps().Tools, Reason: c.UnusableReason()})
 	}
 	return out

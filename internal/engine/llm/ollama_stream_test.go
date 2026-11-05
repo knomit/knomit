@@ -49,7 +49,7 @@ func TestOllamaChat_CapsFromShow(t *testing.T) {
 			http.Error(w, "boom", http.StatusInternalServerError)
 		}))
 		t.Cleanup(srv.Close)
-		c, err := NewOllamaChat(context.Background(), "m", OllamaOptions{Host: srv.URL})
+		c, err := NewOllamaChat(context.Background(), "m", OllamaOptions{Host: srv.URL, NumCtx: 32768})
 		require.NoError(t, err)
 		require.False(t, c.Caps().Tools)
 		require.Contains(t, c.UnusableReason(), "capability probe failed")
@@ -231,7 +231,7 @@ func TestOllamaChat_InvalidToolArgumentsFailTheTurn(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 		}))
 		t.Cleanup(srv.Close)
-		c, err := NewOllamaChat(context.Background(), "m", OllamaOptions{Host: srv.URL})
+		c, err := NewOllamaChat(context.Background(), "m", OllamaOptions{Host: srv.URL, NumCtx: 32768})
 		require.NoError(t, err)
 		resp, err := c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
 		require.Nil(t, resp)
@@ -259,7 +259,7 @@ func TestOllamaChat_PromptOverContextIsErrContextFull(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": tooLong})
 		}))
 		t.Cleanup(srv.Close)
-		c, err := NewOllamaChat(context.Background(), "m", OllamaOptions{Host: srv.URL})
+		c, err := NewOllamaChat(context.Background(), "m", OllamaOptions{Host: srv.URL, NumCtx: 32768})
 		require.NoError(t, err)
 		_, err = c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
 		require.ErrorIs(t, err, ErrContextFull)
@@ -282,7 +282,7 @@ func TestOllamaChat_PromptOverContextIsErrContextFull(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": `"m" does not support thinking`})
 		}))
 		t.Cleanup(srv.Close)
-		c, err := NewOllamaChat(context.Background(), "m", OllamaOptions{Host: srv.URL})
+		c, err := NewOllamaChat(context.Background(), "m", OllamaOptions{Host: srv.URL, NumCtx: 32768})
 		require.NoError(t, err)
 		_, err = c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
 		require.Error(t, err)
@@ -369,7 +369,7 @@ func TestOllamaChat_StreamFailures(t *testing.T) {
 			http.Error(w, "busy", http.StatusServiceUnavailable)
 		}))
 		t.Cleanup(srv.Close)
-		c, err := NewOllamaChat(context.Background(), "m", OllamaOptions{Host: srv.URL})
+		c, err := NewOllamaChat(context.Background(), "m", OllamaOptions{Host: srv.URL, NumCtx: 32768})
 		require.NoError(t, err)
 		_, err = c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, nil)
 		require.ErrorContains(t, err, "ollama: HTTP 503: busy")
@@ -396,6 +396,10 @@ func TestOllamaChat_ThinkingLinesAreProgress(t *testing.T) {
 			_, _ = io.WriteString(w, `{"capabilities":["tools","thinking"]}`)
 			return
 		}
+		if r.URL.Path != "/api/chat" {
+			http.NotFound(w, r) // e.g. the one /api/ps spill check after the first request
+			return
+		}
 		chats++
 		_, _ = io.WriteString(w, `{"message":{"role":"assistant","content":"","thinking":"hmm"},"done":false}`+"\n")
 		w.(http.Flusher).Flush()
@@ -403,7 +407,7 @@ func TestOllamaChat_ThinkingLinesAreProgress(t *testing.T) {
 		_, _ = io.WriteString(w, `{"message":{"role":"assistant","content":"done thinking"},"done_reason":"stop","done":true}`+"\n")
 	}))
 	t.Cleanup(srv.Close)
-	c, err := NewOllamaChat(context.Background(), "m", OllamaOptions{Host: srv.URL})
+	c, err := NewOllamaChat(context.Background(), "m", OllamaOptions{Host: srv.URL, NumCtx: 32768})
 	require.NoError(t, err)
 
 	progress := 0

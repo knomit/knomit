@@ -58,5 +58,9 @@ tiers = [{ up_to_prompt_tokens = 0, input_per_mtok = 4.0, output_per_mtok = 20.0
 # kind = "ollama"
 # host = "http://localhost:11434"
 # models = ["qwen3:14b"]
-# num_ctx = 32768
+# num_ctx is the context window in tokens, for the prompt and the reply
+# together. Leave it unset to let knomit derive one for a local Ollama from the
+# model and this machine's memory. Set it to override that. It is required for
+# a remote Ollama, which knomit cannot size.
+# num_ctx = 16384
 # keep_alive = "30m"
