@@ -72,9 +72,9 @@ const DefaultMaxCalls = 500
 // retry.
 const RepeatFailureLimit = 3
 
-// RepeatedFailureMessage_DRAFT is the sentence the user is shown when the turn
-// is ended by the repeat guard. DRAFT COPY: needs user approval.
-const RepeatedFailureMessage_DRAFT = "The model kept making the same failing tool call (%s, %d times with the same error), so the turn was stopped. The last error was: %s"
+// RepeatedFailureMessage is the sentence the user is shown when the turn
+// is ended by the repeat guard.
+const RepeatedFailureMessage = "The model kept making the same failing tool call (%s, %d times with the same error), so the turn was stopped. The last error was: %s"
 
 var (
 	// ErrRepeatedFailure: the model repeated one failing call RepeatFailureLimit times in a row.
@@ -322,9 +322,6 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 				runErr = &turnError{msg: "The turn was cancelled.", err: ErrCancelled}
 			} else if errors.Is(err, ErrContextFull) {
 				if caps := l.Model.Caps(); isOpening(snap) && caps.ContextWindow > 0 {
-					if l.Options.MaxOutput > 0 {
-						caps.MaxOutput = l.Options.MaxOutput
-					}
 					runErr = l.openingRefused(est, caps.ContextWindow, err)
 				} else {
 					runErr = &turnError{msg: contextFullMessage, err: err}
@@ -538,7 +535,7 @@ func (g *repeatGuard) reset() { g.key, g.n = "", 0 }
 
 func repeatedFailure(tool string, n int, lastErr string) error {
 	return &turnError{
-		msg: fmt.Sprintf(RepeatedFailureMessage_DRAFT, tool, n, lastErr),
+		msg: fmt.Sprintf(RepeatedFailureMessage, tool, n, lastErr),
 		err: ErrRepeatedFailure,
 	}
 }
@@ -699,15 +696,14 @@ func (l *Loop) checkBudget(snap Snapshot, est int) error {
 	return nil
 }
 
-// OpeningTooBigMessage_DRAFT is shown when the very first request of a chat
+// OpeningTooBigMessage is shown when the very first request of a chat
 // (tool definitions, instructions and the first message, with nothing said
 // yet) does not fit the window. The arguments are the estimated opening size,
-// the window, the reply reserve and the room left after it. DRAFT COPY: needs
-// user approval.
-const OpeningTooBigMessage_DRAFT = "The opening of this chat (the tool definitions, the repo instructions and your message) needs about %d tokens, but the context window of %s is %d and %d of it is reserved for the reply, which leaves %d. Use a model with a larger window%s."
+// the window, the reply reserve and the room left after it.
+const OpeningTooBigMessage = "The opening of this chat (the tool definitions, the repo instructions and your message) needs about %d tokens, but the context window of %s is %d and %d of it is reserved for the reply, which leaves %d. Use a model with a larger window%s."
 
-// OllamaRaiseNumCtxHint_DRAFT is appended for an Ollama provider. DRAFT COPY.
-const OllamaRaiseNumCtxHint_DRAFT = ", or raise num_ctx for this provider in knomit.toml"
+// OllamaRaiseNumCtxHint is appended for an Ollama provider.
+const OllamaRaiseNumCtxHint = ", or raise num_ctx for this provider in knomit.toml"
 
 // isOpening reports whether snap is a chat's first request: nothing in the
 // conversation hook and only the first user entry in the turn hook.
@@ -722,24 +718,23 @@ func isOpening(snap Snapshot) bool {
 func (l *Loop) openingTooBig(est, reserve, window int) error {
 	hint := ""
 	if l.Model.Provider() == "ollama" {
-		hint = OllamaRaiseNumCtxHint_DRAFT
+		hint = OllamaRaiseNumCtxHint
 	}
 	left := max(window-reserve, 0)
 	return &turnError{
-		msg: fmt.Sprintf(OpeningTooBigMessage_DRAFT, est, l.Model.Model(), window, reserve, left, hint),
+		msg: fmt.Sprintf(OpeningTooBigMessage, est, l.Model.Model(), window, reserve, left, hint),
 		err: ErrContextFull,
 	}
 }
 
-// OpeningRefusedByServerMessage_DRAFT is shown when the server refused an
+// OpeningRefusedByServerMessage is shown when the server refused an
 // opening that the local estimate says fits the window the model reports: the
 // estimate and the window are therefore not what the server enforces. The
-// arguments are the estimate, the model, the reported window and a hint. DRAFT
-// COPY: needs user approval.
-const OpeningRefusedByServerMessage_DRAFT = "The server refused the opening of this chat even though its estimated size (about %d tokens) fits the context window reported for %s (%d)%s."
+// arguments are the estimate, the model, the reported window and a hint.
+const OpeningRefusedByServerMessage = "The server refused the opening of this chat even though its estimated size (about %d tokens) fits the context window reported for %s (%d)%s."
 
-// OllamaServerContextHint_DRAFT is appended for an Ollama provider. DRAFT COPY.
-const OllamaServerContextHint_DRAFT = ". The server's context (num_ctx) is likely smaller than the opening, so raise num_ctx for this provider in knomit.toml"
+// OllamaServerContextHint is appended for an Ollama provider.
+const OllamaServerContextHint = ". The server's context (num_ctx) is likely smaller than the opening, so raise num_ctx for this provider in knomit.toml"
 
 // openingRefused is the error for an opening the adapter (the server) refused
 // with ErrContextFull although the local estimate fit. It makes no claim about
@@ -747,10 +742,10 @@ const OllamaServerContextHint_DRAFT = ". The server's context (num_ctx) is likel
 func (l *Loop) openingRefused(est, window int, cause error) error {
 	hint := ""
 	if l.Model.Provider() == "ollama" {
-		hint = OllamaServerContextHint_DRAFT
+		hint = OllamaServerContextHint
 	}
 	return &turnError{
-		msg: fmt.Sprintf(OpeningRefusedByServerMessage_DRAFT, est, l.Model.Model(), window, hint),
+		msg: fmt.Sprintf(OpeningRefusedByServerMessage, est, l.Model.Model(), window, hint),
 		err: cause,
 	}
 }

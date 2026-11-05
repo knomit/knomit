@@ -46,7 +46,7 @@ func TestLoop_RepeatedIdenticalFailureEndsTheTurn(t *testing.T) {
 	if h.calls != RepeatFailureLimit || len(m.snaps) != RepeatFailureLimit {
 		t.Fatalf("host calls %d, requests %d; want %d each", h.calls, len(m.snaps), RepeatFailureLimit)
 	}
-	want := fmt.Sprintf(RepeatedFailureMessage_DRAFT, "knomit_learn", RepeatFailureLimit, "empty path")
+	want := fmt.Sprintf(RepeatedFailureMessage, "knomit_learn", RepeatFailureLimit, "empty path")
 	if err.Error() != want {
 		t.Fatalf("message = %q, want %q", err.Error(), want)
 	}
