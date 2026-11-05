@@ -26,7 +26,7 @@ models = ["o1"]
 	require.Equal(t, "ANTHROPIC_API_KEY", a.APIKeyEnv)
 	require.Equal(t, []string{"o1"}, l.Models)
 	require.Equal(t, "30m", l.KeepAlive)
-	require.Equal(t, 32768, l.NumCtx)
+	require.Equal(t, 0, l.NumCtx, "num_ctx has no default: unset means derive")
 }
 
 func TestLLMProviders_ModelDefaultsAndTieredPrice(t *testing.T) {
@@ -175,6 +175,20 @@ func TestLLMProviders_OllamaMaxOutputBelowNumCtx(t *testing.T) {
 	writeConfig(t, body("4095"))
 	_, err = Load()
 	require.NoError(t, err)
+}
+
+// An unset num_ctx stays 0 (the llm package derives it), and the
+// max_output_tokens < num_ctx rule applies only when num_ctx is set: with it
+// unset there is nothing to compare against until the model is probed.
+func TestConfig_NumCtxUnsetStaysZero(t *testing.T) {
+	writeConfig(t, "[llm.providers.local]\nkind = \"ollama\"\nmodels = [\"o1\"]\n[llm.providers.local.model.o1]\nmax_output_tokens = 100000\n")
+	cfg, err := Load()
+	require.NoError(t, err, "no num_ctx to compare max_output_tokens with")
+	require.Equal(t, 0, cfg.LLM.Providers["local"].NumCtx)
+
+	writeConfig(t, "[llm.providers.local]\nkind = \"ollama\"\nmodels = [\"o1\"]\nnum_ctx = 4096\n[llm.providers.local.model.o1]\nmax_output_tokens = 100000\n")
+	_, err = Load()
+	require.ErrorContains(t, err, "must be below num_ctx 4096", "the rule still applies once num_ctx is set")
 }
 
 func TestLLMProviderConfig_APIKeyFileModeChecked(t *testing.T) {

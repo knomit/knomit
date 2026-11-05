@@ -36,6 +36,7 @@ GET /chat-providers | requestID > recoverer > reportPanic > authMiddleware > met
 GET /chats | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
 GET /chats/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
 GET /chats/{id}/calls/{callId} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
+GET /chats/{id}/context | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
 GET /chats/{id}/events | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
 GET /chats/{id}/grants | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
 GET /fleet | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleGetFleet

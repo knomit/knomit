@@ -4296,6 +4296,33 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /chats/{id}/context:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [chat]
+      summary: The chat model's context window
+      description: |
+        The context window in tokens, how it was resolved (`config`, `memory`
+        or `trained`; absent when the model does not say) and whether Ollama
+        reported part of the model on the CPU after the first request.
+      operationId: getChatContext
+      responses:
+        "200":
+          description: The window
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  window: { type: integer }
+                  how: { type: string, enum: [config, memory, trained] }
+                  spill: { type: boolean }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /chats/{id}/grants:
     parameters:
       - name: id

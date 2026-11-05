@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { listChatGrants, revokeChatGrant } from './chatApi';
-import type { ChatGrant } from './chatApi';
-import { CHAT_NO_GRANTS, CHAT_REVOKE_GRANT } from './chatCopy';
+import { getChatContext, listChatGrants, revokeChatGrant } from './chatApi';
+import type { ChatContext, ChatGrant } from './chatApi';
+import { CHAT_NO_GRANTS, CHAT_REVOKE_GRANT, chatContextLine, chatSpillWarning } from './chatCopy';
 
 /**
  * ChatSettings is the chat's Settings tab: what has been authorized for the
@@ -14,6 +14,13 @@ import { CHAT_NO_GRANTS, CHAT_REVOKE_GRANT } from './chatCopy';
 export function ChatSettings({ chatId }: { chatId: string }) {
   const [grants, setGrants] = useState<ChatGrant[] | null>(null);
   const [err, setErr] = useState('');
+  const [ctx, setCtx] = useState<ChatContext | null>(null);
+  // The context line is informational: a failure to read it shows nothing.
+  useEffect(() => {
+    let cancelled = false;
+    getChatContext(chatId).then(c => { if (!cancelled) setCtx(c); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [chatId]);
   useEffect(() => {
     let cancelled = false;
     listChatGrants(chatId)
@@ -33,6 +40,8 @@ export function ChatSettings({ chatId }: { chatId: string }) {
   };
   return (
     <div data-testid="chat-settings" style={page}>
+      {ctx && ctx.window > 0 && <div data-testid="chat-context" style={{ color: '#ddd', fontSize: 13, marginBottom: 12 }}>{chatContextLine(ctx.window, ctx.how ?? '')}</div>}
+      {ctx && ctx.spill && <div data-testid="chat-context-spill" style={{ color: '#e0c080', fontSize: 13, marginBottom: 12 }}>{chatSpillWarning(ctx.window)}</div>}
       {err && <div role="alert" style={{ color: '#e0a0a0', fontSize: 13 }}>{err}</div>}
       {grants && grants.length === 0 && <div data-testid="chat-grants-empty" style={{ color: '#888', fontSize: 13 }}>{CHAT_NO_GRANTS}</div>}
       {grants && grants.map((g, i) => (
