@@ -84,8 +84,10 @@ func (l *sessionLog) write(typ string, fields map[string]any) {
 	}
 }
 
-func (l *sessionLog) Start(provider, model string) {
-	l.write("chat_start", map[string]any{"provider": provider, "model": model})
+// Start writes chat_start with the model's resolved context window and how it
+// was resolved (llm.NumCtxHow*; "" when the model does not say).
+func (l *sessionLog) Start(provider, model string, window int, how string) {
+	l.write("chat_start", map[string]any{"provider": provider, "model": model, "context_window": window, "context_window_how": how})
 }
 
 // End writes chat_end and closes the file.

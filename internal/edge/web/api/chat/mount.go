@@ -298,7 +298,8 @@ func (m *manager) create(ctx context.Context, p auth.Principal, provider, model 
 		lg = nil
 	}
 	c.log = lg
-	c.log.Start(provider, model)
+	window, how, _ := contextOf(cm)
+	c.log.Start(provider, model, window, how)
 
 	var price *llm.PriceCard
 	if m.price != nil {

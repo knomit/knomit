@@ -134,6 +134,15 @@ export function revokeChatGrant(id: string, grant: ChatGrant): Promise<void> {
   return noContent(`${chatUrl(id)}/grants`, { method: 'DELETE', headers: JSON_HEADERS, body: JSON.stringify(grant) });
 }
 
+/** The chat model's context window, how it was resolved ("config", "memory",
+ *  "trained"; absent when the model does not say) and whether Ollama reported
+ *  it partly on the CPU after the first request. */
+export interface ChatContext { window: number; how?: string; spill: boolean }
+
+export function getChatContext(id: string): Promise<ChatContext> {
+  return fetchJSON<ChatContext>(`${chatUrl(id)}/context`);
+}
+
 export function getChatCall(id: string, callId: string): Promise<ChatCall> {
   return fetchJSON<ChatCall>(`${chatUrl(id)}/calls/${encodeURIComponent(callId)}`);
 }

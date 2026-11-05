@@ -37,6 +37,25 @@ export const CHAT_STOP = 'Stop';
 /** The chat's Settings body when nothing has been authorized for the session. */
 export const CHAT_NO_GRANTS = 'Nothing has been allowed for this session.';
 
+/** The chat Settings line for the model's context window. `how` is what the
+ *  server reports: "config", "memory", or "trained" (derived, and the model's
+ *  own trained length was the smaller; this third wording is not in the
+ *  approved set and is flagged in the PR). */
+export const CHAT_CONTEXT_HOW: Record<string, string> = {
+  config: 'set in config',
+  memory: "limited to fit this machine's memory",
+  trained: "set to the model's trained context length",
+};
+export function chatContextLine(window: number, how: string): string {
+  const h = CHAT_CONTEXT_HOW[how];
+  return h ? `Context window ${window} tokens, ${h}` : `Context window ${window} tokens`;
+}
+
+/** Shown when Ollama reports part of the model running on the CPU. */
+export function chatSpillWarning(window: number): string {
+  return `This model is partly running on CPU at a context of ${window} tokens. Set num_ctx for this provider in knomit.toml to a smaller value.`;
+}
+
 /** The result panel, while a tool result is being fetched. */
 export const CHAT_RESULT_LOADING = 'Loading…';
 

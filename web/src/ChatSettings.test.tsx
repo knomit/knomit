@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { ChatSettings } from './ChatSettings';
 import { stubFleetFetch } from './fleetTestFetch';
-import { CHAT_NO_GRANTS, CHAT_REVOKE_GRANT } from './chatCopy';
+import { CHAT_NO_GRANTS, CHAT_REVOKE_GRANT, chatContextLine, chatSpillWarning } from './chatCopy';
 
 const BASE = '/api/v1/chats/chat-a';
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -20,7 +20,37 @@ describe('ChatSettings', () => {
     expect(screen.getByTestId('chat-grant-action')).toHaveTextContent('learn');
     expect(row).toBeInTheDocument();
     expect(screen.queryByTestId('chat-grants-empty')).toBeNull();
-    expect(fx.calls.map(c => c.route)).toEqual([`GET ${BASE}/grants`]);
+    expect(fx.calls.map(c => c.route).sort()).toEqual([`GET ${BASE}/context`, `GET ${BASE}/grants`]);
+  });
+
+  it('shows the context window and how it was resolved, with the values the server sent', async () => {
+    stubFleetFetch({
+      [`GET ${BASE}/grants`]: { body: { count: 0, _embedded: { grants: [] } } },
+      [`GET ${BASE}/context`]: { body: { window: 45056, how: 'memory', spill: false } },
+    });
+    render(<ChatSettings chatId="chat-a" />);
+    expect(await screen.findByTestId('chat-context')).toHaveTextContent(chatContextLine(45056, 'memory'));
+    expect(screen.getByTestId('chat-context')).toHaveTextContent("Context window 45056 tokens, limited to fit this machine's memory");
+    expect(screen.queryByTestId('chat-context-spill')).toBeNull();
+  });
+
+  it('says "set in config" for a configured window and warns when the model is partly on the CPU', async () => {
+    stubFleetFetch({
+      [`GET ${BASE}/grants`]: { body: { count: 0, _embedded: { grants: [] } } },
+      [`GET ${BASE}/context`]: { body: { window: 12288, how: 'config', spill: true } },
+    });
+    render(<ChatSettings chatId="chat-a" />);
+    expect(await screen.findByTestId('chat-context')).toHaveTextContent('Context window 12288 tokens, set in config');
+    expect(screen.getByTestId('chat-context-spill')).toHaveTextContent(chatSpillWarning(12288));
+    expect(screen.getByTestId('chat-context-spill')).toHaveTextContent('Set num_ctx for this provider in knomit.toml to a smaller value.');
+  });
+
+  it('shows no context line when the server cannot say', async () => {
+    stubFleetFetch({ [`GET ${BASE}/grants`]: { body: { count: 0, _embedded: { grants: [] } } } });
+    render(<ChatSettings chatId="chat-a" />);
+    await screen.findByTestId('chat-grants-empty');
+    expect(screen.queryByTestId('chat-context')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('shows an empty state when nothing has been allowed', async () => {
