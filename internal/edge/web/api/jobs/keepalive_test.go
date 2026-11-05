@@ -37,7 +37,7 @@ func testRouter(m *repos.Manager) http.Handler {
 		})
 		r.Route("/branches/{branch}", func(r chi.Router) {
 			r.Use(httpx.BranchMiddleware)
-			Mount(r, m, nil)
+			Mount(r, m)
 		})
 	})
 	return r
@@ -85,8 +85,8 @@ func TestJobs_EventsKeepaliveOnAnIdleStream(t *testing.T) {
 
 	gate := make(chan struct{})
 	started := make(chan struct{})
-	id, err := hub.Start("synth", func(ctx context.Context, emit func(events.TaskEvent)) {
-		emit(events.TaskEvent{Status: "running", Phase: "start", Message: "review starting"})
+	id, err := hub.Start("rebuild", func(ctx context.Context, emit func(events.TaskEvent)) {
+		emit(events.TaskEvent{Status: "running", Phase: "start", Message: "rebuild starting"})
 		close(started)
 		select {
 		case <-gate:
@@ -94,7 +94,7 @@ func TestJobs_EventsKeepaliveOnAnIdleStream(t *testing.T) {
 		}
 	})
 	if err != nil {
-		t.Fatalf("start held synth: %v", err)
+		t.Fatalf("start held rebuild: %v", err)
 	}
 	<-started
 	t.Cleanup(func() { close(gate) })
@@ -105,7 +105,7 @@ func TestJobs_EventsKeepaliveOnAnIdleStream(t *testing.T) {
 	go func() {
 		defer close(done)
 		testRouter(m).ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-			"/repos/alpha/branches/agent:test/synthesis-runs/"+id+"/events", nil).WithContext(ctx))
+			"/repos/alpha/branches/agent:test/index-rebuilds/"+id+"/events", nil).WithContext(ctx))
 	}()
 	defer func() { cancel(); <-done }()
 

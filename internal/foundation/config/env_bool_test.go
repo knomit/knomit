@@ -180,7 +180,7 @@ func TestLoad_GitServeZeroIsFalse(t *testing.T) {
 // Load propagates the rejection: boot fails loudly instead of applying a
 // value nobody chose.
 func TestLoad_MalformedBoolEnvErrors(t *testing.T) {
-	for _, key := range []string{"KNOMIT_LLM_CACHE", "KNOMIT_LLM_BATCH", "KNOMIT_GIT_SERVE", "KNOMIT_READ_ONLY"} {
+	for _, key := range []string{"KNOMIT_GIT_SERVE", "KNOMIT_READ_ONLY"} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv("KNOMIT_HOME", t.TempDir())
 			t.Setenv(key, "yes")

@@ -59,7 +59,7 @@ func fleetRepoMutatingRoutes(t *testing.T, s *Server, repo, branch string) [][2]
 // and operator), each mutating route of /repos/{repo} in the real route table
 // (rename, archive, the repo PATCH, PUT and DELETE origin, the upstream,
 // origin sessions, the pushed-branch merge, fact and experiment writes, index
-// and synthesis jobs, …) answers 409 fleet_repository, one subtest per
+// jobs, …) answers 409 fleet_repository, one subtest per
 // route, and its handler does not run: on this MEMBER's copy the fleet
 // repository keeps its name, its origin is still the fleet's URL, and its
 // agent branch did not move. Reads pass (GET of the repo and its origin). A
@@ -98,7 +98,7 @@ func TestFleetRepo_EveryGenericMutationIsRefused(t *testing.T) {
 		"DELETE " + base + "/origin", "PATCH " + base + "/origin/upstream", "POST " + base + "/origin-sessions/",
 		"POST " + base + "/origin-sessions/s1/commit", "POST " + base + agent + "/merge", "POST " + base + agent + "/facts",
 		"PUT " + base + agent + "/facts/kb/x.md", "DELETE " + base + agent + "/facts/kb/x.md", "POST " + base + "/experiments",
-		"POST " + base + "/index:cancel", "POST " + base + agent + "/index-rebuilds", "POST " + base + agent + "/synthesis-runs",
+		"POST " + base + "/index:cancel", "POST " + base + agent + "/index-rebuilds",
 	} {
 		require.True(t, have[want], "the walk found %s (it found %v)", want, routes)
 	}

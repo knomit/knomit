@@ -432,7 +432,7 @@ func setAutostart(tog autostart.Toggler, on bool) error {
 }
 
 // configFileMode is what a dialog-created knomit.toml gets. Owner-only, because
-// the file can hold an LLM API key ([llm] api_key). An existing file keeps
+// the file can hold an LLM API key ([llm.providers.<name>] api_key). An existing file keeps
 // whatever mode the user gave it.
 //
 // On Windows the mode is meaningless: Go maps it onto the read-only attribute

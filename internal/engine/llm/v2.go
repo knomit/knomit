@@ -8,8 +8,6 @@ import (
 )
 
 // This file is the v2 model interface: streaming, tool-calling, cache-aware.
-// It coexists with the v1 LLMAdapter/Complete path until that is deleted; the
-// v2 names (ChatModel, Entry, Block) are chosen so the two never collide.
 //
 // A request is never a flat message list. It is a Snapshot of the context
 // Builder's fixed hooks (builder.go), which each adapter renders into its own

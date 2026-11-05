@@ -28,7 +28,6 @@ import (
 
 	"knomit/internal/corpus/repos"
 	"knomit/internal/corpus/synthesize/step"
-	"knomit/internal/engine/llm"
 )
 
 // Reviewer orchestrates multi-turn review sessions.
@@ -122,7 +121,7 @@ func (r *Reviewer) StartOrResumeSession(ctx context.Context, opts StartOptions) 
 // and returns the next item, or done if the session is complete.
 //
 // Equivalent to ContinueSessionForItem with itemID 0 (no item assertion).
-// Kept as the plain form because most callers — RunAll, the tests, and any
+// Kept as the plain form because most callers — the tests and any
 // client that predates the item_id wire field — have no id to assert.
 func (r *Reviewer) ContinueSession(ctx context.Context, sessionID, response string) (*step.ReviewResult, error) {
 	return reviewResult(r.p.ContinueSession(ctx, sessionID, response))
@@ -162,11 +161,6 @@ func (r *Reviewer) PageItem(ctx context.Context, sessionID string, itemID int64,
 	return reviewResultPage(res, page)
 }
 
-// RunAll drives the review session to completion using an LLM adapter.
-func (r *Reviewer) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
-	return r.p.RunAll(ctx, adapter)
-}
-
 // reviewResult converts the engine's tool-neutral turn result into the review
 // wire shape. Written to take the (result, error) pair so every delegating
 // method above stays a one-liner.
@@ -185,10 +179,9 @@ func reviewResult(res *step.PipelineResult, err error) (*step.ReviewResult, erro
 // reviewResultPage is reviewResult for a chosen page.
 //
 // Paging lives HERE, at the transport boundary, and not in the strategy's
-// Render: the engine and its in-process consumers (RunAll, the web synthesis
-// job) want the whole item, and only the MCP wire has a per-result size limit.
-// Slicing in Render would have handed RunAll one page and silently dropped the
-// rest — the model would receive instructions about facts it was never shown.
+// Render: the engine wants the whole item, and only the MCP wire has a
+// per-result size limit. Slicing in Render would hand every other consumer one
+// page and silently drop the rest.
 func reviewResultPage(res *step.PipelineResult, page int) (*step.ReviewResult, error) {
 	if res == nil {
 		return nil, nil

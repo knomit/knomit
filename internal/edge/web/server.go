@@ -78,7 +78,6 @@ type Server struct {
 	// from Manager.ClientSessions() by internal/app, AFTER Manager.Start
 	// opens it.
 	ClientSessions *clientsessions.Store
-	LLMAdapter     llm.LLMAdapter      // nil if no LLM configured
 	Embedder       model.BatchEmbedder // nil if unavailable
 
 	// Logs is the in-process log tap that GET /api/v1/logs/events streams

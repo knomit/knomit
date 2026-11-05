@@ -462,9 +462,9 @@ func TestApply_RestartNeededKeysAreListedExactly(t *testing.T) {
 		c.Auth.LoopbackHosts = []string{"kb.example"}
 		c.OAuth.Issuer = "https://issuer.example"
 		c.Runtime.Addr = "127.0.0.1:1"
-		c.LLM.APIKey = "secret-value"
+		c.Git.Port = "secret-value"
 	}))
-	want := []string{"auth.loopback_hosts", "auth.require", "llm.api_key", "oauth.issuer", "runtime.addr", "socket"}
+	want := []string{"auth.loopback_hosts", "auth.require", "git.port", "oauth.issuer", "runtime.addr", "socket"}
 	if !slices.Equal(res.RestartNeeded, want) {
 		t.Fatalf("restart_needed = %v\nwant            %v", res.RestartNeeded, want)
 	}

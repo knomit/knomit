@@ -172,29 +172,6 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		a.closers = append(a.closers, e.Close)
 	}
 
-	// LLM adapter.
-	var llmAdapter llm.LLMAdapter
-	var llmInitErr error
-	provider, err := llm.ResolveProvider(cfg.LLM.Model, cfg.LLM.Provider)
-	if err != nil {
-		log.Warn().Err(err).Msg("LLM provider resolution failed")
-	} else {
-		llmAdapter, llmInitErr = llm.NewAdapter(ctx, provider, cfg.LLM.Model, cfg.LLM)
-	}
-
-	if tracePath := os.Getenv("KNOMIT_LLM_TRACE"); tracePath != "" && llmAdapter != nil {
-		tracer, err := llm.NewTracingAdapter(llmAdapter, tracePath)
-		if err != nil {
-			log.Warn().Err(err).Msg("LLM trace init failed")
-		} else {
-			llmAdapter = tracer
-			a.closers = append(a.closers, func() { tracer.Close() })
-			log.Info().Str("path", tracePath).Msg("LLM tracing enabled")
-		}
-	}
-
-	logLLMSetup(log.Logger, llmAdapter, llmInitErr)
-
 	// The chat's providers (the v2 harness). Nothing is contacted until the
 	// chat lists or opens a model.
 	var llmRegistry *llm.Registry
@@ -254,7 +231,6 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		EmbeddingsEnabled: true, // mandatory: New returns an error above if absent.
 		OntologyRoot:      cfg.OntologyRoot,
 		AgentBranch:       a.agentBranch,
-		LLMAdapter:        llmAdapter,
 		Embedder:          embedder,
 		APIOnly:           opts.APIOnly,
 		CORSOrigins:       opts.CORSOrigins,

@@ -311,7 +311,7 @@ func TestApplying_ItemBeingAppliedHoldsThePhase(t *testing.T) {
 }
 
 // Every create is planning until planned, including the in-process start
-// (RunAll, the web synthesis job). A caller handed such a session's id cannot
+// (legacy rows and StartSession). A caller handed such a session's id cannot
 // run its empty queue to completion, and a start does not resume it.
 func TestPlanning_InProcessCreateIsPlanningUntilPlanned(t *testing.T) {
 	ctx := context.Background()
@@ -350,7 +350,7 @@ func TestComplete_DisplacedPlannerCompletesNothing(t *testing.T) {
 	require.Equal(t, "active", f.status(t, taken.SessionID))
 }
 
-// An in-process run (RunAll, the web synthesis job) has no session an agent
+// An in-process run (legacy rows and StartSession) has no session an agent
 // can continue, so a start is not pointed at its session_id.
 func TestStartOrResume_InProcessSessionIsNamedAsSuch(t *testing.T) {
 	ctx := context.Background()
@@ -446,7 +446,7 @@ func TestApplying_RefusalOffersTakeover(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// The in-process start (RunAll, the web job) abandons a session whose planning
+// The in-process start (StartSession) abandons a session whose planning
 // failed, as the resumable start does; otherwise the planning session refuses
 // every knomit_review start until the reaper.
 func TestPlanning_InProcessFailedPlanIsAbandoned(t *testing.T) {

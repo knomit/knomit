@@ -75,19 +75,6 @@ func TestAnchor_EnvelopeStability_HandWrittenRoute(t *testing.T) {
 	}
 }
 
-// ANCHOR 3: jobs 503 → 404 flip.
-func TestAnchor_StartSynthesis_UnknownRepoNoLLM_Returns404(t *testing.T) {
-	s := &Server{Manager: newTestManagerWithRepos(t), LLMAdapter: nil}
-	r := s.NewAPIRouter()
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost,
-		"/repos/missing/branches/main/synthesis-runs", nil)))
-
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("status: got %d, want 404", rec.Code)
-	}
-}
-
 // ANCHOR 4b: DELETE keeps archiveErrStatus attribution, not the middleware 404.
 func TestAnchor_RepoArchive_UnknownRepo_KeepsOwnEnvelope(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}

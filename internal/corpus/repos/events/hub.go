@@ -309,7 +309,7 @@ func (p *TaskPublisher) BroadcastPushError(remote, errMsg string) {
 // Task is the latest event of task id as the hub holds it: its op's running
 // task, or its op's last terminal event. ok is false when the hub holds
 // neither (an older task of the op, or one it never saw). It is what the job
-// routes (GET/DELETE .../synthesis-runs/{id}, .../index-rebuilds/{id} and
+// routes (GET/DELETE .../index-rebuilds/{id} and
 // their /events) read: the hub is the only record of a job.
 func (h *TaskHub) Task(id string) (TaskEvent, bool) {
 	h.mu.Lock()

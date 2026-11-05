@@ -180,7 +180,6 @@ func branchRootBody(
 			"stats":          {Href: branchURL + "/stats"},
 			"events":         {Href: branchURL + "/events"},
 			"triggers":       {Href: branchURL + "/triggers{?log,run}", Templated: true},
-			"synthesis-runs": {Href: branchURL + "/synthesis-runs"},
 			"index-rebuilds": {Href: branchURL + "/index-rebuilds"},
 			"mcp":            {Href: branchURL + "/mcp{?profile}", Templated: true},
 			"repo":           {Href: b.Repo(repoName)},

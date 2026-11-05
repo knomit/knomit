@@ -10,8 +10,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/rs/zerolog/log"
 )
 
 // Policy is the resilience budget applied to one provider. It is intentionally
@@ -48,134 +46,27 @@ const (
 // policyFor returns the retry/timeout budget for a provider. The asymmetry in
 // MaxRetries is the whole point of the table:
 //
-//   - anthropic and bedrock configure no retry settings of their own, which
-//     means their SDK defaults apply — anthropic-sdk-go retries transport,
-//     429 and 5xx failures itself, and the AWS standard retryer does the same
-//     for bedrock. Retrying again out here would multiply the attempts a single
-//     logical request makes against an already-overloaded provider. They still
-//     get an attempt timeout: the SDK's retries happen inside one attempt from
-//     this layer's view, so the timeout is what bounds the whole stall.
+//   - anthropic configures no retry settings of its own, so the SDK defaults
+//     apply: anthropic-sdk-go retries transport, 429 and 5xx failures itself.
+//     Retrying again out here would multiply the attempts a single logical
+//     request makes against an already-overloaded provider. It still gets an
+//     attempt timeout: the SDK's retries happen inside one attempt from this
+//     layer's view, so the timeout is what bounds the whole stall.
 //   - ollama retries nothing internally, so the wrapper is the only resilience
 //     it has.
-//   - gemini is the one deliberate exception to the no-stacking rule above. It
-//     does retry once inline, on cache-miss (gemini.go:177), so a single
-//     logical request can reach 6 upstream calls. That is allowed because the
-//     inline retry is not a retry of the same request — it rebuilds the config
-//     without CachedContent, which this layer cannot do, having no idea a cache
-//     was involved — and because its trigger is disjoint from this layer's:
-//     isCacheMissingErr requires a "cached content … not found/expired" message,
-//     which carries none of the statuses or phrases isOverloadedErr matches. In
-//     practice the two never both fire, so the 6 is a bound, not a cost.
-//   - the CLI adapters shell out to a subprocess. One retry covers transient
-//     startup flake; more would mostly re-pay a slow process launch.
+//
+// A provider with no case here gets the default timeout and no retries. Bedrock
+// and Gemini have no case because they have no adapter yet; their v2 adapters
+// add one when they land.
 func policyFor(provider string) Policy {
 	p := Policy{AttemptTimeout: defaultAttemptTimeout}
 	switch provider {
-	case "anthropic", "bedrock":
+	case "anthropic":
 		p.MaxRetries = 0
-	case "gemini", "ollama":
+	case "ollama":
 		p.MaxRetries = 2
-	case "claudecli", "geminicli":
-		p.MaxRetries = 1
 	}
 	return p
-}
-
-// resilientAdapter decorates a provider with a per-attempt timeout, bounded
-// retries and request metrics.
-type resilientAdapter struct {
-	inner  LLMAdapter
-	policy Policy
-}
-
-// resilientBatchAdapter exists only so that wrapping a batch-capable provider
-// does not erase BatchAdapter from the resulting type. That loss would be
-// silent: consumers discover batch support with a type assertion, which simply
-// starts returning false, with no compile error anywhere.
-type resilientBatchAdapter struct {
-	*resilientAdapter
-	batch BatchAdapter
-}
-
-// wrapResilient applies policy to inner, preserving BatchAdapter when inner
-// implements it.
-func wrapResilient(inner LLMAdapter, policy Policy) LLMAdapter {
-	r := &resilientAdapter{inner: inner, policy: policy}
-	if ba, ok := inner.(BatchAdapter); ok {
-		return &resilientBatchAdapter{resilientAdapter: r, batch: ba}
-	}
-	return r
-}
-
-// Complete runs the wrapped provider under the policy, retrying only failures
-// that are both retryable and invisible to the caller (see shouldRetry).
-func (a *resilientAdapter) Complete(ctx context.Context, system string, msgs []Message, opts CompletionOptions, onChunk func(string)) (string, error) {
-	defer observeLLMRequest(time.Now())
-
-	// emitted is the gate that makes retrying safe. Every provider calls onChunk
-	// synchronously from within Complete, on this goroutine, so a plain bool is
-	// sufficient — and once it is set, replaying the request would deliver the
-	// already-seen chunks a second time. That is the same reason gemini's
-	// cache-miss retry checks `accumulated == ""` (gemini.go:177). Callers that
-	// pass a nil onChunk observe nothing until Complete returns, so for them the
-	// gate never closes and any retryable failure can be retried freely.
-	//
-	// The plain bool holds by construction, not by test: every adapter forwards
-	// chunks from its own read loop (ollama.go:138, gemini.go:197, anthropic.go:62,
-	// bedrock.go:95, the CLI adapters once at the end) and TracingAdapter passes
-	// onChunk straight through. No test drives concurrent chunks, so -race has
-	// nothing to prove here — an adapter that ever calls onChunk from another
-	// goroutine would need this to become an atomic.Bool.
-	emitted := false
-	wrapped := onChunk
-	if onChunk != nil {
-		wrapped = func(s string) {
-			emitted = true
-			onChunk(s)
-		}
-	}
-
-	for attempt := 0; ; attempt++ {
-		attemptCtx, cancel := a.attemptContext(ctx)
-		out, err := a.inner.Complete(attemptCtx, system, msgs, opts, wrapped)
-		cancel()
-		if err == nil {
-			return out, nil
-		}
-
-		// Disambiguate whose deadline fired. A cancelled *parent* means the
-		// caller walked away — nothing left to retry for. Only the attempt
-		// context expiring counts as a stall, and the attempt context is already
-		// gone by now, so the parent is the only thing worth asking.
-		//
-		// The parent's error has to reach the caller, not just decide the retry:
-		// an attempt that failed for an unrelated reason while the parent was
-		// being cancelled would otherwise surface a graceful shutdown as a
-		// provider outage, and callers branching on errors.Is(err,
-		// context.Canceled) would take the wrong branch. Wrapping keeps both —
-		// the cancellation for control flow, the provider detail for logs.
-		if ctx.Err() != nil {
-			return out, cancelledErr(ctx, err)
-		}
-		if emitted || attempt >= a.policy.MaxRetries || !isRetryable(err) {
-			return out, err
-		}
-
-		llmRetriesTotal.Inc()
-		backoff := retryBackoff(attempt)
-		log.Warn().
-			Err(err).
-			Str("model", a.inner.Model()).
-			Int("attempt", attempt+1).
-			Dur("backoff", backoff).
-			Msg("llm: retrying after retryable failure")
-
-		select {
-		case <-time.After(backoff):
-		case <-ctx.Done():
-			return out, cancelledErr(ctx, err)
-		}
-	}
 }
 
 // cancelledErr reports the parent context's cancellation while keeping the
@@ -187,33 +78,6 @@ func (a *resilientAdapter) Complete(ctx context.Context, system string, msgs []M
 // happened to wrap a context error of its own.
 func cancelledErr(ctx context.Context, err error) error {
 	return fmt.Errorf("%w (last attempt: %v)", ctx.Err(), err)
-}
-
-// attemptContext derives the per-attempt deadline. WithTimeout only tightens,
-// so a caller that set a shorter deadline still wins.
-func (a *resilientAdapter) attemptContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	if a.policy.AttemptTimeout <= 0 {
-		return ctx, func() {}
-	}
-	return context.WithTimeout(ctx, a.policy.AttemptTimeout)
-}
-
-// Model delegates to the wrapped adapter.
-func (a *resilientAdapter) Model() string { return a.inner.Model() }
-
-// BatchEnabled delegates to the wrapped adapter.
-func (a *resilientBatchAdapter) BatchEnabled() bool { return a.batch.BatchEnabled() }
-
-// CompleteBatch delegates with metrics only — no retry and no attempt timeout.
-// A batch job is a long poll over a server-side lifecycle measured in minutes
-// to hours, so an attempt timeout tuned for a completion would abort healthy
-// work; and a failure mid-submit tells this layer nothing about whether the
-// job was created, so replaying it risks duplicating a whole batch. The caller
-// owns the batch deadline through ctx, which is the only place the necessary
-// knowledge lives.
-func (a *resilientBatchAdapter) CompleteBatch(ctx context.Context, requests []BatchRequest, opts CompletionOptions) ([]string, error) {
-	defer observeLLMRequest(time.Now())
-	return a.batch.CompleteBatch(ctx, requests, opts)
 }
 
 // isRetryable reports whether err is worth a second attempt. The default is

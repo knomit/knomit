@@ -41,8 +41,8 @@ tags:
       local socket included: every mutating request (any method but GET,
       HEAD and OPTIONS) under `/repos/{repo}` that names it — rename, archive,
       the repo PATCH, PUT and DELETE origin, the upstream, origin sessions,
-      the pushed-branch merge, fact, branch and experiment writes, index and
-      synthesis jobs, and every other route there, the MCP mount and
+      the pushed-branch merge, fact, branch and experiment writes, index
+      jobs, and every other route there, the MCP mount and
       `DELETE …/branches/{branch}/search/factset` (closing a factset deletes
       the caller's session data, never repository data) aside —
       answers 409 with `code: fleet_repository`, and the operation does not
@@ -1920,111 +1920,6 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
-  /repos/{repo}/branches/{branch}/synthesis-runs:
-    parameters:
-      - $ref: "#/components/parameters/Repo"
-      - $ref: "#/components/parameters/Branch"
-    get:
-      tags: [jobs]
-      summary: List synthesis runs
-      operationId: listSynthesisRuns
-      description: |
-        The jobs of this kind the repo's task hub holds: the running job
-        first, then the last finished one. That is at most two; the server
-        keeps no older history, so an earlier job is not listed (and its id
-        is 404). Empty before the first run. In memory only: a restart
-        forgets every job. There is no pending or queued state: jobs of a
-        kind are single-flight (a synthesis start while one runs is 409; a
-        rebuild replaces or absorbs the running one). A job being cancelled
-        stays `running` until it stops, then lists as `error`.
-      responses:
-        "200":
-          description: Collection of jobs
-          content:
-            application/hal+json:
-              schema: { $ref: "#/components/schemas/JobsCollection" }
-        "404": { $ref: "#/components/responses/Problem" }
-    post:
-      tags: [jobs]
-      summary: Start synthesis run
-      operationId: startSynthesisRun
-      responses:
-        "201":
-          description: Job started
-          content:
-            application/hal+json:
-              schema: { $ref: "#/components/schemas/Job" }
-        "404": { $ref: "#/components/responses/Problem" }
-        "409": { $ref: "#/components/responses/Problem" }
-        "503": { $ref: "#/components/responses/Problem" }
-
-  /repos/{repo}/branches/{branch}/synthesis-runs/{id}:
-    parameters:
-      - $ref: "#/components/parameters/Repo"
-      - $ref: "#/components/parameters/Branch"
-      - $ref: "#/components/parameters/JobID"
-    get:
-      tags: [jobs]
-      summary: Get synthesis run
-      operationId: getSynthesisRun
-      description: |
-        A job is readable while it runs and as the last finished job of its
-        kind. An older job, an id the server never issued, and the id of a
-        job of the other kind are 404.
-      responses:
-        "200":
-          description: Job
-          content:
-            application/hal+json:
-              schema: { $ref: "#/components/schemas/Job" }
-        "404": { $ref: "#/components/responses/Problem" }
-    delete:
-      tags: [jobs]
-      summary: Cancel the running synthesis run
-      operationId: deleteSynthesisRun
-      description: |
-        Cancels the running synthesis run. The task's context is cancelled
-        and 202 answers the job, still `running`. The run stops at its next
-        model call and usually ends in `error` with a cancellation message
-        (the reviewer's error, wrapping "context canceled"); a run that was
-        already finishing may end `done`. Its events stream ends with
-        whichever terminal it reaches. There is no queue: a start while one runs is 409,
-        so the running job is the only one DELETE can act on. 409 "Job
-        already finished" for a finished job; 404 for a job the server does
-        not hold or one of the other kind. Nothing is deleted from the list:
-        the cancelled job stays as the last finished one.
-      responses:
-        "202":
-          description: Cancellation requested; the job, still running
-          content:
-            application/hal+json:
-              schema: { $ref: "#/components/schemas/Job" }
-        "404": { $ref: "#/components/responses/Problem" }
-        "409": { $ref: "#/components/responses/Problem" }
-
-  /repos/{repo}/branches/{branch}/synthesis-runs/{id}/events:
-    parameters:
-      - $ref: "#/components/parameters/Repo"
-      - $ref: "#/components/parameters/Branch"
-      - $ref: "#/components/parameters/JobID"
-    get:
-      tags: [events, jobs]
-      summary: SSE stream of synthesis-run progress
-      operationId: streamSynthesisEvents
-      description: |
-        The job's `task` events (op, id, status, phase, message). The stream
-        ENDS with the job's terminal event (`done` or `error`), at once for a
-        job that has already finished. 404, before any stream opens, for a
-        job the server does not hold.
-      responses:
-        "200":
-          description: SSE stream
-          content:
-            text/event-stream:
-              schema: { type: string }
-        "404": { $ref: "#/components/responses/Problem" }
-        "503": { $ref: "#/components/responses/Problem" }
-
   /repos/{repo}/branches/{branch}/index-rebuilds:
     parameters:
       - $ref: "#/components/parameters/Repo"
@@ -2039,8 +1934,8 @@ paths:
         keeps no older history, so an earlier job is not listed (and its id
         is 404). Empty before the first run. In memory only: a restart
         forgets every job. There is no pending or queued state: jobs of a
-        kind are single-flight (a synthesis start while one runs is 409; a
-        rebuild replaces or absorbs the running one). A job being cancelled
+        kind are single-flight (a rebuild replaces or absorbs the running
+        one). A job being cancelled
         stays `running` until it stops, then lists as `error`.
       responses:
         "200":
@@ -7350,7 +7245,7 @@ components:
       required: [id, kind, state]
       properties:
         id:    { type: string }
-        kind:  { type: string, enum: [synthesis-run, index-rebuild] }
+        kind:  { type: string, enum: [index-rebuild] }
         state: { type: string, enum: [running, done, error] }
         error: { type: string, description: The failure message; present only when state is error. }
 
