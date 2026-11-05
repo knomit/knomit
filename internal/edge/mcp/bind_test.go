@@ -353,7 +353,45 @@ func TestBind_ChatGetsOnlyThePerBindingDelta(t *testing.T) {
 		require.Contains(t, chat, "  "+topic, "topic list of the bound write repo")
 	}
 	require.Contains(t, chat, "kb/<topic>/<category>/<uuid>.md", "the bound ontology root")
-	require.Contains(t, chat, "You are assisting with software development", "the write repo's profile addendum")
+	require.NotContains(t, chat, "You are assisting with software development",
+		"the chat's initialize text was built with the same profile, so its addendum is not repeated")
 
 	t.Logf("knomit_bind lens=all: external %d bytes, chat %d bytes", len(external), len(chat))
+}
+
+// A write repo whose profile differs from the one the initialize text was
+// built with gets its own addendum; the same profile gets none.
+func TestBindingInstructionsDelta_ProfileAddendumOnlyWhenItDiffers(t *testing.T) {
+	m, _, _ := bindFixture(t)
+	b, _, err := bindTarget(m, "alpha", "")
+	require.NoError(t, err)
+
+	same := BindingInstructionsDelta(b, initializeProfile)
+	require.NotContains(t, same, profileAddenda["code"])
+
+	chatProfile := BindingInstructionsDelta(b, "chat")
+	require.Contains(t, chatProfile, profileAddenda["chat"])
+	require.NotContains(t, chatProfile, profileAddenda["code"])
+}
+
+// Golden composition: the external knomit_bind text is the write repo's
+// profile instructions followed by the lens addendum, as before the delta
+// refactor split topicListText and profileAddendum out of it.
+func TestBindingInstructions_Composition(t *testing.T) {
+	m, _, _ := bindFixture(t)
+	for _, name := range []string{"alpha", "eng"} {
+		var b *repos.Binding
+		var err error
+		if name == "eng" {
+			b, _, err = bindTarget(m, "", name)
+		} else {
+			b, _, err = bindTarget(m, name, "")
+		}
+		require.NoError(t, err)
+		for _, profile := range []string{"code", "chat", "generic"} {
+			w := b.Write()
+			want := baseInstructionsText(w.OntologyRoot(), w.Ontology()) + "\n\n" + profileAddenda[profile] + lensInstructions(b)
+			require.Equal(t, want, BindingInstructions(b, profile), "%s/%s", name, profile)
+		}
+	}
 }

@@ -330,6 +330,10 @@ func ProfileInstructions(profile, ontologyRoot string, ontology *fact.Ontology) 
 	return baseInstructionsText(ontologyRoot, ontology) + "\n\n" + profileAddendum(profile)
 }
 
+// initializeProfile is the profile the initialize instructions are built with
+// (server.go), before any binding exists.
+const initializeProfile = "code"
+
 func profileAddendum(profile string) string {
 	addendum, ok := profileAddenda[profile]
 	if !ok {
@@ -338,10 +342,10 @@ func profileAddendum(profile string) string {
 	return addendum
 }
 
-// bindDeltaHeaderDRAFT is model-visible text pending copy review. It frames
+// bindDeltaHeader frames
 // the per-binding delta that knomit_bind returns to a client that already holds
 // the server instructions (the in-process chat puts them in its system prompt).
-const bindDeltaHeaderDRAFT = "## This knowledge base\n\n" +
+const bindDeltaHeader = "## This knowledge base\n\n" +
 	"The server instructions you already hold (tools, fact fields, motifs) apply unchanged and are not repeated. " +
 	"Only what is specific to this binding follows; where it differs from those instructions, this wins.\n\n"
 
@@ -355,11 +359,15 @@ func BindingInstructionsDelta(b *repos.Binding, profile string) string {
 	w := b.Write()
 	root := w.OntologyRoot()
 	var sb strings.Builder
-	sb.WriteString(bindDeltaHeaderDRAFT)
+	sb.WriteString(bindDeltaHeader)
 	sb.WriteString(fmt.Sprintf("Facts live under %s/<topic>/<category>/<uuid>.md; wherever the instructions you hold name the facts root, it is %s/ here. "+
 		"Artifacts live under %s/<area>/; %s/ is the system.\n\n", root, root, fact.ArtifactsRoot, fact.PrivateRoot))
 	sb.WriteString("Available topics:\n" + topicListText(w.Ontology()) + "\n\n")
-	sb.WriteString(profileAddendum(profile))
+	// The initialize text already carries the initializeProfile addendum; a
+	// repeat of it is exactly the duplication the delta exists to avoid.
+	if a := profileAddendum(profile); a != profileAddendum(initializeProfile) {
+		sb.WriteString(a)
+	}
 	sb.WriteString(lensInstructions(b))
 	return sb.String()
 }
