@@ -321,7 +321,14 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 				l.keepPartialText(streamed.String())
 				runErr = &turnError{msg: "The turn was cancelled.", err: ErrCancelled}
 			} else if errors.Is(err, ErrContextFull) {
-				runErr = &turnError{msg: contextFullMessage, err: err}
+				if caps := l.Model.Caps(); isOpening(snap) && caps.ContextWindow > 0 {
+					if l.Options.MaxOutput > 0 {
+						caps.MaxOutput = l.Options.MaxOutput
+					}
+					runErr = l.openingTooBig(est, replyReserve(caps), caps.ContextWindow, err)
+				} else {
+					runErr = &turnError{msg: contextFullMessage, err: err}
+				}
 			} else {
 				runErr = err
 			}
@@ -663,6 +670,9 @@ func (l *Loop) checkBudget(snap Snapshot, est int) error {
 	}
 	reserve := replyReserve(caps)
 	if est+reserve > caps.ContextWindow {
+		if isOpening(snap) {
+			return l.openingTooBig(est, reserve, caps.ContextWindow, nil)
+		}
 		return &turnError{
 			msg: fmt.Sprintf("%s (about %d prompt tokens plus %d reserved for the reply, window %d)",
 				contextFullMessage, est, reserve, caps.ContextWindow),
@@ -670,6 +680,40 @@ func (l *Loop) checkBudget(snap Snapshot, est int) error {
 		}
 	}
 	return nil
+}
+
+// OpeningTooBigMessage_DRAFT is shown when the very first request of a chat
+// (tool definitions, instructions and the first message, with nothing said
+// yet) does not fit the window. The arguments are the estimated opening size,
+// the window, the reply reserve and the room left after it. DRAFT COPY: needs
+// user approval.
+const OpeningTooBigMessage_DRAFT = "The opening of this chat (the tool definitions, the repo instructions and your message) needs about %d tokens, but the context window of %s is %d and %d of it is reserved for the reply, which leaves %d. Use a model with a larger window%s."
+
+// OllamaRaiseNumCtxHint_DRAFT is appended for an Ollama provider. DRAFT COPY.
+const OllamaRaiseNumCtxHint_DRAFT = ", or raise num_ctx for this provider in knomit.toml"
+
+// isOpening reports whether snap is a chat's first request: nothing in the
+// conversation hook and only the first user entry in the turn hook.
+func isOpening(snap Snapshot) bool {
+	return len(snap.Hooks[HookConversation]) == 0 && len(snap.Hooks[HookTurn]) <= 1
+}
+
+// openingTooBig is the error for an opening request that cannot fit. It names
+// the sizes so the user knows what to change; it never suggests a number,
+// because the toolset's size varies with the repos and the permissions.
+func (l *Loop) openingTooBig(est, reserve, window int, cause error) error {
+	hint := ""
+	if l.Model.Provider() == "ollama" {
+		hint = OllamaRaiseNumCtxHint_DRAFT
+	}
+	left := max(window-reserve, 0)
+	if cause == nil {
+		cause = ErrContextFull
+	}
+	return &turnError{
+		msg: fmt.Sprintf(OpeningTooBigMessage_DRAFT, est, l.Model.Model(), window, reserve, left, hint),
+		err: cause,
+	}
 }
 
 func conversationItems(s Snapshot) []Item {

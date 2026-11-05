@@ -760,7 +760,7 @@ func TestLoop_ReplyReserve(t *testing.T) {
 	m := &fakeModel{caps: Caps{ContextWindow: 4000, MaxOutput: 9000}}
 	l, _ := newLoop(t, m, &fakeHost{})
 	_, err := l.RunTurn(context.Background(), tokensOfText(3000))
-	if err == nil || !strings.Contains(err.Error(), "1000 reserved for the reply, window 4000") {
+	if err == nil || !strings.Contains(err.Error(), "1000 of it is reserved for the reply") {
 		t.Fatalf("err = %v, want the clamped 1000 reserve in the message", err)
 	}
 }
