@@ -1312,4 +1312,32 @@ describe('a chat target', () => {
     // The chat is still in the rail: leaving it does not end it.
     expect(screen.getByTestId('rail-chat-chat-a')).toBeInTheDocument();
   });
+
+  it('the chat ending (chat_end on its stream) removes it from the rail and unpins it', async () => {
+    await primeApi();
+    chatRoutes();
+    await mountApp();
+    await createChatThroughTheForm();
+    const es = await waitFor(() => {
+      const s = latestStream('/chats/chat-a/events');
+      expect(s).toBeDefined();
+      return s!;
+    });
+    act(() => { es.emit('chat_end', { reason: 'deleted' }); });
+    await waitFor(() => expect(screen.queryByTestId('rail-chat-chat-a')).toBeNull());
+    expect(screen.getByTestId('target-label').textContent).toBe('ops-kb');
+    expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']);
+    expect(screen.queryByTestId('chat-body-chat-a')).toBeNull();
+  });
+
+  it('a chat keeps its stream open while a repository is shown', async () => {
+    await primeApi();
+    chatRoutes([CHAT_A]);
+    await mountApp();
+    fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+    await waitFor(() => expect(openStreams('/chats/chat-a/events')).toBe(1));
+    fireEvent.click(screen.getByTestId('rail-repo-core-kb'));
+    await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+    expect(openStreams('/chats/chat-a/events')).toBe(1);
+  });
 });

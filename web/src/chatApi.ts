@@ -74,7 +74,8 @@ async function noContent(url: string, init: RequestInit): Promise<void> {
   if (!r.ok) {
     let detail = r.statusText;
     try { const b = await r.json() as { detail?: string; title?: string }; detail = b.detail || b.title || detail; } catch { /* keep statusText */ }
-    throw new Error(`${url} → ${r.status} ${detail}`);
+    // The status rides on the Error, as fetchJSON's does (api.ts HttpError).
+    throw Object.assign(new Error(`${url} → ${r.status} ${detail}`), { status: r.status });
   }
 }
 
