@@ -577,6 +577,31 @@ func TestOntologyReload_RetireUnmountIsBoundedSoCloseReturns(t *testing.T) {
 	require.Equal(t, CauseFleetConflict, unavailableCause(m, g.ri.Name()))
 }
 
+// The retired repo is listed unavailable (and leaves the live maps) only
+// AFTER its unmount has closed its store. Otherwise an operator acting on
+// the listing — a remount, a restore, a purge — races the teardown: the old
+// store's Close deletes its session DB files (Service.Close), and a fresh
+// store.Open of the same database in that window fails with "init session
+// schema: disk I/O error: no such file or directory" (CI run 42032962603),
+// or, worse, opens and then loses its session DB. SABOTAGE: publish the
+// unavailable entry before the unmount → the machine is seen still open
+// when the entry appears → red.
+func TestOntologyReload_RetireListsUnavailableOnlyAfterTheStoreIsClosed(t *testing.T) {
+	t.Parallel()
+	_, g := newReloadFixture(t)
+	m, name := g.ri.env.m, g.ri.Name()
+	ferr := markFleetConflict(t, g)
+	require.True(t, m.startFleetConflictRetire(g.ri, ferr))
+	deadline := time.Now().Add(30 * time.Second)
+	for unavailableCause(m, name) == "" {
+		require.NotNil(t, m.Get(name), "the repo left the live maps before it was listed unavailable")
+		require.True(t, time.Now().Before(deadline), "never listed unavailable")
+		time.Sleep(time.Millisecond)
+	}
+	require.Equal(t, termClosed, g.ri.snap().terminal, "listed unavailable while its machine (and store) was still open")
+	require.Nil(t, m.Get(name))
+}
+
 // A later reload that applied a FIXED (usable, non-fleet) tip before the
 // retire goroutine ran: the retire re-checks under the lock and leaves the
 // repo mounted. SABOTAGE: drop the re-check → the fixed repo is unmounted

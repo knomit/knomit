@@ -149,14 +149,28 @@ func refuseReservedOntology(spec CreateSpec) error {
 
 // retireFleetConflict is the live half of admitFleetOntology (#429, user
 // decision 2): a mounted repo that is not the fleet repository, whose read
-// branch's consensus ontology took the fleet id, leaves the live maps and is
-// listed unavailable with CauseFleetConflict — the state a mount of it gives
-// (Start: mountExisting fails at Identify, unavailableReason maps it). The
-// two map changes happen under one lock, so GET /repos never shows the repo
-// both absent and not unavailable. Then it is unmounted. It runs on its own
-// goroutine (reloadOntology starts it): the unmount drains the Sync stage,
-// and the reload may be running inside that stage. A repo the maps no longer
-// hold as ri (archived, removed, replaced meanwhile) is left alone.
+// branch's consensus ontology took the fleet id, is unmounted, then leaves
+// the live maps and is listed unavailable with CauseFleetConflict — the
+// state a mount of it gives (Start: mountExisting fails at Identify,
+// unavailableReason maps it). It runs on its own goroutine (reloadOntology
+// starts it through startFleetConflictRetire): the unmount drains the Sync
+// stage, and the reload may be running inside that stage.
+//
+// ORDER: UNMOUNT FIRST, PUBLISH SECOND. The repo is listed unavailable only
+// once its machine is closed and its store with it. Listing it first (as
+// this function did at bf1fe514) opened a window in which the repo looked
+// gone while its store was still open: an operator acting on the listing —
+// a remount, a restore, a purge — then raced the teardown. The old store's
+// Close deletes its session DB files (Service.Close), so a fresh store.Open
+// of the same database in that window failed with "init session schema:
+// disk I/O error: no such file or directory" (CI run 42032962603), or
+// opened and then lost its session DB. Until the unmount completes the repo
+// stays in the live maps, unwritable (OntologyError) and winding down. The
+// two map changes then happen under one lock, so GET /repos never shows it
+// both absent and not unavailable.
+//
+// A repo the maps no longer hold as ri (archived, removed, replaced
+// meanwhile) is left alone, before the unmount and again after it.
 func (m *Manager) retireFleetConflict(ri *RepoInstance, err error) {
 	rec := control.RepoRecord{UID: ri.uid, Name: ri.Name()}
 	if reg := m.Repos(); reg != nil {
@@ -181,18 +195,14 @@ func (m *Manager) retireFleetConflict(ri *RepoInstance, err error) {
 		log.Info().Str("repo", rec.Name).Msg("fleet conflict cleared by a later reload before the retire ran; the repo stays mounted")
 		return
 	}
-	delete(m.repos, rec.Name)
-	delete(m.byUID, ri.uid)
-	m.unavailable[ri.uid] = Unavailable{Record: rec, Reason: reason, Detail: m.redactHome(detail), Cause: cause}
 	m.mu.Unlock()
-	log.Warn().Str("repo", rec.Name).Str("uid", rec.UID).Str("reason", reason).Str("cause", string(cause)).Str("detail", detail).
-		Msg("repo is unavailable: its consensus ontology took the reserved fleet id (fleet_conflict); it is unmounted, as a mount of it would be refused")
 	// Bounded like Close's own Unmounts (unmountDrainBound): Close waits for
 	// this goroutine (retireWg), so an unbounded drain — a Sync round parked
 	// on a slow fetch, a stage that will not let go — would hold Close past
 	// the cap it promises for every other repo. A drain that runs out is
 	// logged, as Close logs its own; the machine's root context is already
-	// cancelled by the Send, so it still winds down.
+	// cancelled by the Send, so it still winds down (and is then listed
+	// unavailable anyway: it serves nothing).
 	if ri.machine != nil {
 		bound := ri.machine.opts.unmountDrainBound()
 		ctx, cancel := context.WithTimeout(context.Background(), bound)
@@ -202,6 +212,17 @@ func (m *Manager) retireFleetConflict(ri *RepoInstance, err error) {
 				Msg("fleet conflict: repo did not finish unmounting within the drain bound; giving up waiting")
 		}
 	}
+	m.mu.Lock()
+	if m.repos[rec.Name] != ri {
+		m.mu.Unlock()
+		return
+	}
+	delete(m.repos, rec.Name)
+	delete(m.byUID, ri.uid)
+	m.unavailable[ri.uid] = Unavailable{Record: rec, Reason: reason, Detail: m.redactHome(detail), Cause: cause}
+	m.mu.Unlock()
+	log.Warn().Str("repo", rec.Name).Str("uid", rec.UID).Str("reason", reason).Str("cause", string(cause)).Str("detail", detail).
+		Msg("repo is unavailable: its consensus ontology took the reserved fleet id (fleet_conflict); it is unmounted, as a mount of it would be refused")
 }
 
 // startFleetConflictRetire runs retireFleetConflict on its own goroutine,
