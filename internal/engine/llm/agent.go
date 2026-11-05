@@ -22,6 +22,19 @@ import (
 // Builder would refuse. A long conversation is measured (tokens, estimated
 // cost), warned about once near the price cliff, and refused before sending
 // when it would not fit the context window; it is never shortened.
+//
+// ADAPTIVE PROVIDERS (Loop.Window != nil: Caps.StablePrefix false, no prompt
+// cache to protect). The loop still edits nothing: the Builder keeps every
+// tool and the whole history. What changes is the SENT view. The loop sends
+// Window.Project(Builder.Snapshot()), a copy whose tools block is the loader
+// (load_tools) plus the tools loaded so far, and estimates, budgets and logs
+// that same copy. The loader and a call to a tool that is not loaded are
+// answered in the loop before the approval gate (they run nothing); every call
+// to a loaded tool still goes through CallGate.Decide. Loaded tools are evicted
+// only between requests and only when the request would not fit, never a tool
+// called or loaded in the current turn, so a pending call never meets an
+// eviction. With Window nil the snapshot sent is Builder.Snapshot(), byte for
+// byte.
 
 // ToolHost runs tool calls. The chat layer's in-process MCP session
 // implements it.
@@ -153,6 +166,9 @@ const (
 	LoopToolResult LoopEventKind = "tool_result" // Result is set; the call ran, was declined, or was refused
 	LoopUsage      LoopEventKind = "usage"       // one request's Usage and Cost
 	LoopWarning    LoopEventKind = "warning"     // Warning is set
+	// LoopToolsChanged: the loaded tool set changed; Tools is set. The reason
+	// and the names are data; the loop carries no wording.
+	LoopToolsChanged LoopEventKind = "tools_changed"
 )
 
 // LoopEvent is what the loop tells its sink as a turn runs.
@@ -164,6 +180,7 @@ type LoopEvent struct {
 	Usage   *Usage
 	Cost    *Cost // nil when the loop has no price card
 	Warning *PriceWarning
+	Tools   *ToolsChange
 }
 
 // PriceWarning is the structured near-the-price-cliff warning: the prompt
@@ -234,11 +251,17 @@ type Loop struct {
 	// Price prices usage and carries the warn threshold; nil means no cost
 	// estimate and no warning.
 	Price *PriceCard
+	// Window, when set, makes the loop adaptive: it sends the loader plus the
+	// loaded tools instead of every tool (see the file comment). Nil is the
+	// static path: every tool, every request. Set it only for a model whose
+	// Caps().StablePrefix is false.
+	Window *ToolWindow
 
 	warned     bool
 	haveUsage  bool
 	lastTokens int64 // prompt + output of the last response: what the next request starts from
 	lastCount  int   // conversation entries (hooks 6+7) that last response had accounted for
+	lastBytes  int   // adaptive only: bytes of the whole sent view when lastCount was set
 }
 
 // TurnResult summarises one RunTurn. It is returned alongside an error too,
@@ -249,7 +272,9 @@ type TurnResult struct {
 	Usage      Usage  // summed over the turn's requests
 	Cost       Cost   // summed; zero without a price card
 	Requests   int
-	ToolCalls  int
+	ToolCalls  int     // every tool call answered, the loader's included
+	Loads      int     // tools loaded into the window this turn
+	Evictions  int     // tools evicted from the window this turn
 	Entries    []Entry // appended to the conversation by this turn
 }
 
@@ -281,6 +306,9 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 	res := &TurnResult{}
 	user := Entry{ID: l.newID(), Role: RoleUser, Blocks: []Block{{Kind: BlockText, Text: text}}}
 	base := l.baseline()
+	if l.Window != nil {
+		l.Window.BeginTurn()
+	}
 	if err := l.addTurn(user); err != nil {
 		return res, err
 	}
@@ -293,8 +321,11 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 		maxCalls = DefaultMaxCalls
 	}
 	for {
-		snap := l.Builder.Snapshot()
+		snap := l.view()
 		est := l.estimate(snap)
+		if l.Window != nil {
+			snap, est = l.relieve(res, snap, est)
+		}
 		if err := l.checkBudget(snap, est); err != nil {
 			runErr = err
 			break
@@ -371,6 +402,7 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 			break
 		}
 		l.lastCount = l.entryCount()
+		l.lastBytes = viewBytes(l.view())
 		res.StopReason = resp.StopReason
 		res.Text = blocksText(assistant.Blocks)
 
@@ -413,6 +445,9 @@ const contextFullMessage = "This conversation no longer fits the model's context
 // stops early (still answering the rest) on cancellation, the call limit or a
 // gate failure, and returns the error that ended the turn.
 func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, maxCalls int, guard *repeatGuard) ([]Block, []Approval, error) {
+	if l.Window != nil {
+		l.Window.BeginBatch()
+	}
 	var results []Block
 	var approvals []Approval
 	answer := func(c ToolUse, content string, isErr bool) {
@@ -450,6 +485,30 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 				return results, approvals, repeatedFailure(c.Name, n, "the arguments are not valid JSON")
 			}
 			continue
+		}
+
+		if l.Window != nil {
+			if l.Window.Handles(c.Name) {
+				// The loader, or a call to a tool the model had not loaded:
+				// answered here, run by nobody, so it needs no approval. The
+				// loader's decision is recorded as auto; a not-run call has none.
+				out := l.Window.Run(c, l.Builder.Snapshot(), l.roomLeft, l.pinnedTools())
+				l.emitToolChanges(res)
+				if c.Name == LoadToolsName {
+					approvals = append(approvals, Approval{ToolUseID: c.ID, Decision: "auto"})
+					if l.Log != nil {
+						l.Log.Approval(ApprovalLog{CallID: c.ID, Tool: c.Name, Decision: "auto"})
+					}
+				}
+				answer(c, out.Content, out.IsError)
+				l.logCall(c, out.Content, out.IsError)
+				if n := guard.observe(c, out); n >= RepeatFailureLimit {
+					abort(i+1, SkippedResult)
+					return results, approvals, repeatedFailure(c.Name, n, truncateForMessage(out.Content, 300))
+				}
+				continue
+			}
+			l.Window.Touch(c.Name)
 		}
 
 		if l.Gate != nil {
@@ -643,9 +702,16 @@ func (l *Loop) estimate(snap Snapshot) int {
 	if l.haveUsage {
 		known := int(l.lastTokens)
 		extra := 0
-		for i, it := range conversationItems(snap) {
-			if i >= l.lastCount {
-				extra += itemBytes(it) / 4
+		if l.Window != nil {
+			// The sent view can shrink between requests (an eviction), so what
+			// changed since the last response is a signed byte difference of
+			// the whole view, not the bytes of the entries added.
+			extra = (viewBytes(snap) - l.lastBytes) / 4
+		} else {
+			for i, it := range conversationItems(snap) {
+				if i >= l.lastCount {
+					extra += itemBytes(it) / 4
+				}
 			}
 		}
 		est = max(est, known+extra)
@@ -674,26 +740,114 @@ func replyReserve(c Caps) int {
 // A model whose Caps report no ContextWindow is not pre-checked; the adapter's
 // ErrContextFull still ends the request.
 func (l *Loop) checkBudget(snap Snapshot, est int) error {
+	reserve, window := l.budget()
+	if window <= 0 {
+		return nil
+	}
+	if est+reserve > window {
+		if isOpening(snap) {
+			return l.openingTooBig(est, reserve, window)
+		}
+		return &turnError{
+			msg: fmt.Sprintf("%s (about %d prompt tokens plus %d reserved for the reply, window %d)",
+				contextFullMessage, est, reserve, window),
+			err: ErrContextFull,
+		}
+	}
+	return nil
+}
+
+// budget is the reply reserve and the context window the request must fit;
+// window 0 means the model reports none and nothing is pre-checked.
+func (l *Loop) budget() (reserve, window int) {
 	caps := l.Model.Caps()
 	if caps.ContextWindow <= 0 {
-		return nil
+		return 0, 0
 	}
 	if l.Options.MaxOutput > 0 {
 		// The request's own cap wins over the model's default.
 		caps.MaxOutput = l.Options.MaxOutput
 	}
-	reserve := replyReserve(caps)
-	if est+reserve > caps.ContextWindow {
-		if isOpening(snap) {
-			return l.openingTooBig(est, reserve, caps.ContextWindow)
-		}
-		return &turnError{
-			msg: fmt.Sprintf("%s (about %d prompt tokens plus %d reserved for the reply, window %d)",
-				contextFullMessage, est, reserve, caps.ContextWindow),
-			err: ErrContextFull,
+	return replyReserve(caps), caps.ContextWindow
+}
+
+// view is the snapshot a request carries: the Builder's own, or, for an
+// adaptive provider, its projection through the ToolWindow.
+func (l *Loop) view() Snapshot {
+	snap := l.Builder.Snapshot()
+	if l.Window != nil {
+		return l.Window.Project(snap)
+	}
+	return snap
+}
+
+// viewBytes is the size in bytes of everything a snapshot sends.
+func viewBytes(s Snapshot) int {
+	n := 0
+	for h := HookTools; h <= HookTurn; h++ {
+		for _, it := range s.Hooks[h] {
+			n += itemBytes(it)
 		}
 	}
-	return nil
+	return n
+}
+
+// roomLeft is the tokens the next request has room for: the window less the
+// reserve less the estimate of the view as it is now (negative when over). A
+// model that reports no window has unbounded room.
+func (l *Loop) roomLeft() int {
+	reserve, window := l.budget()
+	if window <= 0 {
+		return unboundedRoom
+	}
+	return window - reserve - l.estimate(l.view())
+}
+
+// pinnedTools are the tools that must stay loaded: every tool the model has
+// called in this turn, this response's calls included (they are in hook 7
+// before they are answered).
+func (l *Loop) pinnedTools() Pinned {
+	pinned := Pinned{}
+	for _, it := range l.Builder.Snapshot().Hooks[HookTurn] {
+		if it.Entry != nil {
+			for _, c := range toolUses(it.Entry.Blocks) {
+				pinned[c.Name] = true
+			}
+		}
+	}
+	return pinned
+}
+
+// relieve evicts loaded tools, least recently used first, while the request
+// would not fit, and stops when it fits or nothing may be evicted (then
+// checkBudget refuses). It runs between requests only: every call of the turn
+// so far has been answered, and the pinned set keeps it that way if the loop
+// order ever changes.
+func (l *Loop) relieve(res *TurnResult, snap Snapshot, est int) (Snapshot, int) {
+	reserve, window := l.budget()
+	if window <= 0 {
+		return snap, est
+	}
+	for est+reserve > window {
+		if _, ok := l.Window.EvictOne(l.pinnedTools()); !ok {
+			break
+		}
+		l.emitToolChanges(res)
+		snap = l.view()
+		est = l.estimate(snap)
+	}
+	return snap, est
+}
+
+// emitToolChanges reports the window's pending changes to the sink and counts
+// them in the turn result.
+func (l *Loop) emitToolChanges(res *TurnResult) {
+	for _, ch := range l.Window.TakeChanges() {
+		res.Loads += len(ch.Loaded)
+		res.Evictions += len(ch.Evicted)
+		c := ch
+		l.emit(LoopEvent{Kind: LoopToolsChanged, Tools: &c})
+	}
 }
 
 // OpeningTooBigMessage is shown when the very first request of a chat
@@ -778,10 +932,11 @@ type baselineState struct {
 	haveUsage  bool
 	lastTokens int64
 	lastCount  int
+	lastBytes  int
 }
 
 func (l *Loop) baseline() baselineState {
-	return baselineState{l.haveUsage, l.lastTokens, l.lastCount}
+	return baselineState{l.haveUsage, l.lastTokens, l.lastCount, l.lastBytes}
 }
 
 // settle ends a turn: it makes hook 7 valid, then flushes it to hook 6, or
@@ -809,7 +964,7 @@ func (l *Loop) settle(res *TurnResult, base baselineState, err error) error {
 	}
 	if !answered {
 		l.dropTurn()
-		l.haveUsage, l.lastTokens, l.lastCount = base.haveUsage, base.lastTokens, base.lastCount
+		l.haveUsage, l.lastTokens, l.lastCount, l.lastBytes = base.haveUsage, base.lastTokens, base.lastCount, base.lastBytes
 		return err
 	}
 	if ferr := l.flush(res); ferr != nil && err == nil {
