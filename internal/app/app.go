@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"knomit/internal/engine/store/model"
 
@@ -194,6 +195,17 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 
 	logLLMSetup(log.Logger, llmAdapter, llmInitErr)
 
+	// The chat's providers (the v2 harness). Nothing is contacted until the
+	// chat lists or opens a model.
+	var llmRegistry *llm.Registry
+	if len(cfg.LLM.Providers) > 0 {
+		llmRegistry = llm.NewRegistry(cfg.LLM.Providers)
+		if tracePath := os.Getenv("KNOMIT_LLM_TRACE"); tracePath != "" {
+			llmRegistry.SetTrace(tracePath)
+		}
+		a.closers = append(a.closers, func() { _ = llmRegistry.Close() })
+	}
+
 	// Repo manager.
 	a.manager = repos.New(ctx, repos.Deps{
 		Cfg:         cfg,
@@ -234,6 +246,9 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	a.server = &web.Server{
 		Lifetime:          lifetime,
 		OriginSessionsDir: filepath.Join(cfg.Home, "origin-sessions"),
+		LLMProviders:      llmRegistry,
+		ChatSessionsDir:   filepath.Join(cfg.Home, "chat-sessions"),
+		ChatLogDir:        filepath.Join(cfg.Home, "chat-logs"),
 		Manager:           a.manager,
 		GitHandler:        gitHandler,
 		EmbeddingsEnabled: true, // mandatory: New returns an error above if absent.
@@ -430,10 +445,27 @@ func (a *App) Handler() http.Handler {
 // configured.
 func (a *App) OAuthHandler() http.Handler { return a.server.OAuthHandler() }
 
+// shutdownReleaseWait bounds how long Close waits for chats and origin
+// sessions to finish tearing down before it closes the manager. A chat waits
+// at most 10s for a turn that ignores cancellation (maxTurnEndWait in
+// api/chat), and all chats end in parallel, so 10s is the longest a teardown
+// can legitimately take; the extra 5s is headroom for the teardown that follows
+// that wait: sess.Close (one control.db UPDATE), the log line and RemoveAll,
+// each far shorter than 5s on a healthy disk. A
+// teardown stuck past it is abandoned (logged) rather than hanging the stop.
+const shutdownReleaseWait = 15 * time.Second
+
 // Close shuts down repos and releases all resources.
 func (a *App) Close() {
 	if a.endLifetime != nil {
 		a.endLifetime()
+	}
+	// The chat and origin-session teardown runs in goroutines the lifetime
+	// just started, and it writes: a chat's end stamps its client_sessions row
+	// in control.db and its mounted repos may still be in use by a turn.
+	// manager.Close closes both, so wait first.
+	if a.server != nil {
+		a.server.WaitReleased(shutdownReleaseWait)
 	}
 	if err := a.manager.Close(); err != nil {
 		log.Warn().Err(err).Msg("app: manager close failed")

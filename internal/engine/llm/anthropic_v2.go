@@ -425,6 +425,7 @@ func (a *AnthropicChat) Stream(ctx context.Context, s Snapshot, o StreamOptions,
 		}
 	}
 	if err := stream.Err(); err != nil {
+		err = redactKey(err, a.o.APIKey)
 		if anthropicPromptTooLong(err) {
 			return nil, fmt.Errorf("anthropic: %w: %w", err, ErrContextFull)
 		}

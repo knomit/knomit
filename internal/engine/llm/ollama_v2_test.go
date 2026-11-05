@@ -169,7 +169,7 @@ func TestOllamaChat_StreamToolCallGetsKnomitID(t *testing.T) {
 	require.Equal(t, `"test-model"`, string(b["model"]))
 	require.Equal(t, `true`, string(b["stream"]))
 	require.Equal(t, `"30m"`, string(b["keep_alive"]))
-	require.Equal(t, `{"num_ctx":32768,"num_predict":8192}`, string(b["options"]))
+	require.Equal(t, `{"num_ctx":32768,"num_predict":-1}`, string(b["options"]))
 	require.Equal(t, `false`, string(b["truncate"]))
 	require.Equal(t, `false`, string(b["shift"]))
 	wantMsgs, err := json.Marshal(renderOllama(ollamaSnapshot(t, "go"), "test-model", OllamaOptions{}).Messages)

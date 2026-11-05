@@ -6,6 +6,7 @@ import (
 	"knomit/internal/edge/web/httpx"
 	"net/http"
 	"sync"
+	"time"
 
 	"knomit/internal/engine/store/model"
 
@@ -40,9 +41,8 @@ type Server struct {
 	// originSessionsReleased is the WaitGroup origins.Mount is given: its
 	// Wait returns once Lifetime has ended and the manager holds no file any
 	// more (at once when no router was built or Lifetime is nil: a manager
-	// that never releases is not counted, so Wait cannot hang). Only tests
-	// wait on it (an in-process server whose sessions dir is removed after
-	// it), so it is not exported.
+	// that never releases is not counted, so Wait cannot hang). WaitReleased
+	// is the one production waiter (App.Close); tests wait on it directly.
 	originSessionsReleased sync.WaitGroup
 	// Lifetime is how long the server's own state lives: when it ends, the
 	// origin-session manager removes every session and its folder. nil means
@@ -57,6 +57,22 @@ type Server struct {
 	// a private directory under os.TempDir(). internal/app sets
 	// <home>/origin-sessions.
 	OriginSessionsDir string
+	// LLMProviders opens the configured chat providers' models. nil lists no
+	// providers and refuses to start a chat; ReadOnly leaves the chat routes
+	// unmounted.
+	LLMProviders *llm.Registry
+	// ChatSessionsDir is where the chats' temp files live (a run directory per
+	// process; "" gives a private one under os.TempDir()). internal/app sets
+	// <home>/chat-sessions.
+	ChatSessionsDir string
+	// ChatLogDir is where the persistent chat session logs go, one JSONL file
+	// per chat; "" turns them off. internal/app sets <home>/chat-logs.
+	ChatLogDir string
+	// chatOnce builds chatRoutes, the api/chat routes, once per Server, so
+	// the plain and OAuth API routers share one set of live chats.
+	chatOnce     sync.Once
+	chatRoutes   chi.Router
+	chatReleased sync.WaitGroup
 	// ClientSessions records every MCP request's session (control.db
 	// client_sessions). nil ⇒ recording is off (tests, degraded boot). Wired
 	// from Manager.ClientSessions() by internal/app, AFTER Manager.Start
@@ -126,6 +142,9 @@ type Server struct {
 	CORSOrigins []string
 
 	mcpHandler http.Handler // single MCP server; profile is a per-repo setting
+	// mcpServer is the MCP server mcpHandler serves; the chats' in-process
+	// sessions talk to the same one, so its gates apply to them too.
+	mcpServer *mcpserver.MCPServer
 
 	// staticFS overrides the embedded web UI. nil — the production zero
 	// value — means embeddedStaticFS(). Tests set it to an fstest.MapFS
@@ -158,6 +177,20 @@ func (s *Server) grants() auth.Grants {
 // all repos and lenses. Profile is a per-repo attribute now; the formerly
 // profile-keyed instances are collapsed (lenses RFC decision 12).
 func (s *Server) buildMCPHandler() {
+	s.ensureMCPServer()
+	s.mcpHandler = mcpserver.NewStreamableHTTPServer(s.mcpServer,
+		mcpserver.WithHTTPContextFunc(mcpHTTPContext),
+	)
+}
+
+// ensureMCPServer builds the MCP server once. The HTTP handler and the chats'
+// in-process sessions serve the SAME one, so its permission and binding gates
+// apply to both; it is split from buildMCPHandler so the chat can have it
+// without replacing an MCP handler a test installed.
+func (s *Server) ensureMCPServer() {
+	if s.mcpServer != nil {
+		return
+	}
 	// The SAME Grants the HTTP gate consults, so the two enforcement points
 	// cannot come to disagree about anonymous. Form B disables it alongside
 	// writeGate, or an authDisabled test would still be refused per tool.
@@ -165,15 +198,11 @@ func (s *Server) buildMCPHandler() {
 	if !s.authDisabled {
 		g = s.grants()
 	}
-	var mcpSrv *mcpserver.MCPServer
 	if s.Embedder != nil {
-		mcpSrv = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly, g, s.Embedder)
+		s.mcpServer = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly, g, s.Embedder)
 	} else {
-		mcpSrv = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly, g)
+		s.mcpServer = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly, g)
 	}
-	s.mcpHandler = mcpserver.NewStreamableHTTPServer(mcpSrv,
-		mcpserver.WithHTTPContextFunc(mcpHTTPContext),
-	)
 }
 
 // mcpHTTPContext is the MCP server's HTTPContextFunc. mcp-go does not put the
@@ -313,4 +342,29 @@ func (s *Server) Handler() http.Handler {
 	}
 
 	return r
+}
+
+// WaitReleased blocks until the origin-session manager and the chat manager
+// have finished tearing down after Lifetime ended, or until timeout passes
+// (it then logs which part is still running and returns false). It is what
+// lets App.Close end the lifetime and still close control.db only AFTER the
+// teardown that writes to it (a chat's MCP session row, its log line). A
+// manager that was never built, or built without a Lifetime, is not counted,
+// so this returns at once for a server with nothing to wait for.
+func (s *Server) WaitReleased(timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		s.originSessionsReleased.Wait()
+		s.chatReleased.Wait()
+		close(done)
+	}()
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-done:
+		return true
+	case <-t.C:
+		log.Warn().Dur("timeout", timeout).Msg("web: origin sessions or chats did not finish shutting down in time")
+		return false
+	}
 }

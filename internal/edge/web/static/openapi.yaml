@@ -73,6 +73,12 @@ tags:
   - name: commits
   - name: jobs
   - name: origin
+  - name: chat
+    description: |
+      The web chat: an in-process model that reaches knomit only through its
+      own MCP tools. Chats are owned by the principal that started them, live
+      while an events stream is attached (60 s grace), and ask before any
+      tool call that writes.
   - name: secrets
     description: |
       The instance's stored credentials (token, basic, ssh_key) that repository
@@ -4163,6 +4169,301 @@ paths:
         "500": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
+  /chat-providers:
+    get:
+      tags: [chat]
+      summary: List chat providers and models
+      description: |
+        The configured providers (`[llm.providers]`) with each allowlisted
+        model's availability: `available` (the provider offers it), `tools`
+        (it can run the chat's tool calls) and a `reason` when it cannot be
+        used. Cached for 60 seconds. Not served by a read-only (demo) server.
+      operationId: listChatProviders
+      responses:
+        "200":
+          description: The providers, sorted by name
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  _links: { type: object }
+                  _embedded:
+                    type: object
+                    properties:
+                      providers:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name: { type: string }
+                            kind: { type: string, enum: [anthropic, ollama] }
+                            models:
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  id: { type: string }
+                                  available: { type: boolean }
+                                  tools: { type: boolean }
+                                  reason: { type: string }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /chats:
+    get:
+      tags: [chat]
+      summary: List the caller's live chats
+      description: |
+        The chats the signed-in principal started and that have not ended. Any
+        other principal's chats are not listed.
+      operationId: listChats
+      responses:
+        "200":
+          description: The caller's chats, by id
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  _links: { type: object }
+                  _embedded:
+                    type: object
+                    properties:
+                      chats:
+                        type: array
+                        items: { $ref: "#/components/schemas/ChatItem" }
+        "401": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [chat]
+      summary: Start a chat
+      description: |
+        Opens a chat on an allowlisted provider and model. The id is
+        `chat-` and 32 hex digits, and is also the chat's MCP session id and
+        the name of its persistent session log. Every principal that may read
+        may chat; what its tool calls may do is decided per tool by the same
+        permission gate every MCP call passes. 400 for a provider or model
+        outside the allowlist, 422 when the provider cannot be used (no key,
+        no tool support).
+      operationId: createChat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, model]
+              properties:
+                provider: { type: string }
+                model: { type: string }
+      responses:
+        "201":
+          description: The chat; Location is the chat
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/ChatItem" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /chats/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [chat]
+      summary: Get a chat's transcript
+      description: |
+        The chat's transcript rows (user text, assistant text, tool calls with
+        their arguments but not their results), whether a turn is running, the
+        approvals waiting for an answer and the session's grants. A chat that
+        belongs to another principal is 404.
+      operationId: getChat
+      responses:
+        "200":
+          description: The chat
+          content:
+            application/hal+json:
+              schema: { type: object }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      tags: [chat]
+      summary: End a chat
+      description: |
+        Ends the chat: a blocked approval and a running turn unwind, the MCP
+        session records `ended_at`, and the temp files are removed. The
+        persistent session log stays. A chat also ends 60 seconds after its
+        last events stream detaches, or when the server stops.
+      operationId: deleteChat
+      responses:
+        "204": { description: Ended }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /chats/{id}/events:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [chat]
+      summary: Stream a chat's events (SSE)
+      description: |
+        Server-sent events. Every connect starts with `event: ready`; the
+        client then refetches `GET /chats/{id}`. There is no `id:` and no
+        Last-Event-ID replay. A `: keepalive` comment goes out every 30
+        seconds. Events: `text_delta`, `reasoning`, `tool_call` (state
+        `running` then `done`), `approval`, `usage`, `warning`, `turn_done`,
+        `turn_error` and `chat_end`.
+      operationId: streamChatEvents
+      responses:
+        "200":
+          description: The event stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /chats/{id}/turns:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [chat]
+      summary: Send a user turn
+      operationId: postChatTurn
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string }
+      responses:
+        "202": { description: The turn started; follow its events }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /chats/{id}/cancel:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [chat]
+      summary: Cancel the running turn
+      operationId: cancelChatTurn
+      responses:
+        "204": { description: Cancel requested (a no-op when no turn runs) }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /chats/{id}/approvals/{callId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: callId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [chat]
+      summary: Answer a pending approval
+      description: |
+        `allow` runs the call once, `decline` returns a tool error to the
+        model, `allow_session` also grants the same tool and action on the
+        same target (the repo or lens the call's handle resolves to) for the
+        rest of this chat. A call whose tool or action the classification
+        table does not know can never be granted: `allow_session` is 400.
+      operationId: answerChatApproval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [allow, decline, allow_session] }
+      responses:
+        "204": { description: Answered }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /chats/{id}/grants:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [chat]
+      summary: List the chat's session grants
+      operationId: listChatGrants
+      responses:
+        "200":
+          description: The grants
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  _embedded:
+                    type: object
+                    properties:
+                      grants:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            target: { type: string, description: The repo or lens name }
+                            kind: { type: string, enum: [repo, lens] }
+                            tool: { type: string }
+                            action: { type: string }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /chats/{id}/calls/{callId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: callId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [chat]
+      summary: Get one tool call's arguments and result
+      description: Read from the chat's temp file, so it is gone when the chat ends.
+      operationId: getChatCall
+      responses:
+        "200":
+          description: The call
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string }
+                  arguments: { type: object }
+                  result: { type: string }
+                  is_error: { type: boolean }
+                  elided: { type: boolean }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /secrets:
     get:
       tags: [secrets]
@@ -5605,6 +5906,14 @@ components:
             unlinks. Either needs the local-or-same-origin admin gate (403
             otherwise). Not together with a pasted credential when linking (400).
 
+    ChatItem:
+      type: object
+      required: [id, provider, model, _links]
+      properties:
+        id: { type: string, description: "chat- and 32 hex digits; also the MCP session id and the session log's name" }
+        provider: { type: string }
+        model: { type: string }
+        _links: { type: object }
     Secret:
       type: object
       description: A stored secret's metadata. The value is never returned.

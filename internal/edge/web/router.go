@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/edge/web/api/chat"
 	"knomit/internal/edge/web/api/jobs"
 	"knomit/internal/edge/web/api/kb"
 	"knomit/internal/edge/web/api/manage"
@@ -193,6 +194,18 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	// attaches or swaps in that remote.
 	repo.With(operator).Mount("/origin-sessions", s.originSessionsRouter())
 
+	// The chat (api/chat): provider listing and the chat sessions. Not on a
+	// read-only (demo) server. The routes are built once and shared by both
+	// listeners' routers.
+	if h := s.chatRouter(); h != nil {
+		// Each (method, pattern) api/chat registered, so this router's route
+		// table lists exactly them and a stray method is this router's 405.
+		_ = chi.Walk(h, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+			r.Method(method, route, h)
+			return nil
+		})
+	}
+
 	// The lens subtree INSIDE LensMiddleware: the KB's federated reads and
 	// the lens MCP mount below. The CRUD (api/manage) sits outside it, on
 	// lens itself, because it resolves {lens} through the registry.
@@ -319,4 +332,38 @@ func (s *Server) originSessionsRouter() chi.Router {
 		s.originSessions = r
 	})
 	return s.originSessions
+}
+
+// chatRouter returns the chat routes, built by chat.Mount ONCE per Server for
+// the same reason originSessionsRouter is: Mount creates the manager that
+// holds the live chats, and apiRouter runs once per listener. nil when chat is
+// not served: a ReadOnly server. Without a provider registry the routes are
+// still there: the provider list is empty and starting a chat is refused.
+//
+// The chats live as long as s.Lifetime (nil: forever).
+func (s *Server) chatRouter() chi.Router {
+	if s.ReadOnly {
+		return nil
+	}
+	s.chatOnce.Do(func() {
+		s.ensureMCPServer()
+		ctx := s.Lifetime
+		var released *sync.WaitGroup
+		if ctx == nil {
+			ctx = context.Background()
+		} else {
+			released = &s.chatReleased
+		}
+		r := chi.NewRouter()
+		r.NotFound(func(w http.ResponseWriter, req *http.Request) {
+			hal.WriteProblem(w, http.StatusNotFound, "Not Found", "no resource at "+req.URL.Path, req.URL.Path)
+		})
+		r.MethodNotAllowed(func(w http.ResponseWriter, req *http.Request) {
+			hal.WriteProblem(w, http.StatusMethodNotAllowed, "Method Not Allowed",
+				"method "+req.Method+" not allowed on "+req.URL.Path, req.URL.Path)
+		})
+		chat.Mount(ctx, r, s.mcpServer, s.Manager, s.LLMProviders, s.ChatSessionsDir, s.ChatLogDir, released)
+		s.chatRoutes = r
+	})
+	return s.chatRoutes
 }

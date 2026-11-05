@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/edge/web/httpx"
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/pki"
 )
@@ -25,6 +25,15 @@ import (
 //
 // This test pins the data-model contract: writing RemoteBranch on the
 // session and looking it back up via the manager must round-trip the value.
+// The run-directory layout these tests plant by hand (httpx keeps its own
+// constants unexported): a run is run-<id> beside its lock run-<id>.lock. A
+// change to httpx's layout makes the dead-run tests below fail rather than
+// silently follow it.
+const (
+	runPrefix     = "run-"
+	runLockSuffix = ".lock"
+)
+
 func TestOriginSession_RemoteBranchSurvivesGet(t *testing.T) {
 	sm := newTestSessionManager(t)
 
@@ -301,7 +310,7 @@ func TestSessionManager_ReleasedMeansNothingIsHeld(t *testing.T) {
 	sweeping, gate := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	t.Cleanup(func() { once.Do(func() { close(gate) }) })
-	sm := newSessionManagerHooked(ctx, base, &runHooks{reclaimOpened: func(string) {
+	sm := newSessionManagerHooked(ctx, base, &httpx.RunHooks{ReclaimOpened: func(string) {
 		close(sweeping)
 		<-gate
 	}})
@@ -465,111 +474,6 @@ func TestSessionManager_StartupSweepReclaimsADeadRun(t *testing.T) {
 		if !exists(t, p) {
 			t.Errorf("%s was removed: only dead runs in the base may be", p)
 		}
-	}
-}
-
-// The claim/reclaim race, forced step by step with the test hooks: a claimer
-// creates its lock file; a sweeper locks it first (taking it for a dead run's)
-// and removes the (absent) run directory; the claimer waits on the lock; the
-// sweeper releases it; the claimer then takes it, checks it and makes its run
-// directory, all before the sweeper goes on. Whatever the sweeper does after
-// that, the claimer's run must end up with its lock file in place, held by
-// the claimer. The sweeper used to unlink the file only after releasing the
-// lock, which here strips the new live run of its lock file.
-//
-// Unix only in effect: on Windows the claimer's open handle makes any unlink
-// fail, which the test then also passes.
-//
-// SABOTAGE: move reclaimRun's unlink after pki.UnlockFile -> red.
-func TestReclaimRun_NeverStripsANewRunOfItsLock(t *testing.T) {
-	base := t.TempDir()
-	sweeperLocked := make(chan struct{})
-	claimerDone := make(chan struct{})
-	sweeperDone := make(chan struct{})
-	sweeper := &runHooks{
-		reclaimLocked:   func(string) { close(sweeperLocked) },
-		reclaimUnlocked: func(string) { <-claimerDone }, // the claimer finishes its whole claim in the gap
-	}
-	var once sync.Once
-	var firstLock string
-	claimer := &runHooks{claimCreated: func(lockPath string) {
-		once.Do(func() {
-			firstLock = lockPath
-			go func() {
-				defer close(sweeperDone)
-				reclaimRun(base, lockPath, sweeper) // the sweeper, probing the brand-new file
-			}()
-			<-sweeperLocked // the sweeper holds the lock before the claimer tries it
-		})
-	}}
-
-	var lock *os.File
-	var dir string
-	var claimErr error
-	go func() {
-		lock, dir, claimErr = claimRun(base, claimer)
-		close(claimerDone)
-	}()
-	<-sweeperDone
-	<-claimerDone
-	if claimErr != nil {
-		t.Fatalf("claimRun: %v", claimErr)
-	}
-	defer func() {
-		_ = pki.UnlockFile(lock)
-		_ = lock.Close()
-	}()
-
-	fi, err := lock.Stat()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !exists(t, dir) {
-		t.Fatalf("the claimed run's directory %s is missing", dir)
-	}
-	if !sameFileAt(fi, lock.Name()) {
-		t.Fatalf("the live run %s lost its lock file to the sweeper", filepath.Base(dir))
-	}
-	// The race really ran: on Unix the sweeper unlinked the first file under
-	// its lock, so the claimer had to start over on a new one. (On Windows the
-	// claimer's open handle blocks that unlink, and it keeps the first.)
-	if runtime.GOOS != "windows" && lock.Name() == firstLock {
-		t.Fatalf("the claimer kept its first lock file %s: the sweeper never unlinked it under the lock", filepath.Base(firstLock))
-	}
-	// And the next sweep sees it as alive.
-	reclaimDeadRuns(base, nil)
-	if !exists(t, dir) || !sameFileAt(fi, lock.Name()) {
-		t.Fatal("a later sweep removed the live run")
-	}
-}
-
-// removeChild refuses every path that is not the layout's.
-func TestSessionManager_RemovalStaysInsideTheLayout(t *testing.T) {
-	base := t.TempDir()
-	run := filepath.Join(base, runPrefix+"x")
-	for _, p := range []string{
-		filepath.Join(run, "keep-me"),
-		filepath.Join(run, sessionDirPrefix+"y"),
-	} {
-		if err := os.MkdirAll(p, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, c := range []struct{ parent, p, prefix, suffix string }{
-		{run, filepath.Join(run, "keep-me"), sessionDirPrefix, ""},
-		{run, filepath.Join(run, sessionDirPrefix+"y", ".."), sessionDirPrefix, ""}, // cleans to run
-		{run, filepath.Join(run, sessionDirPrefix+"y", "z"), sessionDirPrefix, ""},  // a grandchild
-		{run, run, sessionDirPrefix, ""},
-		{base, run, runPrefix, runLockSuffix}, // a run dir is not a lock file
-		{base, filepath.Join(base, runPrefix), runPrefix, ""},
-		{"", run, runPrefix, ""},
-	} {
-		if removeChild(c.parent, c.p, c.prefix, c.suffix) {
-			t.Errorf("removeChild(%q, %q, %q, %q) removed a path outside the layout", c.parent, c.p, c.prefix, c.suffix)
-		}
-	}
-	if !exists(t, filepath.Join(run, "keep-me")) || !exists(t, filepath.Join(run, sessionDirPrefix+"y")) {
-		t.Fatal("a refused removal removed something")
 	}
 }
 
