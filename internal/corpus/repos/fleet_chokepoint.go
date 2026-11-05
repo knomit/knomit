@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -186,7 +187,21 @@ func (m *Manager) retireFleetConflict(ri *RepoInstance, err error) {
 	m.mu.Unlock()
 	log.Warn().Str("repo", rec.Name).Str("uid", rec.UID).Str("reason", reason).Str("cause", string(cause)).Str("detail", detail).
 		Msg("repo is unavailable: its consensus ontology took the reserved fleet id (fleet_conflict); it is unmounted, as a mount of it would be refused")
-	unmount(ri, "fleet conflict")
+	// Bounded like Close's own Unmounts (unmountDrainBound): Close waits for
+	// this goroutine (retireWg), so an unbounded drain — a Sync round parked
+	// on a slow fetch, a stage that will not let go — would hold Close past
+	// the cap it promises for every other repo. A drain that runs out is
+	// logged, as Close logs its own; the machine's root context is already
+	// cancelled by the Send, so it still winds down.
+	if ri.machine != nil {
+		bound := ri.machine.opts.unmountDrainBound()
+		ctx, cancel := context.WithTimeout(context.Background(), bound)
+		defer cancel()
+		if _, uerr := ri.machine.Send(ctx, Unmount("fleet conflict")); uerr != nil {
+			log.Error().Err(uerr).Str("repo", rec.Name).Dur("bound", bound).
+				Msg("fleet conflict: repo did not finish unmounting within the drain bound; giving up waiting")
+		}
+	}
 }
 
 // startFleetConflictRetire runs retireFleetConflict on its own goroutine,

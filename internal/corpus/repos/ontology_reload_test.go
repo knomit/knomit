@@ -530,6 +530,53 @@ func TestOntologyReload_CloseWaitsForAFleetConflictRetire(t *testing.T) {
 	require.False(t, m.startFleetConflictRetire(g.ri, ferr), "no retire starts once Close has begun")
 }
 
+// A retire whose unmount cannot drain (here: the driver is stuck inside a
+// stage Enter that ignores its ctx, as a hung fetch would hold a round)
+// gives up after the machine's unmountDrainBound, exactly like Close's own
+// Unmounts, so Close — which waits for the retire — returns within that cap.
+// SABOTAGE: unmount with context.Background() (no bound) → Close never
+// returns → red.
+func TestOntologyReload_RetireUnmountIsBoundedSoCloseReturns(t *testing.T) {
+	t.Parallel()
+	_, g := newReloadFixture(t)
+	m := g.ri.env.m
+	arrived, release := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	gen := g.ri.snap().gens[StageServe]
+	require.NotZero(t, gen)
+	// Set before the post below hands control to the driver (the mailbox's
+	// lock orders the write before the driver's read).
+	g.ri.machine.opts.UnmountDrainBound = 300 * time.Millisecond
+	g.ri.machine.opts.Hook = func(stage StageID, point string, _ context.Context) {
+		if stage == StageServe && point == "enter" {
+			close(arrived)
+			<-release // ignores ctx on purpose: a drain that cannot finish
+		}
+	}
+	g.ri.machine.post(crashed{stage: StageServe, gen: gen})
+	select {
+	case <-arrived:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Serve was never re-entered")
+	}
+
+	ferr := markFleetConflict(t, g)
+	require.True(t, m.startFleetConflictRetire(g.ri, ferr))
+	closed := make(chan struct{})
+	start := time.Now()
+	go func() {
+		_ = m.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not return: the retire's unmount is not bounded")
+	}
+	require.Less(t, time.Since(start), 5*time.Second)
+	require.Equal(t, CauseFleetConflict, unavailableCause(m, g.ri.Name()))
+}
+
 // A later reload that applied a FIXED (usable, non-fleet) tip before the
 // retire goroutine ran: the retire re-checks under the lock and leaves the
 // repo mounted. SABOTAGE: drop the re-check → the fixed repo is unmounted
