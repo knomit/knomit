@@ -13,8 +13,8 @@ import (
 
 // tracingChat writes one JSONL line per Stream call: the per-hook record of
 // the request, the response blocks, the usage and any error. It is a debugging
-// aid (the v2 twin of TracingAdapter); the durable per-chat record is the
-// chat layer's session log.
+// aid (KNOMIT_LLM_TRACE); the durable per-chat record is the chat layer's
+// session log.
 type tracingChat struct {
 	inner ChatModel
 	mu    sync.Mutex

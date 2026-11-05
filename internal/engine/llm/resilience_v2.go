@@ -15,18 +15,18 @@ import (
 // Policy.AttemptTimeout.
 var errAttemptStalled = errors.New("llm: no event within the attempt timeout")
 
-// resilientChat is the v2 twin of resilientAdapter: bounded retries of
-// retryable failures, a stall timeout, and request metrics.
+// resilientChat decorates a ChatModel with bounded retries of retryable
+// failures, a stall timeout, and request metrics.
 type resilientChat struct {
 	inner  ChatModel
 	policy Policy
 }
 
-// WrapChat applies p to inner. It reuses the v1 classifier (isRetryable), the
+// WrapChat applies p to inner. It uses the classifier (isRetryable), the
 // backoff (retryBackoff) and, through callers, the per-provider budgets
 // (policyFor).
 //
-// Two semantics differ from the v1 wrapper because a v2 request streams:
+// A request streams, so:
 //
 //   - A retry happens only while nothing has reached the sink. Once an event
 //     has been delivered, a replay would deliver it again, so the error is
@@ -43,8 +43,10 @@ type resilientChat struct {
 //     event does, since only that would be delivered twice.
 //
 // The result is a ChatModel, not a concrete type, and every ChatModel method
-// delegates, so wrapping never changes Caps (the decorator-erasure trap of
-// the v1 BatchAdapter cannot recur as long as v2 has no optional interfaces).
+// delegates, so wrapping never changes Caps. A decorator that returns a
+// concrete type can drop an optional interface its inner model satisfied,
+// with no error and no compile failure; ChatModel has no optional interfaces,
+// and TestWrapChat_KeepsCaps pins that Caps survive the wrap.
 func WrapChat(inner ChatModel, p Policy) ChatModel {
 	return &resilientChat{inner: inner, policy: p}
 }
