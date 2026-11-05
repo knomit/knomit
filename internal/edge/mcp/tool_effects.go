@@ -163,6 +163,45 @@ func Replayable(tool string, args json.RawMessage) bool {
 	return true
 }
 
+// RepeatAnswerable reports whether a call that was just made and succeeded may,
+// when the model makes it again byte for byte with nothing in between, be
+// answered from that earlier result instead of being run again (the loop's
+// no-progress guard, Loop.ShortCircuit). It is not Replayable: Replayable asks
+// whether a call may be OFFERED back after its result was dropped; this asks
+// whether running it again could add anything.
+//
+// Policy: yes for everything whose repeat only repeats. That covers reads, a
+// bind (state-changing but idempotent for identical arguments, and its result
+// is a handle the model already holds), and a write: an identical learn,
+// update or retract after the first succeeded must not run twice silently, and
+// the earlier result tells the model it was done. No for a call whose repeat
+// legitimately returns something new: a call carrying a page cursor (it
+// consumes the page it names), and every review and hypothesize call (a
+// session step: page advances, current may take the next step). No for a tool
+// or action the table does not know, and for arguments that do not decode: a
+// call the guard does not understand is run.
+func RepeatAnswerable(tool string, args json.RawMessage) bool {
+	var m map[string]any
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &m); err != nil {
+			return false
+		}
+	}
+	e, known := ClassifyCall(tool, m)
+	if !known {
+		return false
+	}
+	if _, stepper := multiModeTools[tool]; stepper {
+		return false
+	}
+	for _, a := range e.ReplayNotWith {
+		if v, set := m[a]; set && v != nil && v != "" {
+			return false
+		}
+	}
+	return true
+}
+
 // annotateFromEffects sets the tool's hints from its rows: read-only when
 // every action is read-only, destructive when any action is. A tool with no
 // rows is returned unchanged.

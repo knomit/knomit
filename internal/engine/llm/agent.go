@@ -105,7 +105,22 @@ const RepeatFailureLimit = 3
 // is ended by the repeat guard.
 const RepeatedFailureMessage = "The model kept making the same failing tool call (%s, %d times with the same error), so the turn was stopped. The last error was: %s"
 
+// NoProgressNote_DRAFT and NoProgressMessage_DRAFT are NEW model-visible and
+// user-visible copy, NOT yet approved by the user. Change them only on the
+// user's word.
+const (
+	// NoProgressNote_DRAFT is appended (model-visible) to the earlier result a
+	// repeated, already successful call is answered with. It starts with a
+	// blank line.
+	NoProgressNote_DRAFT = "\n\n[This is the same call as your previous step, with the same arguments, and it had already succeeded. It was not run again; the result above is the earlier one. If you need something different, change the arguments or answer the person.]"
+	// NoProgressMessage_DRAFT is the sentence the user is shown when the turn
+	// is ended for repeating a successful call. Arguments: the tool, the count.
+	NoProgressMessage_DRAFT = "The model kept making the same tool call (%s, %d times with the same arguments) without getting anywhere, so the turn was stopped."
+)
+
 var (
+	// ErrNoProgress: the model made a call that had just succeeded again, and again after it was told.
+	ErrNoProgress = errors.New("llm: the model repeated the same successful tool call")
 	// ErrRepeatedFailure: the model repeated one failing call RepeatFailureLimit times in a row.
 	ErrRepeatedFailure = errors.New("llm: the model repeated the same failing tool call")
 	// ErrTooManyCalls: the turn asked for more tool calls than Loop.MaxCalls.
@@ -284,6 +299,14 @@ type Loop struct {
 	// static path: every tool, every request. Set it only for a model whose
 	// Caps().StablePrefix is false.
 	Window *ToolWindow
+	// ShortCircuit says whether a call may be answered from the result of the
+	// call just before it, when that call was byte-identical and succeeded:
+	// true when running it again would add nothing (a read, a bind with the
+	// same arguments, a write that already happened). It must be false for a
+	// call whose repeat can legitimately return something new (a page cursor,
+	// a session step). Nil: no call is short-circuited and the no-progress
+	// guard is off. The edge passes mcp.RepeatAnswerable.
+	ShortCircuit func(tool string, args json.RawMessage) bool
 
 	warned     bool
 	haveUsage  bool
@@ -518,6 +541,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 			l.logCall(c, msg, true)
 			// Malformed JSON repeated byte for byte is the same runaway as a
 			// failing call: keyed by the raw bytes and a fixed error.
+			guard.forget()
 			if n := guard.observeKey(c.Name+"\x00"+string(c.RawArgs)+"\x00invalid JSON", true); n >= RepeatFailureLimit {
 				abort(i+1, SkippedResult)
 				return results, approvals, repeatedFailure(c.Name, n, "the arguments are not valid JSON")
@@ -527,6 +551,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 
 		if l.Window != nil {
 			if l.Window.Handles(c.Name) {
+				guard.forget() // the window's answer changes what a repeat would return
 				// The loader, or a call to a tool the model had not loaded:
 				// answered here, run by nobody, so it needs no approval. The
 				// loader's decision is recorded as auto; a not-run call has none.
@@ -549,6 +574,22 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 			l.Window.Touch(c.Name)
 		}
 
+		// No-progress guard: the call just before this one was identical and
+		// succeeded. Do not run it again and do not ask for approval for a
+		// call that is not run: answer with the earlier result and a note; the
+		// next identical call ends the turn. Paired either way.
+		if l.ShortCircuit != nil && guard.sameAsLastSuccess(c) {
+			if n := guard.okRepeats + 1; n > NoProgressRepeats {
+				abort(i, SkippedResult)
+				return results, approvals, noProgress(c.Name, n+1)
+			}
+			guard.okRepeats++
+			msg := guard.okContent + NoProgressNote_DRAFT
+			answer(c, msg, false)
+			l.logCall(c, msg, false)
+			continue
+		}
+
 		if l.Gate != nil {
 			d, err := l.Gate.Decide(ctx, c)
 			if err != nil {
@@ -569,6 +610,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 			}
 			if !d.Allow {
 				guard.reset() // a decline is new information: the model was told no
+				guard.forget()
 				answer(c, DeclinedResult, true)
 				l.logCall(c, DeclinedResult, true)
 				continue
@@ -590,6 +632,11 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 		}
 		answer(c, out.Content, out.IsError)
 		l.logCall(c, out.Content, out.IsError)
+		if !out.IsError && l.ShortCircuit != nil && l.ShortCircuit(c.Name, c.Args) {
+			guard.remember(c, out.Content)
+		} else {
+			guard.forget()
+		}
 		if n := guard.observe(c, out); n >= RepeatFailureLimit {
 			// End the turn the way the call limit does: answer the rest of
 			// this reply's calls so every tool_use stays paired (settle then
@@ -607,6 +654,39 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 type repeatGuard struct {
 	key string
 	n   int
+
+	// The no-progress guard: the last call that ran and succeeded, when its
+	// repeat may be answered from it (Loop.ShortCircuit), and how many repeats
+	// it has been answered for. Any other call, a failure or a decline forgets
+	// it, because the state a repeat would see may have changed.
+	okKey     string
+	okContent string
+	okRepeats int
+}
+
+// NoProgressRepeats is how many repeats of a successful call are answered from
+// its earlier result; the next one ends the turn. A policy, not a measurement:
+// one answered repeat tells a model that did not read the result that it got
+// it already, a second identical call shows it is not acting on that.
+const NoProgressRepeats = 1
+
+func callKey(c ToolUse) string { return c.Name + "\x00" + string(c.Args) }
+
+func (g *repeatGuard) remember(c ToolUse, content string) {
+	k := callKey(c)
+	if k != g.okKey {
+		g.okKey, g.okContent, g.okRepeats = k, content, 0
+	}
+}
+
+func (g *repeatGuard) forget() { g.okKey, g.okContent, g.okRepeats = "", "", 0 }
+
+func (g *repeatGuard) sameAsLastSuccess(c ToolUse) bool {
+	return g.okKey != "" && g.okKey == callKey(c)
+}
+
+func noProgress(tool string, n int) error {
+	return &turnError{msg: fmt.Sprintf(NoProgressMessage_DRAFT, tool, n), err: ErrNoProgress}
 }
 
 // observe records an executed call's outcome and returns the current streak.

@@ -326,6 +326,9 @@ func (m *manager) create(ctx context.Context, p auth.Principal, provider, model 
 	c.loop = &llm.Loop{
 		Model: cm, Builder: b, Tools: sess, Gate: c, Sink: c.onLoopEvent,
 		ArgsHook: c.argsHook, Log: c.logSink(), Price: price, Window: win,
+		// Every provider gets the no-progress guard: a model that repeats a
+		// call that already succeeded is answered from the earlier result.
+		ShortCircuit: mcp.RepeatAnswerable,
 	}
 	if win != nil {
 		m.warmRanker(c, tools)
