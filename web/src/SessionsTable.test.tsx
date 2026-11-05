@@ -559,3 +559,29 @@ describe('Activity sessions expanded state', () => {
     expect(screen.getByRole('button', { name: /2 handles/ })).toHaveAttribute('aria-expanded', 'false');
   });
 });
+
+// A chat is a session like any other (it registers in client_sessions under
+// its chat id), marked by its client: name knomit-chat, version
+// "<provider>/<model>".
+describe('Activity sessions: the chat marker', () => {
+  it('renders the chat marker with provider and model', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: false, policy: POLICY,
+      sessions: [
+        sess({ id: 'chat-0a', client: { name: 'knomit-chat', version: 'anthropic/claude-test-x', initialized: true } }),
+        sess({ id: 'chat-0b', client: { name: 'knomit-chat', version: 'local/library/o1', initialized: true } }),
+        sess({ id: 'mcp-session-9', client: { name: 'claude-code', version: '1.2', initialized: true } }),
+      ],
+    });
+    render(<ActivityFacet target={CORE} />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(3));
+    const [chatA, chatB, agent] = screen.getAllByTestId('session-row');
+    expect(chatA).toHaveTextContent('Chat · anthropic · claude-test-x');
+    // The model name may itself hold a slash: the provider is the part before the first one.
+    expect(chatB).toHaveTextContent('Chat · local · library/o1');
+    expect(chatA.textContent).not.toContain('knomit-chat');
+    // Any other client is unchanged.
+    expect(agent).toHaveTextContent('claude-code 1.2');
+    expect(agent.textContent).not.toContain('Chat ·');
+  });
+});
