@@ -32,6 +32,8 @@ export interface ChatApproval {
   call_id: string; tool: string; action: string;
   target?: string; target_kind?: string;
   destructive: boolean; grantable: boolean; arguments?: unknown;
+  /** The view index of the turn the call belongs to. */
+  turn: number;
 }
 
 export interface ChatGrant { target: string; kind: string; tool: string; action: string }

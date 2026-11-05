@@ -11,13 +11,21 @@
 // the reducer replaces every turn it lists, verbatim; nothing is patched on.
 // Live events only fill in what happens after the snapshot was cut.
 //
+// Live events are routed by TURN INDEX. The server puts the view index of a
+// turn's user item (`turn`) on every event of the turn and on the 202 that
+// answers a send, and every snapshot turn knows its own (`at`). An event goes to
+// the turn with its index; nothing is guessed from order.
+//
 // The one thing the page holds beyond a snapshot is the turn the person just
-// sent (`local`). The server appends a turn to its view BEFORE it answers the
+// sent (`local`). Its index is not known until the 202 (or the first event of
+// the turn, whichever arrives first): an event for an index the page has no
+// turn for belongs to that local turn when one exists (it is the server's next
+// turn), and is how the page learns the index. With no local turn it is a turn
+// the page does not know (started elsewhere): the page asks for a snapshot
+// (`staleSeq`). The server appends a turn to its view BEFORE it answers the
 // POST, so a snapshot started after the POST was answered 2xx lists it; until
-// then (and for a read that started before) the local turn is kept after the
-// snapshot's turns. A POST that fails takes its local turn out outright. While
-// a local turn is unconfirmed (`accepted` false) live events are not applied to
-// it: a late event from the turn before belongs to that one.
+// then the local turn is kept after the snapshot's turns. A POST that fails
+// takes its local turn out outright.
 import type { ChatApproval, ChatSnapshot, ChatViewItem } from './chatApi';
 
 export interface ToolCall { id: string; name: string; state: 'running' | 'done'; isError: boolean }
@@ -27,6 +35,9 @@ export interface TurnUsage { input: number; cacheRead: number; cacheWrite: numbe
 export interface ChatTurn {
   /** The person's message; empty for a turn the page joined mid-way. */
   user: string;
+  /** The view index of this turn's user item on the server, which live events
+   *  name; unknown (undefined) for a local turn until its 202 or first event. */
+  at?: number;
   parts: ChatPart[];
   /** Summed over the turn's requests; null until the first usage event. */
   usage: TurnUsage | null;
@@ -37,8 +48,8 @@ export interface ChatTurn {
   /** The server's price-tier warning for this turn, verbatim. */
   warning: string | null;
   /** The person sent this message from here and no snapshot started after the
-   *  server accepted it has listed it yet. `accepted` is true once the POST
-   *  answered 2xx. */
+   *  server accepted it has listed it yet. `accepted` is true once the server
+   *  is known to have the turn (the POST answered 2xx, or an event named it). */
   local?: { sendId: number; accepted: boolean };
 }
 
@@ -52,6 +63,9 @@ export interface ChatState {
    *  the server numbers a chat's requests, so an event at or below it is a
    *  repeat of one already counted. */
   lastUsageSeq: number;
+  /** Counts the times a live event named a turn the page has no turn for and
+   *  no local turn could take: the page reads a snapshot for each. */
+  staleSeq: number;
   /** A snapshot has been applied. */
   loaded: boolean;
 }
@@ -65,47 +79,61 @@ export type ChatEvent =
   | { kind: 'ready'; snapshot: ChatSnapshot; confirmed?: number[] }
   /** The person sent a message (the server's events do not echo it). */
   | { kind: 'user'; text: string; sendId: number }
-  /** The POST answered 2xx: the server has the turn. */
-  | { kind: 'send_accepted'; sendId: number }
+  /** The POST answered 2xx: the server has the turn, at view index `turn`. */
+  | { kind: 'send_accepted'; sendId: number; turn: number }
   /** The POST failed (non-2xx, a network error, no answer in time): the turn
    *  never started, so it is taken back out whatever it holds. */
   | { kind: 'send_failed'; sendId: number }
-  | { kind: 'text_delta'; text: string }
-  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean }
+  | { kind: 'text_delta'; text: string; turn: number }
+  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; turn: number }
   | { kind: 'approval'; approval: ChatApproval }
   | { kind: 'approval_answered'; callId: string }
-  | { kind: 'usage'; usage: UsagePayload; cost_usd?: number; seq?: number }
-  | { kind: 'warning'; message: string }
-  | { kind: 'turn_done' }
+  | { kind: 'usage'; usage: UsagePayload; cost_usd?: number; seq?: number; turn: number }
+  | { kind: 'warning'; message: string; turn: number }
+  | { kind: 'turn_done'; turn: number }
   /** The person pressed Stop: the turn is over here whatever the stream says. */
   | { kind: 'stopped' }
-  | { kind: 'turn_error'; message: string; cancelled?: boolean }
+  | { kind: 'turn_error'; message: string; cancelled?: boolean; turn: number }
   | { kind: 'chat_end' };
 
-export const initialChatState: ChatState = { turns: [], running: false, approvals: {}, ended: false, lastUsageSeq: 0, loaded: false };
+export const initialChatState: ChatState = { turns: [], running: false, approvals: {}, ended: false, lastUsageSeq: 0, staleSeq: 0, loaded: false };
 
 const newTurn = (user = ''): ChatTurn => ({ user, parts: [], usage: null, costUsd: null, error: null, warning: null });
 
-const unconfirmed = (t: ChatTurn): boolean => !!t.local && !t.local.accepted;
-
-/** A live event's turn: the last turn that is not an unconfirmed local one (a
- *  late event from the turn before the send is that turn's), made if there is
- *  none (the page joined a turn already running). With only an unconfirmed
- *  local turn there is nothing to attach to and the event is dropped: the
- *  snapshot a turn end starts has it. */
-function withLastTurn(s: ChatState, edit: (t: ChatTurn) => ChatTurn): ChatState {
-  if (!s.turns.length) return { ...s, turns: [edit(newTurn())] };
-  let i = s.turns.length - 1;
-  while (i >= 0 && unconfirmed(s.turns[i])) i--;
-  if (i < 0) return s;
-  const turns = s.turns.slice();
-  turns[i] = edit(turns[i]);
-  return { ...s, turns };
+/** route finds the turn a live event names. A turn index the page has no turn
+ *  for is the local unconfirmed turn's (the server's next turn), which learns
+ *  its index from it; with no local turn it is stale: the page asks for a
+ *  snapshot. */
+function route(s: ChatState, turn: number): { state: ChatState; index: number } {
+  const known = s.turns.findIndex(t => t.at === turn);
+  if (known >= 0) return { state: s, index: known };
+  const local = s.turns.findIndex(t => t.local && !t.local.accepted && t.at === undefined);
+  const beyond = s.turns.every(t => t.at === undefined || t.at < turn);
+  if (local >= 0 && beyond) {
+    const turns = s.turns.slice();
+    turns[local] = { ...turns[local], at: turn, local: { sendId: turns[local].local!.sendId, accepted: true } };
+    return { state: { ...s, turns }, index: local };
+  }
+  return { state: { ...s, staleSeq: s.staleSeq + 1 }, index: -1 };
 }
 
-function addItem(turns: ChatTurn[], item: ChatViewItem): void {
+/** onTurn applies `edit` to the turn a live event names (see route). */
+function onTurn(s: ChatState, turn: number, edit: (t: ChatTurn) => ChatTurn): ChatState {
+  const r = route(s, turn);
+  if (r.index < 0) return r.state;
+  const turns = r.state.turns.slice();
+  turns[r.index] = edit(turns[r.index]);
+  return { ...r.state, turns };
+}
+
+/** Whether the turn at `index` is the latest one: only its end ends the chat's
+ *  run (a late end from an older turn does not). */
+const isLatest = (s: ChatState, index: number): boolean => index === s.turns.length - 1;
+
+function addItem(turns: ChatTurn[], item: ChatViewItem, at: number): void {
   if (item.kind === 'user') {
     const t = newTurn(item.text ?? '');
+    t.at = at;
     if (item.usage) t.usage = { input: item.usage.input, cacheRead: item.usage.cache_read, cacheWrite: item.usage.cache_write, output: item.usage.output };
     t.costUsd = item.cost_usd ?? null;
     t.warning = item.warning || null;
@@ -127,7 +155,7 @@ function addItem(turns: ChatTurn[], item: ChatViewItem): void {
  *  POST had not answered when the read started) are kept after it. */
 export function snapshotState(snap: ChatSnapshot, prev: ChatState = initialChatState, confirmed: number[] = []): ChatState {
   const turns: ChatTurn[] = [];
-  for (const it of snap.items) addItem(turns, it);
+  snap.items.forEach((it, at) => addItem(turns, it, at));
   for (let i = turns.length; i < prev.turns.length; i++) {
     const t = prev.turns[i];
     if (t.local && !confirmed.includes(t.local.sendId)) turns.push(t);
@@ -136,7 +164,7 @@ export function snapshotState(snap: ChatSnapshot, prev: ChatState = initialChatS
   for (const a of snap.pending_approvals ?? []) approvals[a.call_id] = a;
   return {
     turns, running: snap.running, approvals, ended: false,
-    lastUsageSeq: snap.usage_seq ?? prev.lastUsageSeq, loaded: true,
+    lastUsageSeq: snap.usage_seq ?? prev.lastUsageSeq, staleSeq: prev.staleSeq, loaded: true,
   };
 }
 
@@ -146,16 +174,22 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
       return snapshotState(e.snapshot, s, e.confirmed);
     case 'user':
       return { ...s, turns: [...s.turns, { ...newTurn(e.text), local: { sendId: e.sendId, accepted: false } }], running: true };
-    case 'send_accepted':
-      return { ...s, turns: s.turns.map(t => t.local?.sendId === e.sendId ? { ...t, local: { sendId: e.sendId, accepted: true } } : t) };
+    case 'send_accepted': {
+      // The 202 names the turn's index. An early event may have told the page
+      // already; then it is known and nothing changes.
+      const turns = s.turns.map(t => t.local?.sendId === e.sendId
+        ? { ...t, at: t.at ?? e.turn, local: { sendId: e.sendId, accepted: true } }
+        : t);
+      return { ...s, turns };
+    }
     case 'send_failed': {
-      // Out outright, whatever it holds: nothing live is ever applied to an
-      // unconfirmed turn, so there is nothing of the person's to lose.
+      // Out outright, whatever it holds: nothing is routed to a turn the
+      // server never had.
       const turns = s.turns.filter(t => t.local?.sendId !== e.sendId);
       return turns.length === s.turns.length ? s : { ...s, turns, running: false };
     }
     case 'text_delta':
-      return withLastTurn({ ...s, running: true }, t => {
+      return onTurn(s, e.turn, t => {
         const last = t.parts[t.parts.length - 1];
         const parts = last?.kind === 'text'
           ? [...t.parts.slice(0, -1), { kind: 'text' as const, text: last.text + e.text }]
@@ -163,7 +197,7 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
         return { ...t, parts };
       });
     case 'tool_call':
-      return withLastTurn({ ...s, running: true }, t => {
+      return onTurn(s, e.turn, t => {
         const existing = t.parts.some(p => p.kind === 'group' && p.calls.some(c => c.id === e.id));
         if (existing) {
           // A call only moves forward: a repeat of `running` after `done` (a
@@ -185,8 +219,12 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
           : [...t.parts, { kind: 'group' as const, calls: [c] }];
         return { ...t, parts };
       });
-    case 'approval':
-      return { ...s, approvals: { ...s.approvals, [e.approval.call_id]: e.approval } };
+    case 'approval': {
+      // The card shows in its call's row, so the turn must be one the page has
+      // (route learns a local turn's index, or asks for a snapshot).
+      const r = route(s, e.approval.turn);
+      return { ...r.state, approvals: { ...r.state.approvals, [e.approval.call_id]: e.approval } };
+    }
     case 'approval_answered': {
       const { [e.callId]: _gone, ...rest } = s.approvals;
       void _gone;
@@ -194,7 +232,7 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
     }
     case 'usage': {
       if (e.seq !== undefined && e.seq <= s.lastUsageSeq) return s;
-      return withLastTurn({ ...s, lastUsageSeq: e.seq ?? s.lastUsageSeq }, t => {
+      return onTurn({ ...s, lastUsageSeq: e.seq ?? s.lastUsageSeq }, e.turn, t => {
         const u = t.usage ?? { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
         return {
           ...t,
@@ -207,15 +245,24 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
       });
     }
     case 'warning':
-      return withLastTurn(s, t => ({ ...t, warning: e.message }));
-    case 'turn_done':
+      return onTurn(s, e.turn, t => ({ ...t, warning: e.message }));
     case 'stopped':
       return { ...s, running: false, approvals: {} };
-    case 'turn_error':
-      // A cancelled turn is the person's own Stop, not a failure: it ends
-      // quietly with the text it had.
-      if (e.cancelled) return { ...s, running: false, approvals: {} };
-      return withLastTurn({ ...s, running: false, approvals: {} }, t => ({ ...t, error: e.message }));
+    case 'turn_done':
+    case 'turn_error': {
+      const r = route(s, e.turn);
+      let st = r.state;
+      // A turn_error names its turn's failure; a cancelled one is the person's
+      // own Stop and ends quietly.
+      if (e.kind === 'turn_error' && !e.cancelled && r.index >= 0) {
+        const turns = st.turns.slice();
+        turns[r.index] = { ...turns[r.index], error: e.message };
+        st = { ...st, turns };
+      }
+      // Only the latest turn's end ends the run: a late end from an older
+      // turn (the one just stopped) must not stop the one that follows.
+      return r.index >= 0 && isLatest(st, r.index) ? { ...st, running: false, approvals: {} } : st;
+    }
     case 'chat_end':
       return { ...s, running: false, ended: true };
   }

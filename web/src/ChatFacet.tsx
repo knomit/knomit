@@ -28,6 +28,7 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
   const goneRef = useRef(onGone);
   const sendSeq = useRef(0);
   const acceptedRef = useRef(new Set<number>());
+  const refreshRef = useRef<() => void>(() => {});
   useEffect(() => { goneRef.current = onGone; }, [onGone]);
 
   useEffect(() => {
@@ -46,7 +47,9 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
         .then(snapshot => { if (!closed && mine === reads) dispatch({ kind: 'ready', snapshot, confirmed }); })
         .catch(e => { if (statusOf(e) === 404) gone(); else if (!closed && mine === reads) setActionError(errText(e)); });
     };
+    refreshRef.current = refresh;
     const gone = () => { if (!closed) goneRef.current(chatId); };
+    const turnOf = (d: Record<string, unknown>): number => Number(d.turn);
     const on = (name: string, fn: (data: Record<string, unknown>) => void) => {
       es.addEventListener(name, (e: MessageEvent) => {
         let data: Record<string, unknown> = {};
@@ -55,23 +58,24 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
       });
     };
     on('ready', refresh);
-    on('text_delta', d => dispatch({ kind: 'text_delta', text: String(d.text ?? '') }));
+    on('text_delta', d => dispatch({ kind: 'text_delta', text: String(d.text ?? ''), turn: turnOf(d) }));
     on('tool_call', d => dispatch({
-      kind: 'tool_call', id: String(d.id), name: String(d.name), state: d.state === 'done' ? 'done' : 'running', is_error: d.is_error === true,
+      kind: 'tool_call', id: String(d.id), name: String(d.name), state: d.state === 'done' ? 'done' : 'running', is_error: d.is_error === true, turn: turnOf(d),
     }));
     on('approval', d => dispatch({ kind: 'approval', approval: d as unknown as ChatApproval }));
     on('usage', d => dispatch({
       kind: 'usage', usage: d.usage as UsagePayload,
       ...(typeof d.cost_usd === 'number' ? { cost_usd: d.cost_usd } : {}),
       ...(typeof d.seq === 'number' ? { seq: d.seq } : {}),
+      turn: turnOf(d),
     }));
-    on('warning', d => dispatch({ kind: 'warning', message: String(d.message ?? '') }));
+    on('warning', d => dispatch({ kind: 'warning', message: String(d.message ?? ''), turn: turnOf(d) }));
     // A turn's end is shown at once, and the transcript is read again: the
     // server's view is complete by now, and it settles anything a read in
     // flight at this moment got wrong.
-    on('turn_done', () => { dispatch({ kind: 'turn_done' }); refresh(); });
+    on('turn_done', d => { dispatch({ kind: 'turn_done', turn: turnOf(d) }); refresh(); });
     on('turn_error', d => {
-      dispatch({ kind: 'turn_error', message: String(d.message ?? ''), cancelled: d.cancelled === true });
+      dispatch({ kind: 'turn_error', message: String(d.message ?? ''), cancelled: d.cancelled === true, turn: turnOf(d) });
       refresh();
     });
     on('chat_end', () => { dispatch({ kind: 'chat_end' }); gone(); });
@@ -81,6 +85,10 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
     es.onerror = (e: unknown) => { if ((e as { status?: number } | null)?.status === 404) gone(); };
     return () => { closed = true; es.close(); };
   }, [chatId]);
+
+  // An event named a turn the page has no turn for and no local turn could
+  // take (a turn started elsewhere): read the snapshot.
+  useEffect(() => { if (state.staleSeq > 0) refreshRef.current(); }, [state.staleSeq]);
 
   // The page is going away: the chat is over (a chat lives as long as its tab).
   useEffect(() => {
@@ -93,17 +101,20 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
     setActionError('');
     const sendId = ++sendSeq.current;
     dispatch({ kind: 'user', text, sendId });
-    sendChatTurn(chatId, text).then(() => {
+    sendChatTurn(chatId, text).then(body => {
       acceptedRef.current.add(sendId);
-      dispatch({ kind: 'send_accepted', sendId });
+      dispatch({ kind: 'send_accepted', sendId, turn: Number((body as { turn?: number } | null)?.turn) });
     }).catch(e => {
       // Refused (a 409 while the stopped turn still unwinds, any other
       // non-2xx), a network error or no answer in time: the turn never
       // started, so it leaves the transcript, and the error is shown. A 404
       // means the chat is gone.
       dispatch({ kind: 'send_failed', sendId });
-      if (statusOf(e) === 404) goneRef.current(chatId);
-      else setActionError(errText(e));
+      if (statusOf(e) === 404) { goneRef.current(chatId); return; }
+      setActionError(errText(e));
+      // No status means no answer (a timeout, a dropped connection): the server
+      // may have appended the turn anyway, so read what it has.
+      if (statusOf(e) === undefined) refreshRef.current();
     });
   }, [chatId]);
   const stop = useCallback(() => {

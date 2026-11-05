@@ -12,7 +12,7 @@ const BASE = '/api/v1/chats/chat-a';
 
 const learn: ChatApproval = {
   call_id: 'tu_2', tool: 'knomit_learn', action: 'learn', target: 'alpha', target_kind: 'repo',
-  destructive: false, grantable: true, arguments: { facts: [{ title: 't' }] },
+  destructive: false, grantable: true, arguments: { facts: [{ title: 't' }] }, turn: 0,
 };
 const snap = (ap: ChatApproval[], name = 'knomit_learn'): ChatSnapshot => ({
   ...CHAT, running: true, grants: [], pending_approvals: ap,
