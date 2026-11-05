@@ -26,6 +26,8 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
   const [state, dispatch] = useReducer(chatReducer, initialChatState);
   const [actionError, setActionError] = useState('');
   const goneRef = useRef(onGone);
+  const sendSeq = useRef(0);
+  const acceptedRef = useRef(new Set<number>());
   useEffect(() => { goneRef.current = onGone; }, [onGone]);
 
   useEffect(() => {
@@ -38,8 +40,10 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
     let reads = 0;
     const refresh = () => {
       const mine = ++reads;
+      // The sends the server had accepted when this read started: it lists them.
+      const confirmed = [...acceptedRef.current];
       getChat(chatId)
-        .then(snapshot => { if (!closed && mine === reads) dispatch({ kind: 'ready', snapshot }); })
+        .then(snapshot => { if (!closed && mine === reads) dispatch({ kind: 'ready', snapshot, confirmed }); })
         .catch(e => { if (statusOf(e) === 404) gone(); else if (!closed && mine === reads) setActionError(errText(e)); });
     };
     const gone = () => { if (!closed) goneRef.current(chatId); };
@@ -87,14 +91,19 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
 
   const send = useCallback((text: string) => {
     setActionError('');
-    dispatch({ kind: 'user', text });
-    sendChatTurn(chatId, text).catch(e => {
-      if (statusOf(e) === 404) { goneRef.current(chatId); return; }
-      // Refused (a 409 while the stopped turn still unwinds, or any other
-      // non-2xx): the message never started a turn, so it leaves the
-      // transcript and the error is shown.
-      dispatch({ kind: 'send_failed', text });
-      setActionError(errText(e));
+    const sendId = ++sendSeq.current;
+    dispatch({ kind: 'user', text, sendId });
+    sendChatTurn(chatId, text).then(() => {
+      acceptedRef.current.add(sendId);
+      dispatch({ kind: 'send_accepted', sendId });
+    }).catch(e => {
+      // Refused (a 409 while the stopped turn still unwinds, any other
+      // non-2xx), a network error or no answer in time: the turn never
+      // started, so it leaves the transcript, and the error is shown. A 404
+      // means the chat is gone.
+      dispatch({ kind: 'send_failed', sendId });
+      if (statusOf(e) === 404) goneRef.current(chatId);
+      else setActionError(errText(e));
     });
   }, [chatId]);
   const stop = useCallback(() => {

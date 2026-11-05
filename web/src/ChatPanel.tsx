@@ -72,11 +72,11 @@ export function ChatPanel({ state, selectedId, actionError, onSend, onStop, onSe
                   <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>{b.text}</ReactMarkdown>
                 </div>
               ))}
+            {t.warning && <div data-testid="chat-warning" style={warningBox}>{t.warning}</div>}
             {t.error && <div role="alert" data-testid="chat-turn-error" style={errorBox}>{t.error}</div>}
             {t.usage && <div data-testid="chat-usage" style={usage}>{usageLine(t.usage, t.costUsd)}</div>}
           </div>
         ))}
-        {state.warning && <div data-testid="chat-warning" style={warningBox}>{state.warning}</div>}
         {actionError && <div role="alert" data-testid="chat-action-error" style={errorBox}>{actionError}</div>}
       </div>
       <div style={composer}>

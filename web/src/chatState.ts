@@ -5,14 +5,19 @@
 // parts are in the order they happened: text, and GROUPS of consecutive tool
 // calls (the page draws each group under one "Used Knomit" header).
 //
-// `ready` is the first event of every connect. It carries no state of its own:
-// the page refetches GET /chats/{id} and hands the snapshot to the reducer,
-// which replaces the transcript with the server's view (there is no replay).
-// The snapshot has no usage, error or warning, so the reducer carries those
-// over from the state it replaces, turn by turn (a turn matches when its user
-// message does). A turn sent from here that the snapshot does not list yet is
-// kept after it, and the chat stays running for it. The page also refetches when a turn ends, so an end that
-// arrives while a snapshot is in flight cannot leave the chat running.
+// THE SNAPSHOT IS AUTHORITATIVE. GET /chats/{id} carries every turn whole: its
+// parts, summed usage and cost, price warning, and how it ended. `ready` (the
+// first event of every connect) and every turn end make the page read it, and
+// the reducer replaces every turn it lists, verbatim; nothing is patched on.
+// Live events only fill in what happens after the snapshot was cut.
+//
+// The one thing the page holds beyond a snapshot is the turn the person just
+// sent (`local`). The server appends a turn to its view BEFORE it answers the
+// POST, so a snapshot started after the POST was answered 2xx lists it; until
+// then (and for a read that started before) the local turn is kept after the
+// snapshot's turns. A POST that fails takes its local turn out outright. While
+// a local turn is unconfirmed (`accepted` false) live events are not applied to
+// it: a late event from the turn before belongs to that one.
 import type { ChatApproval, ChatSnapshot, ChatViewItem } from './chatApi';
 
 export interface ToolCall { id: string; name: string; state: 'running' | 'done'; isError: boolean }
@@ -29,9 +34,12 @@ export interface ChatTurn {
   costUsd: number | null;
   /** The loop's message when the turn ended in an error (a refusal, a limit). */
   error: string | null;
-  /** The person sent this message from here and no snapshot has listed it yet.
-   *  A snapshot cut before the server took the POST must not drop it. */
-  local?: true;
+  /** The server's price-tier warning for this turn, verbatim. */
+  warning: string | null;
+  /** The person sent this message from here and no snapshot started after the
+   *  server accepted it has listed it yet. `accepted` is true once the POST
+   *  answered 2xx. */
+  local?: { sendId: number; accepted: boolean };
 }
 
 export interface ChatState {
@@ -39,12 +47,11 @@ export interface ChatState {
   running: boolean;
   /** Tool calls waiting for the person, by call id. */
   approvals: Record<string, ChatApproval>;
-  /** The server's price-tier warning, verbatim. */
-  warning: string | null;
   ended: boolean;
-  /** The `seq` of every usage event already counted: the server numbers a
-   *  chat's requests, so a repeat of one is not added twice. */
-  seenUsage: Record<number, true>;
+  /** The highest usage `seq` the page has counted (or the snapshot includes):
+   *  the server numbers a chat's requests, so an event at or below it is a
+   *  repeat of one already counted. */
+  lastUsageSeq: number;
   /** A snapshot has been applied. */
   loaded: boolean;
 }
@@ -53,12 +60,16 @@ export interface ChatState {
 export interface UsagePayload { input: number; cache_read: number; cache_write: number; output: number }
 
 export type ChatEvent =
-  | { kind: 'ready'; snapshot: ChatSnapshot }
+  /** A snapshot arrived. `confirmed` lists the sends whose POST had answered
+   *  2xx before the read started: the snapshot lists those turns. */
+  | { kind: 'ready'; snapshot: ChatSnapshot; confirmed?: number[] }
   /** The person sent a message (the server's events do not echo it). */
-  | { kind: 'user'; text: string }
-  /** The server refused the message (a 409 while the last turn unwinds, any
-   *  non-2xx): the turn that never started is taken back out. */
-  | { kind: 'send_failed'; text: string }
+  | { kind: 'user'; text: string; sendId: number }
+  /** The POST answered 2xx: the server has the turn. */
+  | { kind: 'send_accepted'; sendId: number }
+  /** The POST failed (non-2xx, a network error, no answer in time): the turn
+   *  never started, so it is taken back out whatever it holds. */
+  | { kind: 'send_failed'; sendId: number }
   | { kind: 'text_delta'; text: string }
   | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean }
   | { kind: 'approval'; approval: ChatApproval }
@@ -71,20 +82,38 @@ export type ChatEvent =
   | { kind: 'turn_error'; message: string; cancelled?: boolean }
   | { kind: 'chat_end' };
 
-export const initialChatState: ChatState = { turns: [], running: false, approvals: {}, warning: null, ended: false, seenUsage: {}, loaded: false };
+export const initialChatState: ChatState = { turns: [], running: false, approvals: {}, ended: false, lastUsageSeq: 0, loaded: false };
 
-const newTurn = (user = ''): ChatTurn => ({ user, parts: [], usage: null, costUsd: null, error: null });
+const newTurn = (user = ''): ChatTurn => ({ user, parts: [], usage: null, costUsd: null, error: null, warning: null });
 
-/** The last turn, made if there is none (the page joined a turn already
- *  running), and the turns with it. */
+const unconfirmed = (t: ChatTurn): boolean => !!t.local && !t.local.accepted;
+
+/** A live event's turn: the last turn that is not an unconfirmed local one (a
+ *  late event from the turn before the send is that turn's), made if there is
+ *  none (the page joined a turn already running). With only an unconfirmed
+ *  local turn there is nothing to attach to and the event is dropped: the
+ *  snapshot a turn end starts has it. */
 function withLastTurn(s: ChatState, edit: (t: ChatTurn) => ChatTurn): ChatState {
-  const turns = s.turns.length ? s.turns.slice() : [newTurn()];
-  turns[turns.length - 1] = edit(turns[turns.length - 1]);
+  if (!s.turns.length) return { ...s, turns: [edit(newTurn())] };
+  let i = s.turns.length - 1;
+  while (i >= 0 && unconfirmed(s.turns[i])) i--;
+  if (i < 0) return s;
+  const turns = s.turns.slice();
+  turns[i] = edit(turns[i]);
   return { ...s, turns };
 }
 
 function addItem(turns: ChatTurn[], item: ChatViewItem): void {
-  if (item.kind === 'user') { turns.push(newTurn(item.text ?? '')); return; }
+  if (item.kind === 'user') {
+    const t = newTurn(item.text ?? '');
+    if (item.usage) t.usage = { input: item.usage.input, cacheRead: item.usage.cache_read, cacheWrite: item.usage.cache_write, output: item.usage.output };
+    t.costUsd = item.cost_usd ?? null;
+    t.warning = item.warning || null;
+    // A cancelled turn is the person's own Stop: it ends quietly.
+    t.error = item.error && !item.cancelled ? item.error : null;
+    turns.push(t);
+    return;
+  }
   if (!turns.length) turns.push(newTurn());
   const t = turns[turns.length - 1];
   if (item.kind === 'assistant') { t.parts.push({ kind: 'text', text: item.text ?? '' }); return; }
@@ -93,37 +122,37 @@ function addItem(turns: ChatTurn[], item: ChatViewItem): void {
   if (last?.kind === 'group') last.calls.push(c); else t.parts.push({ kind: 'group', calls: [c] });
 }
 
-/** snapshotState is the state GET /chats/{id} describes. `prev` is the state it
- *  replaces: what only the page knows (usage, a turn's error, the warning) is
- *  carried over onto the turns that are still the same. */
-export function snapshotState(snap: ChatSnapshot, prev: ChatState = initialChatState): ChatState {
+/** snapshotState is the state GET /chats/{id} describes, verbatim. Only the
+ *  turns the person sent from here that the snapshot cannot list yet (their
+ *  POST had not answered when the read started) are kept after it. */
+export function snapshotState(snap: ChatSnapshot, prev: ChatState = initialChatState, confirmed: number[] = []): ChatState {
   const turns: ChatTurn[] = [];
   for (const it of snap.items) addItem(turns, it);
-  turns.forEach((t, i) => {
-    const old = prev.turns[i];
-    // An old turn with no message is one the page joined mid-way: the first snapshot names it.
-    if (old && (old.user === t.user || old.user === '')) { t.usage = old.usage; t.costUsd = old.costUsd; t.error = old.error; }
-  });
-  // Turns sent from here that the snapshot (cut before the server took their
-  // POST) does not list yet.
-  let kept = 0;
-  for (let i = turns.length; i < prev.turns.length && prev.turns[i].local; i++) { turns.push(prev.turns[i]); kept++; }
+  for (let i = turns.length; i < prev.turns.length; i++) {
+    const t = prev.turns[i];
+    if (t.local && !confirmed.includes(t.local.sendId)) turns.push(t);
+  }
   const approvals: Record<string, ChatApproval> = {};
   for (const a of snap.pending_approvals ?? []) approvals[a.call_id] = a;
-  return { turns, running: snap.running || kept > 0, approvals, warning: prev.warning, ended: false, seenUsage: prev.seenUsage, loaded: true };
+  return {
+    turns, running: snap.running, approvals, ended: false,
+    lastUsageSeq: snap.usage_seq ?? prev.lastUsageSeq, loaded: true,
+  };
 }
 
 export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
   switch (e.kind) {
     case 'ready':
-      return snapshotState(e.snapshot, s);
+      return snapshotState(e.snapshot, s, e.confirmed);
     case 'user':
-      return { ...s, turns: [...s.turns, { ...newTurn(e.text), local: true as const }], running: true };
+      return { ...s, turns: [...s.turns, { ...newTurn(e.text), local: { sendId: e.sendId, accepted: false } }], running: true };
+    case 'send_accepted':
+      return { ...s, turns: s.turns.map(t => t.local?.sendId === e.sendId ? { ...t, local: { sendId: e.sendId, accepted: true } } : t) };
     case 'send_failed': {
-      const last = s.turns[s.turns.length - 1];
-      // Only the turn that never began: nothing arrived for it yet.
-      if (!last || !last.local || last.user !== e.text || last.parts.length > 0) return { ...s, running: false };
-      return { ...s, turns: s.turns.slice(0, -1), running: false };
+      // Out outright, whatever it holds: nothing live is ever applied to an
+      // unconfirmed turn, so there is nothing of the person's to lose.
+      const turns = s.turns.filter(t => t.local?.sendId !== e.sendId);
+      return turns.length === s.turns.length ? s : { ...s, turns, running: false };
     }
     case 'text_delta':
       return withLastTurn({ ...s, running: true }, t => {
@@ -164,9 +193,8 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
       return { ...s, approvals: rest };
     }
     case 'usage': {
-      if (e.seq !== undefined && s.seenUsage[e.seq]) return s;
-      const seen = e.seq === undefined ? s.seenUsage : { ...s.seenUsage, [e.seq]: true as const };
-      return withLastTurn({ ...s, seenUsage: seen }, t => {
+      if (e.seq !== undefined && e.seq <= s.lastUsageSeq) return s;
+      return withLastTurn({ ...s, lastUsageSeq: e.seq ?? s.lastUsageSeq }, t => {
         const u = t.usage ?? { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
         return {
           ...t,
@@ -179,7 +207,7 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
       });
     }
     case 'warning':
-      return { ...s, warning: e.message };
+      return withLastTurn(s, t => ({ ...t, warning: e.message }));
     case 'turn_done':
     case 'stopped':
       return { ...s, running: false, approvals: {} };

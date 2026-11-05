@@ -5,6 +5,7 @@
 import { fetchJSON, apiUrl } from './api';
 import { openEventStream } from './eventStream';
 import type { EventSourceLike } from './eventStream';
+import { CHAT_SEND_TIMEOUT_DRAFT } from './chatCopy';
 
 /** One live chat, as GET /chats lists it. */
 export interface ChatInfo { id: string; provider: string; model: string }
@@ -20,6 +21,9 @@ export interface ChatViewItem {
   kind: 'user' | 'assistant' | 'tool_call';
   text?: string; id?: string; name?: string; arguments?: unknown;
   state?: 'running' | 'done'; is_error?: boolean;
+  /** On a user item: how the turn it opens went (see chat.go viewItem). */
+  usage?: { input: number; cache_read: number; cache_write: number; output: number };
+  cost_usd?: number; warning?: string; error?: string; cancelled?: boolean;
 }
 
 /** A tool call waiting for the person. `target` is empty when the server could
@@ -33,7 +37,7 @@ export interface ChatApproval {
 export interface ChatGrant { target: string; kind: string; tool: string; action: string }
 
 export interface ChatSnapshot extends ChatInfo {
-  running: boolean; items: ChatViewItem[]; pending_approvals: ChatApproval[]; grants: ChatGrant[];
+  running: boolean; usage_seq?: number; items: ChatViewItem[]; pending_approvals: ChatApproval[]; grants: ChatGrant[];
 }
 
 /** GET /chats/{id}/calls/{callId}. */
@@ -64,8 +68,27 @@ export function getChat(id: string): Promise<ChatSnapshot> {
   return fetchJSON<ChatSnapshot>(chatUrl(id));
 }
 
-export function sendChatTurn(id: string, text: string): Promise<unknown> {
-  return fetchJSON(`${chatUrl(id)}/turns`, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ text }) });
+/** How long a send may go unanswered before it counts as failed. The server
+ *  answers POST /turns as soon as it has appended the turn to its view (the 202
+ *  does not wait for the model), so a healthy answer takes a round trip. 15 s
+ *  is far past that, long enough for a slow link or the desktop proxy's first
+ *  request (it answers 503 + Retry-After while booting, which is an answer),
+ *  and short enough that a request that is hung does not hold the chat for
+ *  minutes. If it did reach the server, the turn shows up in the next snapshot. */
+export const SEND_TIMEOUT_MS = 15_000;
+
+export async function sendChatTurn(id: string, text: string, timeoutMs = SEND_TIMEOUT_MS): Promise<unknown> {
+  const url = `${chatUrl(id)}/turns`;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    return await fetchJSON(url, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ text }), signal: ctl.signal });
+  } catch (e) {
+    if (ctl.signal.aborted) throw new Error(`${url} → ${CHAT_SEND_TIMEOUT_DRAFT}`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // The 204 routes have no body for fetchJSON to parse.

@@ -3,7 +3,9 @@ import { render, screen, waitFor, act, fireEvent, cleanup, within } from '@testi
 import { ChatFacet } from './ChatFacet';
 import { installFakeEventSource, uninstallFakeEventSource, streamsMatching, latestStream } from './testEventSource';
 import { stubFleetFetch } from './fleetTestFetch';
+import { SEND_TIMEOUT_MS } from './chatApi';
 import type { ChatSnapshot } from './chatApi';
+import { CHAT_SEND_TIMEOUT_DRAFT } from './chatCopy';
 
 const CHAT = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
 const BASE = '/api/v1/chats/chat-a';
@@ -317,7 +319,7 @@ describe('ChatFacet: turn ends and repeats', () => {
 describe('ChatFacet: turn_error races and fast follow-ups', () => {
   it('a turn_error that arrives while the ready snapshot is in flight cannot leave the chat running', async () => {
     const stale = JSON.stringify(snapshot({ running: true, items: [{ kind: 'user', text: 'q' }, { kind: 'assistant', text: 'part' }] }));
-    const settled = snapshot({ running: false, items: [{ kind: 'user', text: 'q' }, { kind: 'assistant', text: 'part and more' }] });
+    const settled = snapshot({ running: false, items: [{ kind: 'user', text: 'q', error: 'The model declined to answer.' }, { kind: 'assistant', text: 'part and more' }] });
     stubFleetFetch({ [`GET ${BASE}`]: { body: settled } });
     const inner = globalThis.fetch;
     let release!: () => void;
@@ -339,37 +341,78 @@ describe('ChatFacet: turn_error races and fast follow-ups', () => {
     expect(screen.getByTestId('chat-text')).toHaveTextContent('part and more');
     expect(screen.queryByTestId('chat-stop')).toBeNull();
     expect(screen.getByTestId('chat-send')).toBeInTheDocument();
-    // The refusal is the page's to keep: the snapshot does not carry it.
+    // The refusal comes from the snapshot, which carries how each turn ended.
     expect(screen.getByTestId('chat-turn-error').textContent).toBe('The model declined to answer.');
   });
 
-  it('a follow-up sent before the server took its POST survives the snapshot read a turn end starts', async () => {
-    // The server's view still has only the first turn.
-    const { fx } = mount(snapshot({ running: false, items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] }),
-      { [`POST ${BASE}/turns`]: { status: 202, body: {} } });
+  it('a follow-up whose POST is still unanswered survives the snapshot read a turn end starts, and is not duplicated once the server lists it', async () => {
+    const fx = stubFleetFetch({
+      [`GET ${BASE}`]: { body: snapshot({ running: false, items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] }) },
+      [`GET ${BASE}/calls/tu_1`]: { body: CALL_1 },
+    });
+    const inner = globalThis.fetch;
+    let acceptPost!: () => void;
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url === `${BASE}/turns`) return new Promise<Response>(res => { acceptPost = () => res(new Response('{}', { status: 202 })); });
+      return inner(input, init);
+    }));
+    render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} />);
     await screen.findByTestId('chat-turn-0');
     fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'second' } });
     fireEvent.click(screen.getByTestId('chat-send'));
-    await waitFor(() => expect(callsTo(fx, '/turns')).toHaveLength(1));
-    expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'second']);
+    await waitFor(() => expect(screen.getAllByTestId('chat-user')).toHaveLength(2));
 
-    // The first turn's end reaches the page now and starts a snapshot read.
-    const before = callsTo(fx, `GET ${BASE}`).filter(c => c.route === `GET ${BASE}`).length;
+    // The first turn's end reaches the page now and starts a snapshot read; the
+    // server has not answered the POST, so that read cannot list the follow-up.
+    const reads = () => fx.calls.filter(c => c.route === `GET ${BASE}`).length;
+    const before = reads();
     act(() => { latestStream('/chats/chat-a/events')!.emit('turn_done', {}); });
-    await waitFor(() => expect(callsTo(fx, `GET ${BASE}`).filter(c => c.route === `GET ${BASE}`).length).toBe(before + 1));
+    await waitFor(() => expect(reads()).toBe(before + 1));
     await act(async () => { await new Promise(r => setTimeout(r, 20)); });
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'second']);
-    // And the chat is still running for it: Stop, not Send.
-    expect(screen.getByTestId('chat-stop')).toBeInTheDocument();
 
-    // Once the server lists it, the snapshot owns it (no duplicate).
+    // The POST is answered 202; the server has the turn. A read started now lists it.
+    await act(async () => { acceptPost(); });
     fx.set(`GET ${BASE}`, { body: snapshot({ running: true, items: [
       { kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }, { kind: 'user', text: 'second' },
     ] }) });
     act(() => { latestStream('/chats/chat-a/events')!.emit('ready', {}); });
-    await waitFor(() => expect(callsTo(fx, `GET ${BASE}`).filter(c => c.route === `GET ${BASE}`).length).toBe(before + 2));
+    await waitFor(() => expect(reads()).toBe(before + 2));
     await act(async () => { await new Promise(r => setTimeout(r, 20)); });
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'second']);
+    expect(screen.getByTestId('chat-stop')).toBeInTheDocument(); // running comes from the snapshot
+  });
+
+  it('N2: a send that is never answered counts as failed after the bound: the turn is taken back out and the error shown', async () => {
+    mount(snapshot({ running: false, items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] }));
+    await screen.findByTestId('chat-turn-0');
+    const inner = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url === `${BASE}/turns`) {
+        // Never answers; only the page's own abort ends it.
+        return new Promise<Response>((_res, rej) => {
+          init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')));
+        });
+      }
+      return inner(input, init);
+    }));
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'second' } });
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      fireEvent.click(screen.getByTestId('chat-send'));
+      expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'second']);
+      await act(async () => { await vi.advanceTimersByTimeAsync(SEND_TIMEOUT_MS - 1); });
+      // Still waiting just before the bound.
+      expect(screen.getAllByTestId('chat-user')).toHaveLength(2);
+      await act(async () => { await vi.advanceTimersByTimeAsync(2); });
+    } finally {
+      vi.useRealTimers();
+    }
+    await waitFor(() => expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first']));
+    expect(screen.getByTestId('chat-action-error').textContent).toBe(`${BASE}/turns → ${CHAT_SEND_TIMEOUT_DRAFT}`);
+    expect(screen.getByTestId('chat-send')).toBeInTheDocument();
   });
 
   it.each([[409, 'a turn is running'], [500, 'store unavailable']])('a send the server answers %i takes the unaccepted turn back out and shows the error', async (status, detail) => {
@@ -383,5 +426,31 @@ describe('ChatFacet: turn_error races and fast follow-ups', () => {
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first']);
     expect(screen.queryByTestId('chat-stop')).toBeNull();
     expect(screen.getByTestId('chat-send')).toBeInTheDocument();
+  });
+});
+
+describe('ChatFacet: the snapshot is the whole truth', () => {
+  it('a reconnect keeps every earlier turn\'s usage line, cost and warning', async () => {
+    const items = [
+      { kind: 'user' as const, text: 'one', usage: { input: 1, cache_read: 2, cache_write: 3, output: 4 }, cost_usd: 0.25, warning: 'The server warns here.' },
+      { kind: 'assistant' as const, text: 'A' },
+      { kind: 'user' as const, text: 'two', usage: { input: 5, cache_read: 6, cache_write: 7, output: 8 } },
+      { kind: 'assistant' as const, text: 'B' },
+    ];
+    mount(snapshot({ items }));
+    await screen.findByTestId('chat-turn-1');
+    const lines = () => screen.getAllByTestId('chat-usage').map(e => e.textContent);
+    const expected = [
+      'input 1 · cache read 2 · cache write 3 · output 4 · $0.2500',
+      'input 5 · cache read 6 · cache write 7 · output 8 · cost unknown',
+    ];
+    expect(lines()).toEqual(expected);
+    expect(screen.getByTestId('chat-warning').textContent).toBe('The server warns here.');
+
+    // The stream reconnects: `ready` again, the transcript read again.
+    act(() => { latestStream('/chats/chat-a/events')!.emit('ready', {}); });
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(lines()).toEqual(expected);
+    expect(screen.getAllByTestId('chat-warning')).toHaveLength(1);
   });
 });

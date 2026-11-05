@@ -42,3 +42,9 @@ export const CHAT_RESULT_LOADING = 'Loading…';
 
 /** The button on a Settings grant row that takes the grant back. */
 export const CHAT_REVOKE_GRANT = 'Revoke';
+
+// ── DRAFT COPY: needs user approval ──
+
+/** The detail of the error shown when a send gets no answer in time
+ *  (`<url> → <this>`, the same shape as every other request error). */
+export const CHAT_SEND_TIMEOUT_DRAFT = 'no answer';
