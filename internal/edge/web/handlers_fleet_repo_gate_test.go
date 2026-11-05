@@ -59,7 +59,7 @@ func fleetRepoMutatingRoutes(t *testing.T, s *Server, repo, branch string) [][2]
 // and operator), each mutating route of /repos/{repo} in the real route table
 // (rename, archive, the repo PATCH, PUT and DELETE origin, the upstream,
 // origin sessions, the pushed-branch merge, fact and experiment writes, index
-// and synthesis jobs, …) answers 409 fleet_repository, one subtest per
+// jobs, …) answers 409 fleet_repository, one subtest per
 // route, and its handler does not run: on this MEMBER's copy the fleet
 // repository keeps its name, its origin is still the fleet's URL, and its
 // agent branch did not move. Reads pass (GET of the repo and its origin). A

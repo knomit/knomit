@@ -15,10 +15,9 @@ import (
 )
 
 // This file is the v2 Ollama adapter: hand-written HTTP against /api/chat
-// (NDJSON streaming, tools), like the v1 OllamaAdapter in ollama.go, which
-// stays untouched until the v1 path is deleted. The capability probe below is
-// a COPY of the v1 /api/show probe's request, not a move: whoever deletes
-// ollama.go must keep this one.
+// (NDJSON streaming, tools). The capability probe below began as a copy of the
+// request the v1 adapter made; that adapter is deleted and this is the only
+// /api/show probe.
 //
 // Ollama has no cache breakpoints. Its prompt cache is the runner's KV cache
 // for the loaded model, so the two things that make it hit are (1) a request

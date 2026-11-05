@@ -17,7 +17,7 @@ import (
 // created, changed and removed only through the /fleet API, whose actions the
 // Fleet page offers. Rename, archive, the repo PATCH, PUT and DELETE origin,
 // the upstream, origin sessions, the pushed-branch merge, branch and fact
-// writes, experiments, index and synthesis jobs: every one answers 409
+// writes, experiments, index jobs: every one answers 409
 // fleet_repository, and its handler does not run. That one check replaces
 // the per-handler fleet arms those routes used to carry (R3.3's member-only
 // refusals, the master's DELETE-origin path, the manual merge's re-judge).
