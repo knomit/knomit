@@ -20,6 +20,12 @@ import (
 // Builder refuses Replace and Remove in HookConversation for that reason.
 // Shrinking a long conversation is left to the provider's server-side context
 // editing or compaction, which do not count as edits (deferred work).
+//
+// A provider with no prompt cache and no signatures to protect
+// (Caps.StablePrefix false) is adaptive: the loop sends a PROJECTION of the
+// stored history and tool list (ToolWindow.Project), a copy. The stored history
+// is still whole and still append-only; only the view sent differs. Today the
+// projection changes the tools block only.
 
 // Role is the speaker of an Entry.
 type Role string

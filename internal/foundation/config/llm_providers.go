@@ -49,6 +49,39 @@ type LLMProviderConfig struct {
 	// entry gets llm.DefaultModelProfile, no price card (cost unknown) and
 	// the provider's context window.
 	ModelDefaults map[string]LLMModelConfig `toml:"model"`
+
+	// AdaptiveTools is "" or "auto" (adaptive when the provider's adapter needs
+	// no stable prefix) or "off" (always send every tool). "on" does not exist:
+	// forcing it on a provider that needs a stable prefix would break its
+	// requests.
+	AdaptiveTools string `toml:"adaptive_tools"`
+}
+
+// adaptive_tools values.
+const (
+	AdaptiveToolsAuto = "auto"
+	AdaptiveToolsOff  = "off"
+)
+
+// AdaptiveToolsOnRefused is the refusal for adaptive_tools = "on" on a provider
+// whose adapter needs a stable prefix. It takes the provider name.
+const AdaptiveToolsOnRefused = `adaptive_tools = "on" is not allowed for provider %s: its requests must keep a stable prefix.` // approved copy (design C10)
+
+// AdaptiveToolsInvalid is the refusal for any other adaptive_tools value. It
+// takes the provider's config path and the value.
+const AdaptiveToolsInvalid = `%s.adaptive_tools %q: must be "auto" or "off"`
+
+// validateAdaptiveTools checks adaptive_tools, the part that needs no model.
+func (p LLMProviderConfig) validateAdaptiveTools(name, at string) error {
+	switch p.AdaptiveTools {
+	case "", AdaptiveToolsAuto, AdaptiveToolsOff:
+		return nil
+	case "on":
+		if p.Kind == LLMKindAnthropic {
+			return fmt.Errorf("%s: "+AdaptiveToolsOnRefused, at, name)
+		}
+	}
+	return fmt.Errorf(AdaptiveToolsInvalid, at, p.AdaptiveTools)
 }
 
 // LLMModelConfig is [llm.providers.<name>.model.<id>].
@@ -200,6 +233,9 @@ func (p LLMProviderConfig) validate(name string) error {
 	}
 	if len(p.Models) == 0 {
 		return fmt.Errorf("%s.models is empty: list the model ids the chat may use", at)
+	}
+	if err := p.validateAdaptiveTools(name, at); err != nil {
+		return err
 	}
 	allowed := map[string]bool{}
 	for _, m := range p.Models {
