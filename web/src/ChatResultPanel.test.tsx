@@ -74,4 +74,10 @@ describe('ChatResultPanel real materialize result', () => {
     expect(md).toContain('### Moka pot: remove from heat');
     expect(materializedMarkdown(JSON.stringify({ facts: [{ title: 'T', body: '<a id="f-1"></a>\nbody' }] }))).toBe('# T\n\nbody');
   });
+
+  it('keeps an anchor tag inside a fenced code block, where it is the fact\'s own content', () => {
+    const doc = 'before\n<a id="f-1"></a>\n### T\n\n```html\n<a id="example"></a>\n```\n\n~~~\n<a name="x"></a>\n~~~\nafter\n';
+    expect(materializedMarkdown(JSON.stringify({ text: doc }))).toBe(
+      'before\n### T\n\n```html\n<a id="example"></a>\n```\n\n~~~\n<a name="x"></a>\n~~~\nafter\n');
+  });
 });

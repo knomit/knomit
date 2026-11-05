@@ -278,7 +278,27 @@ export function toolRowLabel(tool: string): string {
  *  before each fact so a document can link to it. The chat panel renders
  *  markdown without raw HTML, so the tag would show as literal text; the panel
  *  has no in-page links to point at it, so the line is dropped. */
-const ANCHOR_LINE = /^[ \t]*<a\s+(?:id|name)="[^"]*"\s*><\/a>[ \t]*\r?\n?/gm;
+const ANCHOR_LINE = /^[ \t]*<a\s+(?:id|name)="[^"]*"\s*><\/a>[ \t]*\r?$/;
+const FENCE_LINE = /^ {0,3}(```+|~~~+)/;
+
+/** stripAnchorLines drops anchor lines, except inside a fenced code block,
+ *  where the tag is the fact's own content (an example of markup). */
+function stripAnchorLines(md: string): string {
+  let fence: string | null = null;
+  const out: string[] = [];
+  for (const line of md.split('\n')) {
+    const m = FENCE_LINE.exec(line);
+    if (m) {
+      const mark = m[1][0];
+      if (fence === null) fence = mark;
+      else if (fence === mark) fence = null;
+    } else if (fence === null && ANCHOR_LINE.test(line)) {
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
 
 /** The markdown a knomit_materialize result stands for: its document `text`
  *  (audience "agent", the real result shape: a JSON object whose `text` is the
@@ -288,10 +308,10 @@ const ANCHOR_LINE = /^[ \t]*<a\s+(?:id|name)="[^"]*"\s*><\/a>[ \t]*\r?\n?/gm;
 export function materializedMarkdown(result: string): string {
   try {
     const v = JSON.parse(result) as { text?: unknown; facts?: unknown };
-    if (typeof v.text === 'string') return v.text.replace(ANCHOR_LINE, '');
+    if (typeof v.text === 'string') return stripAnchorLines(v.text);
     if (Array.isArray(v.facts)) {
       return v.facts.map((f: { title?: string; body?: string }) =>
-        `${f.title ? `# ${f.title}\n\n` : ''}${(f.body ?? '').replace(ANCHOR_LINE, '')}`).join('\n\n---\n\n');
+        `${f.title ? `# ${f.title}\n\n` : ''}${stripAnchorLines(f.body ?? '')}`).join('\n\n---\n\n');
     }
   } catch { /* not JSON: the text itself */ }
   return result;

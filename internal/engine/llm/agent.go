@@ -325,7 +325,7 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 					if l.Options.MaxOutput > 0 {
 						caps.MaxOutput = l.Options.MaxOutput
 					}
-					runErr = l.openingTooBig(est, replyReserve(caps), caps.ContextWindow, err)
+					runErr = l.openingRefused(est, caps.ContextWindow, err)
 				} else {
 					runErr = &turnError{msg: contextFullMessage, err: err}
 				}
@@ -446,6 +446,12 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 			msg := fmt.Sprintf("The arguments for %s are not valid JSON, so the call was not run. Received: %s", c.Name, c.RawArgs)
 			answer(c, msg, true)
 			l.logCall(c, msg, true)
+			// Malformed JSON repeated byte for byte is the same runaway as a
+			// failing call: keyed by the raw bytes and a fixed error.
+			if n := guard.observeKey(c.Name+"\x00"+string(c.RawArgs)+"\x00invalid JSON", true); n >= RepeatFailureLimit {
+				abort(i+1, SkippedResult)
+				return results, approvals, repeatedFailure(c.Name, n, "the arguments are not valid JSON")
+			}
 			continue
 		}
 
@@ -468,6 +474,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 				l.Log.Approval(ApprovalLog{CallID: c.ID, Tool: c.Name, Decision: kind})
 			}
 			if !d.Allow {
+				guard.reset() // a decline is new information: the model was told no
 				answer(c, DeclinedResult, true)
 				l.logCall(c, DeclinedResult, true)
 				continue
@@ -494,10 +501,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 			// this reply's calls so every tool_use stays paired (settle then
 			// flushes the turn).
 			abort(i+1, SkippedResult)
-			return results, approvals, &turnError{
-				msg: fmt.Sprintf(RepeatedFailureMessage_DRAFT, c.Name, n, truncateForMessage(out.Content, 300)),
-				err: ErrRepeatedFailure,
-			}
+			return results, approvals, repeatedFailure(c.Name, n, truncateForMessage(out.Content, 300))
 		}
 	}
 	return results, approvals, nil
@@ -513,17 +517,30 @@ type repeatGuard struct {
 
 // observe records an executed call's outcome and returns the current streak.
 func (g *repeatGuard) observe(c ToolUse, out ToolOutcome) int {
-	if !out.IsError {
-		g.key, g.n = "", 0
+	return g.observeKey(c.Name+"\x00"+string(c.Args)+"\x00"+out.Content, out.IsError)
+}
+
+// observeKey counts key as the next identical failure, or resets on success.
+func (g *repeatGuard) observeKey(key string, isErr bool) int {
+	if !isErr {
+		g.reset()
 		return 0
 	}
-	key := c.Name + "\x00" + string(c.Args) + "\x00" + out.Content
 	if key == g.key {
 		g.n++
 	} else {
 		g.key, g.n = key, 1
 	}
 	return g.n
+}
+
+func (g *repeatGuard) reset() { g.key, g.n = "", 0 }
+
+func repeatedFailure(tool string, n int, lastErr string) error {
+	return &turnError{
+		msg: fmt.Sprintf(RepeatedFailureMessage_DRAFT, tool, n, lastErr),
+		err: ErrRepeatedFailure,
+	}
 }
 
 func truncateForMessage(s string, n int) string {
@@ -671,7 +688,7 @@ func (l *Loop) checkBudget(snap Snapshot, est int) error {
 	reserve := replyReserve(caps)
 	if est+reserve > caps.ContextWindow {
 		if isOpening(snap) {
-			return l.openingTooBig(est, reserve, caps.ContextWindow, nil)
+			return l.openingTooBig(est, reserve, caps.ContextWindow)
 		}
 		return &turnError{
 			msg: fmt.Sprintf("%s (about %d prompt tokens plus %d reserved for the reply, window %d)",
@@ -698,20 +715,42 @@ func isOpening(snap Snapshot) bool {
 	return len(snap.Hooks[HookConversation]) == 0 && len(snap.Hooks[HookTurn]) <= 1
 }
 
-// openingTooBig is the error for an opening request that cannot fit. It names
-// the sizes so the user knows what to change; it never suggests a number,
-// because the toolset's size varies with the repos and the permissions.
-func (l *Loop) openingTooBig(est, reserve, window int, cause error) error {
+// openingTooBig is the pre-send error for an opening whose estimate plus the
+// reply reserve exceeds the window. It names the sizes so the user knows what
+// to change; it never suggests a number, because the toolset's size varies
+// with the repos and the permissions.
+func (l *Loop) openingTooBig(est, reserve, window int) error {
 	hint := ""
 	if l.Model.Provider() == "ollama" {
 		hint = OllamaRaiseNumCtxHint_DRAFT
 	}
 	left := max(window-reserve, 0)
-	if cause == nil {
-		cause = ErrContextFull
-	}
 	return &turnError{
 		msg: fmt.Sprintf(OpeningTooBigMessage_DRAFT, est, l.Model.Model(), window, reserve, left, hint),
+		err: ErrContextFull,
+	}
+}
+
+// OpeningRefusedByServerMessage_DRAFT is shown when the server refused an
+// opening that the local estimate says fits the window the model reports: the
+// estimate and the window are therefore not what the server enforces. The
+// arguments are the estimate, the model, the reported window and a hint. DRAFT
+// COPY: needs user approval.
+const OpeningRefusedByServerMessage_DRAFT = "The server refused the opening of this chat even though its estimated size (about %d tokens) fits the context window reported for %s (%d)%s."
+
+// OllamaServerContextHint_DRAFT is appended for an Ollama provider. DRAFT COPY.
+const OllamaServerContextHint_DRAFT = ". The server's context (num_ctx) is likely smaller than the opening, so raise num_ctx for this provider in knomit.toml"
+
+// openingRefused is the error for an opening the adapter (the server) refused
+// with ErrContextFull although the local estimate fit. It makes no claim about
+// room left, because by the estimate there is room.
+func (l *Loop) openingRefused(est, window int, cause error) error {
+	hint := ""
+	if l.Model.Provider() == "ollama" {
+		hint = OllamaServerContextHint_DRAFT
+	}
+	return &turnError{
+		msg: fmt.Sprintf(OpeningRefusedByServerMessage_DRAFT, est, l.Model.Model(), window, hint),
 		err: cause,
 	}
 }

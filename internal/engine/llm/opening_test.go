@@ -72,13 +72,35 @@ func TestLoop_LaterTurnTooBigKeepsTheGenericMessage(t *testing.T) {
 	}
 }
 
-// The adapter refusing the opening (the estimate was under the window but the
-// server disagrees) gets the same message.
-func TestLoop_AdapterRefusalOfTheOpeningNamesTheSizes(t *testing.T) {
+// The adapter refusing an opening the estimate says fits (about 100 tokens in a
+// 32768 window) must not claim the opening needs more than the window leaves:
+// it says the server refused it despite the estimate, and for Ollama points at
+// the server's num_ctx.
+//
+// SABOTAGE: agent.go, call openingTooBig instead of openingRefused on the
+// adapter path -> the false "leaves" sentence appears and this fails.
+func TestLoop_AdapterRefusalOfTheOpeningSaysTheServerRefusedDespiteTheEstimate(t *testing.T) {
 	fm := &fakeModel{caps: Caps{ContextWindow: 32768, MaxOutput: 8192}, steps: []fakeStep{{err: fmt.Errorf("wrap: %w", ErrContextFull)}}}
 	l := openingLoop(t, ollamaModel{fm}, 100)
 	_, err := l.RunTurn(context.Background(), "hi")
-	if !errors.Is(err, ErrContextFull) || !strings.Contains(err.Error(), "The opening of this chat") || !strings.Contains(err.Error(), "raise num_ctx") {
-		t.Fatalf("err = %v, want the opening message", err)
+	if !errors.Is(err, ErrContextFull) {
+		t.Fatalf("err = %v, want ErrContextFull", err)
+	}
+	msg := err.Error()
+	for _, want := range []string{"The server refused the opening of this chat", "fits the context window reported", "(32768)", "num_ctx"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q lacks %q", msg, want)
+		}
+	}
+	for _, bad := range []string{"needs about", "leaves", "reserved for the reply"} {
+		if strings.Contains(msg, bad) {
+			t.Errorf("message %q contains the false claim %q", msg, bad)
+		}
+	}
+	// Another provider has no num_ctx to name.
+	fm2 := &fakeModel{caps: Caps{ContextWindow: 32768, MaxOutput: 8192}, steps: []fakeStep{{err: ErrContextFull}}}
+	_, err = openingLoop(t, fm2, 100).RunTurn(context.Background(), "hi")
+	if err == nil || strings.Contains(err.Error(), "num_ctx") || !strings.Contains(err.Error(), "The server refused the opening") {
+		t.Fatalf("err = %v, want the server-refused message without num_ctx", err)
 	}
 }
