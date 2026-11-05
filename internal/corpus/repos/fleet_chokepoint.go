@@ -169,6 +169,17 @@ func (m *Manager) retireFleetConflict(ri *RepoInstance, err error) {
 		m.mu.Unlock()
 		return
 	}
+	// A later reload may already have applied a FIXED tip (a usable,
+	// non-fleet ontology) before this goroutine ran: then the repo is not a
+	// fleet conflict any more and stays mounted. Checked under m.mu, against
+	// the identity as it stands now; a reload that lands after this check
+	// meets an unmounting repo, which is what the conflict it saw called for.
+	if !errors.Is(ri.OntologyError(), ErrFleetOntologyReserved) {
+		m.mu.Unlock()
+		ri.fleetConflictRetired.Store(false)
+		log.Info().Str("repo", rec.Name).Msg("fleet conflict cleared by a later reload before the retire ran; the repo stays mounted")
+		return
+	}
 	delete(m.repos, rec.Name)
 	delete(m.byUID, ri.uid)
 	m.unavailable[ri.uid] = Unavailable{Record: rec, Reason: reason, Detail: m.redactHome(detail), Cause: cause}
@@ -176,6 +187,31 @@ func (m *Manager) retireFleetConflict(ri *RepoInstance, err error) {
 	log.Warn().Str("repo", rec.Name).Str("uid", rec.UID).Str("reason", reason).Str("cause", string(cause)).Str("detail", detail).
 		Msg("repo is unavailable: its consensus ontology took the reserved fleet id (fleet_conflict); it is unmounted, as a mount of it would be refused")
 	unmount(ri, "fleet conflict")
+}
+
+// startFleetConflictRetire runs retireFleetConflict on its own goroutine,
+// tracked by retireWg so Close waits for it. It reports whether it started
+// one: never once Close has begun (retireClosing), when Close's own Unmount
+// of every mounted repo covers this one. Add happens under m.mu, before Close
+// can set retireClosing and Wait, so the WaitGroup is never Added to while
+// it is being waited on.
+func (m *Manager) startFleetConflictRetire(ri *RepoInstance, err error) bool {
+	m.mu.Lock()
+	if m.retireClosing {
+		m.mu.Unlock()
+		return false
+	}
+	m.retireWg.Add(1)
+	m.mu.Unlock()
+	hook := m.retireHook
+	go func() {
+		defer m.retireWg.Done()
+		if hook != nil {
+			hook()
+		}
+		m.retireFleetConflict(ri, err)
+	}()
+	return true
 }
 
 // admitFleetOntology is the Identify half: r's ontology is ont. A fleet-id

@@ -85,6 +85,18 @@ type Manager struct {
 	// and the repositories it reads and writes.
 	fleetBootWg sync.WaitGroup
 
+	// retireWg tracks the fleet-conflict retires a live ontology reload
+	// hands off (retireFleetConflict, #429 decision 2). Close waits for it
+	// before it releases control.db and snapshots the machines, so a retire
+	// never reads a closed registry and never sends an Unmount after Close's
+	// own. retireClosing (under mu) is set first thing in Close: no retire
+	// starts after it, so retireWg is never Added to while Close Waits.
+	retireWg      sync.WaitGroup
+	retireClosing bool
+	// retireHook (nil in production) runs at the start of each retire
+	// goroutine: the test seam that holds a retire in flight across Close.
+	retireHook func()
+
 	// sessionCfg is the session block, parsed and validated once at the top
 	// of Start. The reaper runs on it, and every instance opened afterwards
 	// takes its resume window from it.
@@ -817,6 +829,12 @@ func (m *Manager) Names() []string {
 // unmount drain bound. Returns nil today; the error return matches io.Closer
 // for forward compatibility.
 func (m *Manager) Close() error {
+	// No fleet-conflict retire starts from here on (startFleetConflictRetire);
+	// the ones already started are waited for below, before the registry
+	// closes and before the machines are snapshotted for their Unmount.
+	m.mu.Lock()
+	m.retireClosing = true
+	m.mu.Unlock()
 	if m.sessionReaperStop != nil {
 		m.sessionReaperStop()
 		m.sessionReaperStop = nil
@@ -833,6 +851,10 @@ func (m *Manager) Close() error {
 	// The boot fleet reconcile reads control.db and writes one commit: it must
 	// finish before those handles close, like the creates above.
 	m.fleetBootWg.Wait()
+	// A retire reads the registry and unmounts one repo: it finishes before
+	// the handles close and before the machine snapshot below, so the repo
+	// it retired is no longer in m.repos and gets no second Unmount.
+	m.retireWg.Wait()
 
 	m.mu.Lock()
 	reg := m.registry

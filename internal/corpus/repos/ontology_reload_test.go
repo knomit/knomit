@@ -16,6 +16,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -469,6 +470,86 @@ func TestOntologyReload_FleetIDOnANonFleetRepoIsUnavailableFleetConflict(t *test
 	// The mount's verdict on the same store is the same.
 	_, err := m.mountExisting(name, g.ri.UID(), nil, false)
 	require.ErrorIs(t, err, ErrFleetOntologyReserved, "a mount of it is refused the same way")
+}
+
+// markFleetConflict puts g's repo in the state a reload leaves it in when the
+// fleet id arrives: unwritable with ErrFleetOntologyReserved.
+func markFleetConflict(t *testing.T, g *ghInstance) error {
+	t.Helper()
+	ferr := fmt.Errorf("ontology at %s on %s: %w", OntologyPath, g.branch, ErrFleetOntologyReserved)
+	g.ri.ontMu.Lock()
+	cur := g.ri.ident.Load()
+	g.ri.ident.Store(&identity{ontologyErr: ferr, src: cur.src})
+	g.ri.ontMu.Unlock()
+	return ferr
+}
+
+func unavailableCause(m *Manager, name string) UnavailableCause {
+	for _, u := range m.Unavailable() {
+		if u.Record.Name == name {
+			return u.Cause
+		}
+	}
+	return ""
+}
+
+// Manager.Close WAITS for a fleet-conflict retire in flight: it does not
+// return, nor close the registry, nor snapshot the machines, until the
+// retire has moved the repo to the unavailable list and unmounted it — so
+// the repo gets no second Unmount and the retire never reads a closed
+// registry. Once Close has begun, no retire starts. SABOTAGE: drop
+// retireWg.Wait from Close → Close returns while the retire is held → red;
+// drop the retireClosing check → the late start returns true → red.
+func TestOntologyReload_CloseWaitsForAFleetConflictRetire(t *testing.T) {
+	t.Parallel()
+	_, g := newReloadFixture(t)
+	m, name := g.ri.env.m, g.ri.Name()
+	ferr := markFleetConflict(t, g)
+	release := make(chan struct{})
+	m.retireHook = func() { <-release }
+	require.True(t, m.startFleetConflictRetire(g.ri, ferr))
+
+	closed := make(chan struct{})
+	go func() {
+		_ = m.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while a retire was still in flight")
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Close never returned")
+	}
+	require.Equal(t, CauseFleetConflict, unavailableCause(m, name), "the retire finished before Close's snapshot")
+	require.Nil(t, m.Get(name))
+	require.False(t, m.startFleetConflictRetire(g.ri, ferr), "no retire starts once Close has begun")
+}
+
+// A later reload that applied a FIXED (usable, non-fleet) tip before the
+// retire goroutine ran: the retire re-checks under the lock and leaves the
+// repo mounted. SABOTAGE: drop the re-check → the fixed repo is unmounted
+// → red.
+func TestOntologyReload_RetireSkipsARepoFixedMeanwhile(t *testing.T) {
+	t.Parallel()
+	_, g := newReloadFixture(t)
+	m, name := g.ri.env.m, g.ri.Name()
+	g.ri.ontMu.Lock()
+	fixed := g.ri.ident.Load() // usable, not the fleet id
+	g.ri.ontMu.Unlock()
+	ferr := markFleetConflict(t, g)
+	g.ri.ontMu.Lock()
+	g.ri.ident.Store(fixed) // the later reload applied the fix
+	g.ri.ontMu.Unlock()
+
+	m.retireFleetConflict(g.ri, ferr)
+	require.Same(t, g.ri, m.Get(name), "the fixed repo stays mounted")
+	require.Empty(t, unavailableCause(m, name))
+	require.True(t, g.ri.WritableBranch(g.branch))
 }
 
 // An unchanged blob is not even READ (counted at the file read).

@@ -554,8 +554,13 @@ func (r *RepoInstance) reloadOntology(ctx context.Context, svc *store.Service) {
 		log.Error().Err(ferr).Str("repo", r.Name()).Str("commit", src.Commit).Str("blob", src.Blob).
 			Msg("ontology reload: the read branch's ontology took the reserved fleet id on a repository that is not the fleet repository; it is unavailable (fleet_conflict), as a mount of it would be")
 		r.setIdentity(svc, &identity{ontologyErr: ferr, src: src})
+		// Handed off once, on a goroutine Manager.Close tracks and waits for
+		// (startFleetConflictRetire); a Manager already closing unmounts
+		// every repo itself and starts none.
 		if m := r.env.m; m != nil && r.fleetConflictRetired.CompareAndSwap(false, true) {
-			go m.retireFleetConflict(r, ferr)
+			if !m.startFleetConflictRetire(r, ferr) {
+				r.fleetConflictRetired.Store(false)
+			}
 		}
 		return
 	}

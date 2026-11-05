@@ -74,6 +74,45 @@ func carriedOver(ctx context.Context) bool {
 	return v
 }
 
+// refuseWhileOntologyUnusable is the store's half of #429 decision 1: while
+// the repository's ontology is unusable (missing, empty, unparseable or a
+// symlink at the read branch's tip, as the repo judged it at Identify or on a
+// live reload, recorded by Service.SetOntologyUnusable), the repository is
+// UNWRITABLE for facts — literally: NO fact mutation lands, by any writer.
+// That is a write, an empty-content write, a DELETE (deleteFile: a REST
+// delete, a review prune retract, a dedup loser) and every batch (retracts
+// and moves included), from the review pipeline, a trigger, the fleet code
+// or an authored path WritableBranch somehow let through.
+//
+// It is checked in all three write cores (writeFileExact, deleteFile,
+// batchWriteLocked) under the branch lock and BEFORE the WithCarriedOver
+// exemption, which waives RuleValidation, not this: a byte-identical replay
+// is still a mutation of the branch. (Replay's target is a freshly cloned
+// store the repo has never called SetOntologyUnusable on, so in practice it
+// never meets the gate; if one ever did, refusing is the honest answer.) A
+// write that touches no fact path — the ontology file's own repair, any
+// other dot path or root file — passes: the repair is how the repository
+// becomes writable again. A byte-identical write is a no-op that commits
+// nothing and is answered before this check.
+func (rh *Repo) refuseWhileOntologyUnusable(files map[string]string, deletes []string) error {
+	uerr := rh.vr.OntologyUnusable()
+	if uerr == nil {
+		return nil
+	}
+	root := rh.vr.OntologyRoot()
+	for p := range files {
+		if verify.IsFactPathUnder(root, p) {
+			return &OntologyUnusableError{Err: uerr}
+		}
+	}
+	for _, p := range deletes {
+		if verify.IsFactPathUnder(root, p) {
+			return &OntologyUnusableError{Err: uerr}
+		}
+	}
+	return nil
+}
+
 // validateWrite is RuleValidation at the source, for EVERY in-process writer
 // (user ruling 2026-10-16: validations are honoured everywhere): REST fact
 // writes, the review pipeline (distill, prune, reflect, dedup, discovery),
@@ -105,16 +144,6 @@ func (rh *Repo) validateWrite(head plumbing.Hash, files map[string]string, delet
 	}
 	if len(paths) == 0 {
 		return nil
-	}
-	// The repository's ontology is unusable (#429 decision 1: missing, empty,
-	// unparseable or a symlink at the read branch's tip, as the repo judged
-	// it at Identify or on a live reload): NO fact is written, by any writer
-	// — the review pipeline, a trigger, the fleet code — not only the
-	// authored ones WritableBranch already refuses. A write here would be a
-	// fact no ontology validated. A write that touches no fact (the
-	// ontology's own repair, a dot path) never reaches this line.
-	if uerr := rh.vr.OntologyUnusable(); uerr != nil {
-		return &OntologyUnusableError{Err: uerr}
 	}
 	c, err := object.GetCommit(rh.vr.Storer(), head)
 	if err != nil {
