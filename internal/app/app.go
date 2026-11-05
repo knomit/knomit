@@ -449,8 +449,9 @@ func (a *App) OAuthHandler() http.Handler { return a.server.OAuthHandler() }
 // sessions to finish tearing down before it closes the manager. A chat waits
 // at most 10s for a turn that ignores cancellation (maxTurnEndWait in
 // api/chat), and all chats end in parallel, so 10s is the longest a teardown
-// can legitimately take; the extra 5s is serveUntil's graceful-shutdown grace,
-// for ending the MCP session and writing the log line after that wait. A
+// can legitimately take; the extra 5s is headroom for the teardown that follows
+// that wait: sess.Close (one control.db UPDATE), the log line and RemoveAll,
+// each far shorter than 5s on a healthy disk. A
 // teardown stuck past it is abandoned (logged) rather than hanging the stop.
 const shutdownReleaseWait = 15 * time.Second
 

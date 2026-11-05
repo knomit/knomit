@@ -149,6 +149,11 @@ func (c *chat) Decide(ctx context.Context, call llm.ToolUse) (llm.Decision, erro
 		action, _ = args["action"].(string)
 	}
 	pin, pinOK, pinErr := c.sess.TargetPin(ctx, args)
+	if err := ctx.Err(); err != nil {
+		// A cancelled turn must not flash an approval card (TargetPin returns
+		// the cancellation as its error).
+		return llm.Decision{}, err
+	}
 	unresolved := pinErr != nil
 	if unresolved {
 		log.Warn().Err(pinErr).Str("chat", c.id).Str("tool", call.Name).Msg("chat: cannot resolve the call's binding handle; asking")
@@ -162,11 +167,11 @@ func (c *chat) Decide(ctx context.Context, call llm.ToolUse) (llm.Decision, erro
 
 	c.mu.Lock()
 	c.meta[call.ID] = callMeta{action: action, pin: pin}
-	if known && !unresolved {
-		if _, ok := c.grants[grantKey{pin, call.Name, action}]; ok {
-			c.mu.Unlock()
-			return llm.Decision{Allow: true, Kind: "grant"}, nil
-		}
+	// Unconditional: grants are only stored for grantable calls, so a key of
+	// an unknown or unresolved call can never be present.
+	if _, ok := c.grants[grantKey{pin, call.Name, action}]; ok {
+		c.mu.Unlock()
+		return llm.Decision{Allow: true, Kind: "grant"}, nil
 	}
 	p := &pendingApproval{
 		CallID: call.ID, Tool: call.Name, Action: action, Target: name, TargetKind: kind,

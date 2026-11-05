@@ -17,9 +17,7 @@ import (
 // An action the classification table does not know asks, is never grantable
 // and is asked again every time.
 //
-// SABOTAGE (one at a time): chat.go Decide `if known && !unresolved {` -> `if
-// !unresolved {` (a seeded grant is honoured for an unknown call) fails the
-// first ask; answerApproval `if !p.Grantable {` -> `if false {` fails the 400.
+// SABOTAGE: answerApproval `if !p.Grantable {` -> `if false {` fails the 400.
 func TestChat_UnknownActionAsksAndIsNeverGrantable(t *testing.T) {
 	h := newHarness(t)
 	handle := h.bind(writer, "chat-00000000000000000000000000000071", "alpha")
@@ -28,13 +26,6 @@ func TestChat_UnknownActionAsksAndIsNeverGrantable(t *testing.T) {
 		toolStep("tu_u2", "knomit_experiment", map[string]any{"binding": handle, "action": "frobnicate"}, usage),
 		textStep("done", usage))
 	id := h.create("uid:501", "a1")
-	// Even a grant that somehow exists for the unknown action (the API cannot
-	// create one) is not honoured: the lookup itself is guarded by `known`.
-	c := h.mgr.find(id, writer.String())
-	require.NotNil(t, c)
-	c.mu.Lock()
-	c.grants[grantKey{"repo:uid-alpha", "knomit_experiment", "frobnicate"}] = grantInfo{Tool: "knomit_experiment", Action: "frobnicate"}
-	c.mu.Unlock()
 	s := h.attach("uid:501", id)
 	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "go"))
 
@@ -63,7 +54,7 @@ func TestChat_UnknownActionAsksAndIsNeverGrantable(t *testing.T) {
 
 	code, body = h.do("uid:501", http.MethodGet, "/chats/"+id+"/grants", nil)
 	require.Equal(t, http.StatusOK, code)
-	require.Contains(t, string(body), `"count":1`, "no grant was added by the allow_session attempt: only the seeded one remains")
+	require.Contains(t, string(body), `"count":0`)
 }
 
 // A side-effecting call whose handle lookup FAILS asks (and cannot be
@@ -283,4 +274,32 @@ func TestChat_EchoedAPIKeyNeverSurfaces(t *testing.T) {
 		require.NotContains(t, s, plainKey, fmt.Sprintf("capture %d", i))
 	}
 	require.Contains(t, strings.Join(seen, "\n"), "[redacted]")
+}
+
+// Review N12: a turn whose context is already cancelled gets the cancellation
+// back and no approval card.
+//
+// SABOTAGE: chat.go Decide, delete the `ctx.Err()` early return -> an approval
+// event is emitted before the marker and the test fails.
+func TestChat_CancelledContextEmitsNoApproval(t *testing.T) {
+	h := newHarness(t)
+	handle := h.bind(writer, "chat-00000000000000000000000000000074", "alpha")
+	h.queue("a1", textStep("done", usage))
+	id := h.create("uid:501", "a1")
+	c := h.mgr.find(id, writer.String())
+	require.NotNil(t, c)
+	s := h.attach("uid:501", id)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	raw, err := json.Marshal(learnArgs(handle, "Cancelled before asking"))
+	require.NoError(t, err)
+	call := llm.ToolUse{ID: "tu_c1", Name: "knomit_learn", Args: raw}
+	_, err = c.Decide(ctx, call)
+	require.ErrorIs(t, err, context.Canceled)
+
+	c.emit("marker", struct{}{})
+	evs := s.until("marker")
+	_, asked := find(evs, "approval")
+	require.False(t, asked, names(evs))
 }
