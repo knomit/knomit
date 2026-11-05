@@ -756,3 +756,39 @@ func TestChat_ApprovalCardForALoadedWriteStillAppears(t *testing.T) {
 	require.Contains(t, string(body), `"tool":"knomit_learn"`)
 	require.Contains(t, string(body), `"action":"learn"`)
 }
+
+// An Anthropic chat's request prefix is byte for byte what the static prefix
+// builder makes of the same tools: nothing about the adaptive path reaches it.
+//
+// SABOTAGE: mount.go create, set Window for every chat, or have AddPrefix drop
+// a tool -> the Anthropic prefix bytes differ and this fails.
+func TestChat_AnthropicRequestPrefixBytesAreTheStaticPrefix(t *testing.T) {
+	h := newHarness(t)
+	h.useOllama()
+	m := h.queue("a1", textStep("hi", usage))
+	code, body := h.createOn("uid:501", "anthropic", "a1")
+	require.Equal(t, http.StatusCreated, code, string(body))
+	var v struct{ ID string }
+	require.NoError(t, json.Unmarshal(body, &v))
+	s := h.attach("uid:501", v.ID)
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", v.ID, blankMessage))
+	s.until("turn_done")
+
+	const refID = "chat-00000000000000000000000000000a11"
+	sess, instructions, tools, err := mcp.OpenInProcessSession(context.Background(), h.srv, h.repos, mcp.InProcessOptions{
+		Principal: writer, SessionID: refID, Endpoint: "/api/v1/chats/" + refID,
+		ClientName: "test-ref", ClientVersion: "x",
+	})
+	require.NoError(t, err)
+	defer sess.Close(context.Background())
+	ref := llm.NewBuilder()
+	require.NoError(t, mcp.AddPrefix(ref, instructions, tools))
+
+	got, err := llm.AnthropicPrefixJSON(m.requests()[0], "claude-test-x")
+	require.NoError(t, err)
+	want, err := llm.AnthropicPrefixJSON(ref.Snapshot(), "claude-test-x")
+	require.NoError(t, err)
+	require.Equal(t, string(want), string(got))
+	require.Contains(t, string(got), `"knomit_learn"`, "fixture: the prefix holds the real tools")
+	require.NotContains(t, string(got), llm.LoadToolsName)
+}
