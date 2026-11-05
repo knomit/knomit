@@ -312,7 +312,7 @@ func (m *manager) create(ctx context.Context, p auth.Principal, provider, model 
 	// the window's projection of them.
 	var win *llm.ToolWindow
 	if m.reg != nil && m.reg.Adaptive(provider, model, cm.Caps()) {
-		if win, err = m.openWindow(c, cm, tools); err != nil {
+		if win, err = m.openWindow(c, cm, tools, b); err != nil {
 			_ = sess.Close(context.Background())
 			c.log.End("open_failed")
 			return fail(err)

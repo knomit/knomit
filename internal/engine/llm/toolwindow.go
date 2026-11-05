@@ -95,6 +95,10 @@ type ToolWindowSpec struct {
 	// Ranker, when set, guesses the tools a turn's message needs; Preload loads
 	// the best guesses before the turn's first request. Nil: no preload.
 	Ranker ToolRanker
+	// Core are the catalogue tools that are always in the window: loaded from
+	// the opening, never evicted, and not preload picks. A name that is not in
+	// Names is ignored (the principal was not shown that tool).
+	Core []string
 }
 
 // ToolWindow: see the file comment.
@@ -114,6 +118,7 @@ type ToolWindow struct {
 	replayable  func(tool string, args json.RawMessage) bool
 	ranker      ToolRanker
 	picks       []string // tools preloaded this turn, in rank order
+	core        map[string]bool
 }
 
 // LoaderDef builds the loader tool's definition: the approved description with
@@ -162,7 +167,33 @@ func NewToolWindow(spec ToolWindowSpec) (*ToolWindow, error) {
 		}
 	}
 	sort.Strings(w.names)
+	w.core = map[string]bool{}
+	for _, n := range spec.Core {
+		if w.inCat[n] {
+			w.core[n] = true
+			w.loaded[n] = true
+		}
+	}
 	return w, nil
+}
+
+// Core is the core tools' names, sorted: always loaded, never evicted.
+func (w *ToolWindow) Core() []string {
+	out := make([]string, 0, len(w.core))
+	for n := range w.core {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Observe learns the catalogue tools' definition sizes from snap and returns
+// what is loaded and what the loaded set costs in tokens (bytes/4). It is for
+// the opening, before any request has been projected: a chat shows the core
+// set's size from its first turn.
+func (w *ToolWindow) Observe(snap Snapshot) ([]string, int) {
+	w.observe(snap)
+	return w.loadedNames(), w.loadedTokens()
 }
 
 // Handles reports whether the window, not the approval gate and the host,
@@ -257,7 +288,7 @@ func (w *ToolWindow) Project(snap Snapshot) Snapshot {
 func (w *ToolWindow) evictOrder(pinned Pinned) []string {
 	var cand []string
 	for n := range w.loaded {
-		if !pinned[n] && !w.turnLoaded[n] {
+		if !pinned[n] && !w.turnLoaded[n] && !w.core[n] {
 			cand = append(cand, n)
 		}
 	}

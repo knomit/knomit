@@ -215,7 +215,7 @@ func TestMount_AdaptiveForOllamaNotForAnthropic(t *testing.T) {
 		s.until("turn_done")
 	}
 	adaptiveReq := co.loop.Model.(*scripted).requests()[0]
-	require.Equal(t, []string{llm.LoadToolsName}, toolNamesIn(adaptiveReq, llm.HookTools), "the loader, no schemas")
+	require.Equal(t, append([]string{llm.LoadToolsName}, mcp.ChatCoreTools...), toolNamesIn(adaptiveReq, llm.HookTools), "the loader and the core tools, no other schemas")
 	staticReq := ca.loop.Model.(*scripted).requests()[0]
 	require.Equal(t, all, toolNamesIn(staticReq, llm.HookTools), "every tool the principal is shown")
 	require.Equal(t, mcp.ChatSystemPrompt, staticReq.Hooks[llm.HookSystem][0].Text)
@@ -421,7 +421,7 @@ func TestChat_ToolsEventIsEmittedOnLoadAndEvict(t *testing.T) {
 	const window = 40000
 	usable := window - 1000 // the scripted model's MaxOutput is the reserve
 	m := h.queueAdaptive("o1", window,
-		loadStep("tu_load", llm.Usage{Input: 50}, "knomit_query"),
+		loadStep("tu_load", llm.Usage{Input: 50}, "knomit_explain"),
 		// The turn's last response reports a prompt one token over the usable
 		// room, so the next turn's first estimate is over budget and the only
 		// unpinned loaded tool is evicted before that request.
@@ -444,7 +444,10 @@ func TestChat_ToolsEventIsEmittedOnLoadAndEvict(t *testing.T) {
 			tools = append(tools, te)
 		}
 	}
-	tokens := toolTokens(t, m.requests()[1], "knomit_query")
+	tokens := toolTokens(t, m.requests()[1], "knomit_explain")
+	core := toolTokens(t, m.requests()[1], "knomit_bind") + toolTokens(t, m.requests()[1], "knomit_query")
+	coreNames := []string{"knomit_bind", "knomit_query"}
+	withExplain := []string{"knomit_bind", "knomit_explain", "knomit_query"}
 	turnOf := func(evs []sseEvent) int {
 		var d struct {
 			Turn int `json:"turn"`
@@ -455,8 +458,8 @@ func TestChat_ToolsEventIsEmittedOnLoadAndEvict(t *testing.T) {
 	require.Equal(t, 0, turnOf(first))
 	require.Greater(t, turnOf(second), 0)
 	require.Equal(t, []toolsEvent{
-		{Turn: turnOf(first), Reason: llm.ToolsReasonModel, Loaded: []string{"knomit_query"}, Evicted: []string{}, LoadedNow: []string{"knomit_query"}, Total: total, Tokens: tokens},
-		{Turn: turnOf(second), Reason: llm.ToolsReasonPressure, Loaded: []string{}, Evicted: []string{"knomit_query"}, LoadedNow: []string{}, Total: total, Tokens: 0},
+		{Turn: turnOf(first), Reason: llm.ToolsReasonModel, Loaded: []string{"knomit_explain"}, Evicted: []string{}, LoadedNow: withExplain, Total: total, Tokens: core + tokens},
+		{Turn: turnOf(second), Reason: llm.ToolsReasonPressure, Loaded: []string{}, Evicted: []string{"knomit_explain"}, LoadedNow: coreNames, Total: total, Tokens: core},
 	}, tools)
 
 	done := func(evs []sseEvent) turnTools {
@@ -467,8 +470,8 @@ func TestChat_ToolsEventIsEmittedOnLoadAndEvict(t *testing.T) {
 		require.NotNil(t, d.Tools)
 		return *d.Tools
 	}
-	require.Equal(t, turnTools{Loaded: 1, Evicted: 0, LoadedNow: 1, Total: total, Tokens: tokens}, done(first))
-	require.Equal(t, turnTools{Loaded: 0, Evicted: 1, LoadedNow: 0, Total: total, Tokens: 0}, done(second))
+	require.Equal(t, turnTools{Loaded: 1, Evicted: 0, LoadedNow: 3, Total: total, Tokens: core + tokens}, done(first))
+	require.Equal(t, turnTools{Loaded: 0, Evicted: 1, LoadedNow: 2, Total: total, Tokens: core}, done(second))
 
 	// The snapshot is authoritative: each turn's user item carries the same.
 	code, body := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
@@ -509,7 +512,7 @@ func TestChat_ToolsEventIsEmittedOnLoadAndEvict(t *testing.T) {
 		}
 	}
 	require.Equal(t, llm.LoadToolsName, loaderDone.Name)
-	require.Equal(t, []string{"knomit_query"}, loaderDone.Loaded)
+	require.Equal(t, []string{"knomit_explain"}, loaderDone.Loaded)
 }
 
 // An Anthropic chat's turn_done and snapshot carry no tools field at all.
@@ -568,7 +571,7 @@ func TestSessionLog_ToolsPreloadAndProjectionRecords(t *testing.T) {
 	h.learnBig("chat-00000000000000000000000000000a07", "A fact with a long body", marker)
 
 	m := h.queueAdaptive("o1", 40000,
-		loadStep("tu_load", usage, "knomit_bind", "knomit_query"),
+		loadStep("tu_load", usage, "knomit_explain", "knomit_changes"),
 		toolStep("tu_bind", "knomit_bind", map[string]any{"repo": "alpha"}, usage),
 		step{fn: func(s llm.Snapshot) step {
 			return toolStep("tu_query", "knomit_query", map[string]any{
@@ -640,8 +643,8 @@ func TestSessionLog_ToolsPreloadAndProjectionRecords(t *testing.T) {
 	}
 	require.NotEmpty(t, toolRecs)
 	require.Equal(t, llm.ToolsReasonModel, toolRecs[0]["reason"])
-	require.Equal(t, []string{"knomit_bind", "knomit_query"}, strs(toolRecs[0]["loaded"]))
-	require.Equal(t, []string{"knomit_bind", "knomit_query"}, strs(toolRecs[0]["loaded_now"]))
+	require.Equal(t, []string{"knomit_explain", "knomit_changes"}, strs(toolRecs[0]["loaded"]))
+	require.Equal(t, []string{"knomit_bind", "knomit_changes", "knomit_explain", "knomit_query"}, strs(toolRecs[0]["loaded_now"]), "the core tools were loaded from the opening")
 
 	// A preload record per turn, even when the guess loaded nothing.
 	pre := recordsOf(lines, "preload")
@@ -707,7 +710,7 @@ func TestChat_TurnWithNoChangeStillShowsTheLoadedSet(t *testing.T) {
 	h.useOllama()
 	total := len(h.toolNames(writer, "chat-00000000000000000000000000000a12"))
 	m := h.queueAdaptive("o1", 40000,
-		loadStep("tu_load", llm.Usage{Input: 50}, "knomit_query"),
+		loadStep("tu_load", llm.Usage{Input: 50}, "knomit_explain"),
 		textStep("one", llm.Usage{Input: 100}),
 		textStep("two", llm.Usage{Input: 120}),
 	)
@@ -718,8 +721,8 @@ func TestChat_TurnWithNoChangeStillShowsTheLoadedSet(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, blankMessage))
 	second := s.until("turn_done")
 
-	tokens := toolTokens(t, m.requests()[1], "knomit_query")
-	want := turnTools{Loaded: 0, Evicted: 0, LoadedNow: 1, Total: total, Tokens: tokens}
+	tokens := toolTokens(t, m.requests()[1], "knomit_explain") + toolTokens(t, m.requests()[1], "knomit_bind") + toolTokens(t, m.requests()[1], "knomit_query")
+	want := turnTools{Loaded: 0, Evicted: 0, LoadedNow: 3, Total: total, Tokens: tokens}
 	var d struct {
 		Tools *turnTools `json:"tools"`
 	}

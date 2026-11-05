@@ -208,7 +208,7 @@ func (c *chat) logPreload(turn int, res *llm.TurnResult) {
 // the preload budget P (window less reserve, over PreloadDivisor); if even the
 // tool names do not, the chat does not open, with the adaptive sentence of the
 // opening-too-big refusal.
-func (m *manager) openWindow(c *chat, cm llm.ChatModel, tools []llm.ToolDef) (*llm.ToolWindow, error) {
+func (m *manager) openWindow(c *chat, cm llm.ChatModel, tools []llm.ToolDef, b *llm.Builder) (*llm.ToolWindow, error) {
 	caps := cm.Caps()
 	st := &adaptiveState{total: len(tools)}
 	if caps.ContextWindow > 0 {
@@ -226,6 +226,9 @@ func (m *manager) openWindow(c *chat, cm llm.ChatModel, tools []llm.ToolDef) (*l
 	case err != nil:
 		return nil, err
 	}
+	// The core tools are loaded from the opening: the first turn shows them.
+	loaded, tokens := win.Observe(b.Snapshot())
+	st.loaded, st.tokens = len(loaded), tokens
 	c.adapt = st
 	c.log.Adaptive(primary, st.total, st.budget)
 	return win, nil

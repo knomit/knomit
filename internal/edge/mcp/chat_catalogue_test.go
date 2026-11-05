@@ -215,7 +215,7 @@ func TestChatToolWindow_CarriesCatalogueNamesReplayAndRanker(t *testing.T) {
 	w, err := NewChatToolWindow(defs, ranker, 0)
 	require.NoError(t, err)
 	require.True(t, w.Handles(llm.LoadToolsName))
-	require.True(t, w.Handles("knomit_query"), "a catalogue tool that is not loaded is the window's")
+	require.True(t, w.Handles("knomit_explain"), "a catalogue tool that is not loaded is the window's")
 	require.False(t, w.Handles("not_a_tool"))
 
 	// The projection sends the loader first; its description is the approved
@@ -223,7 +223,7 @@ func TestChatToolWindow_CarriesCatalogueNamesReplayAndRanker(t *testing.T) {
 	b := llm.NewBuilder()
 	require.NoError(t, AddPrefix(b, "instructions", defs))
 	sent := w.Project(b.Snapshot())
-	require.Len(t, sent.Hooks[llm.HookTools], 1)
+	require.Len(t, sent.Hooks[llm.HookTools], 1+len(ChatCoreTools), "the loader, then the core tools")
 	loader := sent.Hooks[llm.HookTools][0].Tool
 	require.Equal(t, llm.LoadToolsName, loader.Name)
 	cat, err := BuildCatalogue(defs, 0)

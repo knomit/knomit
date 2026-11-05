@@ -114,8 +114,20 @@ func NewChatToolWindow(tools []llm.ToolDef, ranker llm.ToolRanker, budget int) (
 	}
 	return llm.NewToolWindow(llm.ToolWindowSpec{
 		Loader: llm.LoaderDef(cat), Names: names, Replayable: Replayable, Ranker: ranker,
+		Core: ChatCoreTools,
 	})
 }
+
+// ChatCoreTools is the policy list of tools an adaptive chat always has in its
+// window: loaded from the opening, never evicted, never a preload pick. They
+// are the two nearly every turn needs: knomit_bind (nothing else works until a
+// repo is bound) and knomit_query (the plain "what do we know about..."
+// question). Chosen because the live acceptance run showed a 4B model does not
+// call load_tools, so a tool it must load first is a tool it never uses; every
+// other tool stays adaptive (preload plus load_tools). The list is policy, not
+// a measurement of usage, and it adds no more than these two definitions to
+// the opening (TestChatToolWindow_OpeningWithTheCoreSetFitsA32KModel).
+var ChatCoreTools = []string{"knomit_bind", "knomit_query"}
 
 // AddPrefix puts the shared hooks into b: one tool:<name> item per tool
 // (hook 1), ChatSystemPrompt as "system" (hook 2) and instructions as
