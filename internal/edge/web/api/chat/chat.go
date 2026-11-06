@@ -128,16 +128,19 @@ type chat struct {
 	ended      bool
 	running    bool
 	turnCancel context.CancelFunc
-	turns      sync.WaitGroup
-	view       []viewItem
-	turnAt     int // index in view of the running (or last) turn's user item
-	calls      map[string]llm.ToolUse
-	pending    map[string]*pendingApproval
-	grants     map[grantKey]grantInfo
-	meta       map[string]callMeta
-	subs       map[*subscriber]struct{}
-	attached   int
-	grace      *time.Timer
+	// missedEnd is the last turn's terminal frame when no stream was attached
+	// to take it; the next stream to attach is sent it once.
+	missedEnd []byte
+	turns     sync.WaitGroup
+	view      []viewItem
+	turnAt    int // index in view of the running (or last) turn's user item
+	calls     map[string]llm.ToolUse
+	pending   map[string]*pendingApproval
+	grants    map[grantKey]grantInfo
+	meta      map[string]callMeta
+	subs      map[*subscriber]struct{}
+	attached  int
+	grace     *time.Timer
 
 	// Per-request flags the truncation wording needs: whether the last
 	// request streamed text, and whether it streamed reasoning.
@@ -308,6 +311,18 @@ func (c *chat) callMetaOf(callID string) (string, string) {
 // emit sends one SSE event to every attached stream. A stream that cannot keep
 // up is dropped (its channel closed); the client reconnects and refetches.
 func (c *chat) emit(kind string, data any) {
+	c.send(kind, data, false)
+}
+
+// emitEnd sends a turn's terminal event (turn_done or turn_error). If no
+// stream took it, the frame is kept for the next stream to attach, which gets
+// it right after ready: a turn can outlive the stream it started on, and the
+// end of a turn must reach the client once whichever stream is attached then.
+func (c *chat) emitEnd(kind string, data any) {
+	c.send(kind, data, true)
+}
+
+func (c *chat) send(kind string, data any, terminal bool) {
 	b, err := json.Marshal(data)
 	if err != nil {
 		return
@@ -315,12 +330,20 @@ func (c *chat) emit(kind string, data any) {
 	frame := []byte("event: " + kind + "\ndata: " + string(b) + "\n\n")
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	delivered := false
 	for s := range c.subs {
 		select {
 		case s.ch <- frame:
+			delivered = true
 		default:
 			delete(c.subs, s)
 			close(s.ch)
+		}
+	}
+	if terminal {
+		c.missedEnd = nil
+		if !delivered {
+			c.missedEnd = frame
 		}
 	}
 }
@@ -334,6 +357,10 @@ func (c *chat) attach() (*subscriber, bool) {
 		return nil, false
 	}
 	s := &subscriber{ch: make(chan []byte, 256)}
+	if c.missedEnd != nil {
+		s.ch <- c.missedEnd
+		c.missedEnd = nil
+	}
 	c.subs[s] = struct{}{}
 	c.attached++
 	if c.grace != nil {
@@ -375,6 +402,7 @@ func (c *chat) startTurn(text string) (int, error) {
 		return 0, errBusy
 	}
 	c.running = true
+	c.missedEnd = nil // the previous turn's end is history now: a refetch has it
 	ctx, cancel := context.WithCancel(c.ctx)
 	c.turnCancel = cancel
 	c.turnAt = len(c.view)
@@ -437,14 +465,14 @@ func (c *chat) finishTurn(ctx context.Context, res *llm.TurnResult, err error) {
 		if tools != nil {
 			done["tools"] = tools
 		}
-		c.emit("turn_done", done)
+		c.emitEnd("turn_done", done)
 		return
 	}
 	if !truncatedBare && cancelled {
-		c.emit("turn_error", map[string]any{"message": msg, "cancelled": true, "turn": turn})
+		c.emitEnd("turn_error", map[string]any{"message": msg, "cancelled": true, "turn": turn})
 		return
 	}
-	c.emit("turn_error", map[string]any{"message": msg, "turn": turn})
+	c.emitEnd("turn_error", map[string]any{"message": msg, "turn": turn})
 }
 
 func errString(err error) string {
