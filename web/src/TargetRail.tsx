@@ -207,12 +207,13 @@ export function TargetRail({
                 onClick={() => { release(); onPickDraft?.('chat'); }} />
             )}
             {chats.length === 0 && !drafts.chat && <div style={{ color: '#555', fontSize: 12, padding: '4px 10px' }}>None</div>}
-            {shownChats.map(c => {
+            {shownChats.map((c, i) => {
               const selected = pinned?.kind === 'chat' && pinned.id === c.id && draftShown === null;
               return (
                 <ChatRailRow
                   key={c.id}
                   chat={c}
+                  index={i}
                   providerKind={chatProviders.find(p => p.name === c.provider)?.kind}
                   state={railState(c, chatSeen[c.id], selected)}
                   selected={selected}

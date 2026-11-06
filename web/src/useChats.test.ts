@@ -38,6 +38,28 @@ describe('useChats', () => {
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(before));
   });
 
+  it('a chat_state that arrives while a reconnect re-read is in flight is not overwritten by the older list', async () => {
+    const row = (state: string, turns: number) => ({ id: 'chat-a', provider: 'anthropic', model: 'm', title: 't', state, turns, last_activity: '2026-11-06T10:00:00Z' });
+    let release!: () => void;
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>()
+      .mockResolvedValueOnce(listBody(row('running', 1)))
+      // The reconnect's read: cut while the chat was still running.
+      .mockImplementationOnce(() => new Promise<Response>(res => { release = () => res(listBody(row('running', 1))); }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useChats());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    await waitFor(() => expect(latestStream(CHAT_EVENTS_STREAM)).toBeTruthy());
+    const es = latestStream(CHAT_EVENTS_STREAM)!;
+    act(() => { es.emit('ready', {}); }); // a reconnect: the re-read starts
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    // The turn ends while the read is in flight.
+    act(() => { es.emit('chat_state', { chat: 'chat-a', state: 'idle', turns: 1, title: 't', last_activity: '2026-11-06T10:05:00Z', started_at: 's' }); });
+    expect(result.current.chats[0].state).toBe('idle');
+    // The older answer lands: the newer event still wins.
+    await act(async () => { release(); });
+    expect(result.current.chats[0]).toMatchObject({ state: 'idle', last_activity: '2026-11-06T10:05:00Z' });
+  });
+
   it('loads GET /chats and add() makes a new chat visible in the same render, with no further fetch', async () => {
     const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => listBody(A));
     vi.stubGlobal('fetch', fetchMock);

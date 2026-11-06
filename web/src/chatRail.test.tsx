@@ -86,11 +86,32 @@ describe('the Chats group', () => {
     expect(screen.queryByTestId('rail-chats-more')).toBeNull();
   });
 
-  it('keeps a selected chat out of the hidden ones', () => {
-    const chats = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6'].map((id, i) => chat(id, { last_activity: `2026-11-06T10:00:0${i}Z` }));
+  it('keeps a selected chat out of the hidden ones: 7 chats, the oldest selected, "1 more" and the row visible', () => {
+    const chats = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7'].map((id, i) => chat(id, { last_activity: `2026-11-06T10:00:0${i}Z` }));
+    // c1 is the oldest: the five most recent are c7..c3, so c1 and c2 would be hidden.
     rail({ chats, pinned: { kind: 'chat', id: 'c1' } });
     expect(screen.getByTestId('rail-chat-c1')).toHaveAttribute('aria-current', 'true');
-    expect(screen.queryByTestId('rail-chats-more')).toBeNull();
+    expect(screen.queryByTestId('rail-chat-c2')).toBeNull();
+    expect(screen.getAllByTestId(/^rail-chat-title-/).map(e => e.textContent)).toEqual(['title c7', 'title c6', 'title c5', 'title c4', 'title c3', 'title c1']);
+    expect(screen.getByTestId('rail-chats-more')).toHaveTextContent('1 more');
+  });
+
+  it("closes a row's tooltip when rows re-sort under the pointer", () => {
+    const a = chat('c1', { last_activity: '2026-11-06T10:00:02Z' });
+    const b = chat('c2', { last_activity: '2026-11-06T10:00:01Z' });
+    const { rerender } = rail({ chats: [a, b] });
+    fireEvent.mouseEnter(screen.getByTestId('rail-chat-wrap-c1'));
+    expect(screen.getByTestId('rail-chat-tip-c1')).toBeInTheDocument();
+    // c2 becomes the most recent: c1 moves down, c2 up. No mouseleave fires.
+    rerender(
+      <TargetRail repos={[]} lenses={[]} context={{ kind: 'repo', repo: 'a' }} currentRepo="a" remoteError="" serverReadOnly={false}
+        onSelect={vi.fn()} chatProviders={providers} chatsAvailable chats={[a, { ...b, last_activity: '2026-11-06T10:00:09Z' }]} />,
+    );
+    expect(screen.queryByTestId('rail-chat-tip-c1')).toBeNull();
+    expect(screen.queryByTestId('rail-chat-tip-c2')).toBeNull();
+    // The pointer moving over the row under it opens that row's tooltip.
+    fireEvent.mouseMove(screen.getByTestId('rail-chat-wrap-c2'));
+    expect(screen.getByTestId('rail-chat-tip-c2')).toBeInTheDocument();
   });
 
   it('a row is one line: the mark, then the title with an ellipsis, and nothing else', () => {
@@ -219,6 +240,18 @@ describe('the crumb', () => {
     const t = targetLabelFor({ kind: 'chat', id: 'c1' } as never, [], [], [], null, [chat('c1', { title: '', name: 'Sonnet 5.5' })], providersK);
     expect(t.name).toBe('Sonnet 5.5');
     expect(t.sub).toBeUndefined();
+  });
+
+  it('the model name gives way before the title: it shrinks first and is dropped on narrow screens', () => {
+    render(<TopBar state={{ ...init, repo: 'alpha', context: { kind: 'repo', repo: 'alpha' } }} repos={[]} railOpen={false} onToggleRail={() => {}} onGear={() => {}} facets={['chat', 'settings']} facet="chat"
+      label={{ kind: 'chat', name: 'What changed this week?', sub: 'Sonnet 5.5', id: 'c1' }} />);
+    const sub = screen.getByTestId('target-label-sub');
+    expect(sub.className).toBe('k-bar-sub'); // App.css hides it at 640px and below
+    expect(sub.style.flexShrink).toBe('100');
+    expect(sub.style.minWidth).toBe('0px');
+    expect(sub.style.textOverflow).toBe('ellipsis');
+    const name = screen.getByTestId('target-label').querySelector('.k-bar-name') as HTMLElement;
+    expect(name.style.flexShrink).toBe(''); // the title keeps the default (1), far below the sub's 100
   });
 
   it('the top bar draws the model name in grey after the title', () => {

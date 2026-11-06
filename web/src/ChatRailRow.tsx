@@ -24,8 +24,11 @@ function startedAt(iso: string | undefined): string {
  * chat's state) and the title with an ellipsis. Hovering shows a tooltip and an
  * x that ends the chat; a chat with a turn running asks first, inline.
  */
-export function ChatRailRow({ chat, providerKind, state, selected, locked, rowStyle, onPin, onEnd }: {
+export function ChatRailRow({ chat, index, providerKind, state, selected, locked, rowStyle, onPin, onEnd }: {
   chat: ChatInfo;
+  /** The row's place in the list. Rows re-sort live; a moved row's tooltip is
+   *  closed (the pointer is no longer over it and no mouseleave fires). */
+  index: number;
   providerKind?: string;
   state: RailState;
   selected: boolean;
@@ -39,6 +42,8 @@ export function ChatRailRow({ chat, providerKind, state, selected, locked, rowSt
   const [hover, setHover] = useState(false);
   const [tipAt, setTipAt] = useState<{ left: number; top: number } | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [at, setAt] = useState(index);
+  if (at !== index) { setAt(index); setHover(false); setTipAt(null); }
   const title = chat.title || chat.name || chat.model;
   const words = STATE_WORDS[state];
   const busy = chat.state === 'running' || chat.state === 'awaiting_approval';
@@ -53,7 +58,7 @@ export function ChatRailRow({ chat, providerKind, state, selected, locked, rowSt
 
   return (
     <div ref={wrap} data-testid={`rail-chat-wrap-${chat.id}`} style={{ position: 'relative' }}
-      onMouseEnter={enter} onMouseLeave={leave}>
+      onMouseEnter={enter} onMouseLeave={leave} onMouseMove={() => { if (!hover) enter(); }}>
       <button
         type="button"
         data-testid={`rail-chat-${chat.id}`}

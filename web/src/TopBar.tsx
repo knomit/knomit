@@ -243,7 +243,9 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
             }}>
               {label.icon}
               <span className="k-bar-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label.name}</span>
-              {target.sub && <span data-testid="target-label-sub" style={{ color: '#7a7a7a', fontWeight: 400, flexShrink: 0 }}>{target.sub}</span>}
+              {/* The grey model name gives way first: it shrinks before the title does,
+                  and is dropped below the narrow breakpoint (App.css). */}
+              {target.sub && <span className="k-bar-sub" data-testid="target-label-sub" style={{ color: '#7a7a7a', fontWeight: 400, flexShrink: 100, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{target.sub}</span>}
               {/* A target with only Settings says why: archived, its store
                   missing, or still being created. */}
               {target.chip && (

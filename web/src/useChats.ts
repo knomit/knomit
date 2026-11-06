@@ -27,17 +27,24 @@ export function useChats(enabled = true): {
   const added = useRef(new Map<string, number>());
   const removed = useRef(new Map<string, number>());
   const reloadRef = useRef<() => void>(() => {});
+  // One map per list read still in flight: the rows chat_state updated meanwhile.
+  const inFlight = useRef(new Set<Map<string, Partial<ChatInfo>>>());
 
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
     const load = () => {
       const startedAt = rev.current;
+      // chat_state events applied while this read is in flight: the read was cut
+      // before them, so its rows for those chats are older and must not win.
+      const during = new Map<string, Partial<ChatInfo>>();
+      inFlight.current.add(during);
       listChats().then(list => {
+        inFlight.current.delete(during);
         if (cancelled) return;
         const gone = (id: string) => (removed.current.get(id) ?? -1) > startedAt;
         setChats(prev => {
-          const out = list.filter(c => !gone(c.id));
+          const out = list.filter(c => !gone(c.id)).map(c => (during.has(c.id) ? { ...c, ...during.get(c.id) } : c));
           for (const c of prev) {
             if ((added.current.get(c.id) ?? -1) > startedAt && !out.some(o => o.id === c.id)) out.push(c);
           }
@@ -45,6 +52,7 @@ export function useChats(enabled = true): {
         });
         setLoaded(true);
       }).catch(() => {
+        inFlight.current.delete(during);
         // An unreadable list leaves it as it was. Never loaded, so nothing is
         // unpinned on its account.
       });
@@ -75,12 +83,14 @@ export function useChats(enabled = true): {
         return;
       }
       if (name !== 'chat_state') return;
-      setChats(prev => prev.map(c => c.id !== id ? c : {
-        ...c,
+      const patch: Partial<ChatInfo> = {
         title: String(data.title ?? ''), state: data.state as ChatInfo['state'], turns: Number(data.turns ?? 0),
         last_activity: String(data.last_activity ?? ''), started_at: String(data.started_at ?? ''),
         cost_usd: typeof data.cost_usd === 'number' ? data.cost_usd : undefined,
-      }));
+      };
+      // A list read in flight is older than this event: it must not undo it.
+      for (const during of inFlight.current) during.set(id, patch);
+      setChats(prev => prev.map(c => c.id !== id ? c : { ...c, ...patch }));
     }));
     return () => offs.forEach(off => off());
   }, [enabled, ids]);
