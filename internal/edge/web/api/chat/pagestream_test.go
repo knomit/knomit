@@ -111,9 +111,13 @@ func TestPageStream_ChatStateTracksTheRow(t *testing.T) {
 // A chat lives while ANY page stream of its owner is attached, and ends the
 // grace after the last one closes. Two streams are two tabs.
 //
-// SABOTAGE: mount.go detachPage, start the grace clocks without checking that
-// the set is empty (drop `if empty`) -> the chat ends when the first tab
-// closes and this fails.
+// Two independent guards keep the chat alive when one of two tabs closes:
+// detachPage starts the clocks only when the owner's set is empty, and
+// graceFired re-checks the count. This end-to-end test fails only when BOTH
+// are broken; the tests in pagestream_grace_test.go each fail on one guard.
+//
+// SABOTAGE: mount.go detachPage `if empty {` -> `if true {` AND chat.go
+// graceFired, skip the pageCount return -> the chat ends and this fails.
 func TestPageStream_ChatLivesWhileAnyStreamIsAttached(t *testing.T) {
 	shortGrace(t, 250*time.Millisecond)
 	h := newHarness(t)

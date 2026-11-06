@@ -185,7 +185,10 @@ type chat struct {
 	// right after ready.
 	missedEnd []byte
 	lastState []byte // the last chat_state frame body sent, to send only changes
-	grace     *time.Timer
+	// afterGraceStep is a test seam: graceFired calls it after clearing the
+	// fired timer and before it counts the owner's streams.
+	afterGraceStep func()
+	grace          *time.Timer
 
 	// Per-request flags the truncation wording needs: whether the last
 	// request streamed text, and whether it streamed reasoning.
@@ -469,11 +472,7 @@ func (c *chat) adoptPage(s *pageSub) {
 		c.grace.Stop()
 		c.grace = nil
 	}
-	if c.missedEnd != nil {
-		select {
-		case s.ch <- c.missedEnd:
-		default:
-		}
+	if c.missedEnd != nil && c.m.deliverTo(s, c.missedEnd) {
 		c.missedEnd = nil
 	}
 }
@@ -490,11 +489,19 @@ func (c *chat) startGrace() {
 }
 
 func (c *chat) graceFired() {
+	// Clear the fired timer FIRST, then look at the streams: a stream that
+	// closes after the look finds no timer and starts a new one (startGrace
+	// returns early while c.grace is set), so the chat is never left with no
+	// stream and no clock.
+	c.mu.Lock()
+	c.grace = nil
+	hook := c.afterGraceStep
+	c.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	// A stream may have attached while the timer was already running out.
 	if c.m.pageCount(c.owner) > 0 {
-		c.mu.Lock()
-		c.grace = nil
-		c.mu.Unlock()
 		return
 	}
 	c.end("stream_grace")

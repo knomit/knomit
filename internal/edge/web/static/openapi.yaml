@@ -77,7 +77,8 @@ tags:
     description: |
       The web chat: an in-process model that reaches knomit only through its
       own MCP tools. Chats are owned by the principal that started them, live
-      while an events stream is attached (60 s grace), and ask before any
+      while a page events stream of their owner is attached (60 s grace after
+      the owner's last one closes), and ask before any
       tool call that writes.
   - name: secrets
     description: |

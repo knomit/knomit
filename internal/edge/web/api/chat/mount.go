@@ -230,6 +230,24 @@ func (m *manager) broadcast(owner string, frame []byte) bool {
 	return delivered
 }
 
+// deliverTo offers frame to s, only while s is still attached: broadcast
+// closes the channel of a stream it drops, and sending on it would panic. It
+// reports whether s took the frame. Called with a chat's mu held (lock order:
+// chat.mu, then pageMu).
+func (m *manager) deliverTo(s *pageSub, frame []byte) bool {
+	m.pageMu.Lock()
+	defer m.pageMu.Unlock()
+	if _, ok := m.pages[s.owner][s]; !ok {
+		return false
+	}
+	select {
+	case s.ch <- frame:
+		return true
+	default:
+		return false
+	}
+}
+
 // attachPage registers owner's page stream. Every chat of the owner stops its
 // grace clock, and takes the terminal event no stream received into the stream.
 func (m *manager) attachPage(owner string) *pageSub {
