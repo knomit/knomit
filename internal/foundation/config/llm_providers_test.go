@@ -159,6 +159,69 @@ func TestLLMProviders_APIKeyEnvValidNameAndEmptyLoad(t *testing.T) {
 	require.Equal(t, "", cfg.LLM.Providers["prov-y"].APIKeyEnv)
 }
 
+// A models entry is a plain id or an inline { id, name } table, mixed freely.
+// The name is display-only: the id is the identity, so the per-model table
+// is still keyed by id.
+func TestLLMProviders_ModelEntriesMixedWithNames(t *testing.T) {
+	writeConfig(t, `
+[llm.providers.anthropic]
+kind = "anthropic"
+models = [
+  { id = "hf.co/unsloth/Qwen3.5-4B-GGUF:Q4_K_M", name = "Qwen 3.5 4B" },
+  "lfm3:1.7b",
+]
+[llm.providers.anthropic.model."hf.co/unsloth/Qwen3.5-4B-GGUF:Q4_K_M"]
+effort = "low"
+`)
+	cfg, err := Load()
+	require.NoError(t, err)
+	p := cfg.LLM.Providers["anthropic"]
+	require.Equal(t, []string{"hf.co/unsloth/Qwen3.5-4B-GGUF:Q4_K_M", "lfm3:1.7b"}, p.Models)
+	require.Equal(t, "Qwen 3.5 4B", p.ModelName("hf.co/unsloth/Qwen3.5-4B-GGUF:Q4_K_M"))
+	require.Equal(t, "lfm3:1.7b", p.ModelName("lfm3:1.7b"), "no name: the id")
+	require.Equal(t, "gone:1", p.ModelName("gone:1"), "not listed: the id")
+	require.Equal(t, "low", p.ModelDefaults["hf.co/unsloth/Qwen3.5-4B-GGUF:Q4_K_M"].Effort,
+		"the name does not change the per-model table lookup")
+}
+
+// Each shape or uniqueness rejection names the provider, the index and the rule.
+func TestLLMProviders_ModelEntryRejections(t *testing.T) {
+	const at = "config: [llm.providers.anthropic]"
+	for name, tc := range map[string]struct{ models, want string }{
+		"number entry":       {`[1]`, at + ".models[0]: must be a model id or { id, name }"},
+		"table without id":   {`[{ name = "X" }]`, at + ".models[0]: id is required"},
+		"non-string id":      {`[{ id = 3 }]`, at + ".models[0]: must be a model id or { id, name }"},
+		"empty id":           {`[{ id = "", name = "X" }]`, at + ".models[0]: id is required"},
+		"empty plain id":     {`["a1", ""]`, at + ".models[1]: id is required"},
+		"empty name":         {`[{ id = "a1", name = "  " }]`, at + ".models[0]: name must not be empty"},
+		"non-string name":    {`[{ id = "a1", name = 7 }]`, at + ".models[0]: must be a model id or { id, name }"},
+		"duplicate id":       {`["a1", { id = "a1", name = "Again" }]`, at + ".models: id \"a1\" is listed more than once"},
+		"duplicate name":     {`[{ id = "a1", name = "Same" }, { id = "a2", name = "Same" }]`, at + ".models: name \"Same\" is used by more than one model"},
+		"name is another id": {`[{ id = "a1", name = "a2" }, "a2"]`, at + ".models: name \"a2\" is the id of another model"},
+		"plain id is a name": {`["a2", { id = "a1", name = "a2" }]`, at + ".models: name \"a2\" is the id of another model"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			writeConfig(t, "[llm.providers.anthropic]\nkind = \"anthropic\"\nmodels = "+tc.models+"\n")
+			_, err := Load()
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
+// A name equal to the model's own id is fine, and two providers may share a name.
+func TestLLMProviders_NamesUniqueOnlyWithinProvider(t *testing.T) {
+	writeConfig(t, `
+[llm.providers.one]
+kind = "anthropic"
+models = [{ id = "a1", name = "a1" }, { id = "a2", name = "Shared" }]
+[llm.providers.two]
+kind = "anthropic"
+models = [{ id = "b1", name = "Shared" }]
+`)
+	_, err := Load()
+	require.NoError(t, err)
+}
+
 func TestLLMProviders_RefuseUnbuiltKind(t *testing.T) {
 	writeConfig(t, "[llm.providers.g]\nkind = \"gemini\"\nmodels = [\"g1\"]\n")
 	_, err := Load()

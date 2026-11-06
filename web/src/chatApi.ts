@@ -3,17 +3,38 @@
 // fetchJSON and every event stream through openEventStream, which is what
 // makes the desktop's Wails transport work for chat too.
 import { fetchJSON, apiUrl } from './api';
-import { openEventStream } from './eventStream';
-import type { EventSourceLike } from './eventStream';
 import { CHAT_SEND_TIMEOUT } from './chatCopy';
 
 /** One live chat, as GET /chats lists it. */
-export interface ChatInfo { id: string; provider: string; model: string }
+/** `name` is the model's display name; the server always sends it (the id when
+ *  the config gives none), and a reader falls back to `model` when it is absent. */
+export interface ChatInfo {
+  id: string; provider: string; model: string; name?: string;
+  /** Only on a chat created with its first message: that turn's view index. */
+  turn?: number;
+  /** What GET /chats and the page stream's chat_state add for the rail (absent
+   *  on a chat just created). `title` is the first message, cut; `state` is what
+   *  the chat is doing now; `turns` counts the user turns; `cost_usd` is absent
+   *  when nothing was priced. */
+  title?: string; state?: ChatState; last_activity?: string; started_at?: string; turns?: number; cost_usd?: number;
+}
+export type ChatState = 'idle' | 'running' | 'awaiting_approval' | 'error';
 
-/** A model the picker offers: `available` is the provider's own answer, `tools`
+/** A model the picker offers: `name` is what a person sees (its id when the
+ *  config gives none), `available` is the provider's own answer, `tools`
  *  whether it can call tools, `reason` says why a model is unusable. */
-export interface ChatModelOption { id: string; available: boolean; tools: boolean; reason?: string }
-export interface ChatProvider { name: string; kind: string; models: ChatModelOption[] }
+export interface ChatPriceTier { up_to_prompt_tokens: number; input_per_mtok: number; output_per_mtok: number }
+/** A model's configured price card (the server sends it; no price lives in the page). */
+export interface ChatPrice { tiers: ChatPriceTier[]; cache_read_mult: number; cache_write_5m_mult: number; warn_prompt_tokens: number }
+export interface ChatModelOption {
+  id: string; name?: string; available: boolean; tools: boolean; reason?: string;
+  best_for?: string; context_window?: number; effort?: string; price?: ChatPrice;
+  /** Ollama only. */
+  num_ctx?: number; parameter_size?: string; quantization?: string; keep_alive?: string;
+}
+/** `host` is where an Ollama provider runs; `key_source` is the NAME of the
+ *  env var an Anthropic key is read from (never the key). */
+export interface ChatProvider { name: string; kind: string; host?: string; key_source?: string; reachable?: boolean; models: ChatModelOption[] }
 
 /** A row of GET /chats/{id}'s transcript. Tool results are not in it: they are
  *  fetched lazily from the call (getChatCall). */
@@ -21,6 +42,12 @@ export interface ChatViewItem {
   kind: 'user' | 'assistant' | 'tool_call';
   text?: string; id?: string; name?: string; arguments?: unknown;
   state?: 'running' | 'done'; is_error?: boolean;
+  /** On a finished tool call: how long the tool ran, and its result in one number. */
+  duration_ms?: number; summary?: ChatCallSummary;
+  /** On a user item: the structured detail of `warning` and of `error`. */
+  warning_info?: ChatNotice; error_info?: ChatNotice;
+  /** On a user item: the send_id of the POST that started the turn (absent for a turn that came without one). */
+  send_id?: string;
   /** On a user item: how the turn it opens went (see chat.go viewItem). */
   usage?: { input: number; cache_read: number; cache_write: number; output: number };
   cost_usd?: number; warning?: string; error?: string; cancelled?: boolean;
@@ -35,6 +62,20 @@ export interface ChatViewItem {
  *  provider keeps every tool in every request. */
 export interface ChatTurnTools { loaded: number; evicted: number; loaded_now: number; total: number; tokens: number }
 
+/** A finished call's result in one number (a query's fact count). */
+export interface ChatCallSummary { count: number }
+
+/** The numbers behind a notice, so the page words the line itself. A
+ *  "price_tier" carries the prompt size, the threshold, the tier boundary
+ *  (`tier_tokens`, 0 with one tier), the price multiplier and the model; a
+ *  "context_full" carries what the request needed (0 when only the provider
+ *  knew) and the model's window. */
+export interface ChatNotice {
+  kind: 'price_tier' | 'context_full';
+  prompt_tokens?: number; threshold?: number; tier_tokens?: number; mult?: number; model?: string;
+  needed?: number; window?: number;
+}
+
 /** A tool call waiting for the person. `target` is empty when the server could
  *  not resolve the call's repo or lens. */
 export interface ChatApproval {
@@ -48,7 +89,13 @@ export interface ChatApproval {
 export interface ChatGrant { target: string; kind: string; tool: string; action: string }
 
 export interface ChatSnapshot extends ChatInfo {
-  running: boolean; usage_seq?: number; items: ChatViewItem[]; pending_approvals: ChatApproval[]; grants: ChatGrant[];
+  running: boolean; usage_seq?: number;
+  /** The last request's prompt tokens: what the context meter shows as used. */
+  prompt_tokens?: number;
+  /** The slowest time to a first reply this model took in this server run, in
+   *  ms; absent until one has been observed. */
+  expected_first_token_ms?: number;
+  items: ChatViewItem[]; pending_approvals: ChatApproval[]; grants: ChatGrant[];
 }
 
 /** GET /chats/{id}/calls/{callId}. */
@@ -67,12 +114,16 @@ export async function listChatProviders(): Promise<ChatProvider[]> {
 
 export async function listChats(): Promise<ChatInfo[]> {
   const data = await fetchJSON<{ _embedded?: { chats?: ChatInfo[] } }>(chatsUrl());
-  return (data._embedded?.chats ?? []).map(({ id, provider, model }) => ({ id, provider, model }));
+  return (data._embedded?.chats ?? []).map(({ id, provider, model, name, title, state, last_activity, started_at, turns, cost_usd }) => (
+    { id, provider, model, name, title, state, last_activity, started_at, turns, cost_usd }));
 }
 
-export async function createChat(provider: string, model: string): Promise<ChatInfo> {
-  const c = await fetchJSON<ChatInfo>(chatsUrl(), { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ provider, model }) });
-  return { id: c.id, provider: c.provider, model: c.model };
+/** Start a chat. With `message` the first turn starts in the same call, and the
+ *  result carries that turn's index. */
+export async function createChat(provider: string, model: string, message?: string): Promise<ChatInfo> {
+  const body = message ? { provider, model, message } : { provider, model };
+  const c = await fetchJSON<ChatInfo>(chatsUrl(), { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body) });
+  return { id: c.id, provider: c.provider, model: c.model, name: c.name, ...(c.turn !== undefined ? { turn: c.turn } : {}) };
 }
 
 export function getChat(id: string): Promise<ChatSnapshot> {
@@ -88,12 +139,12 @@ export function getChat(id: string): Promise<ChatSnapshot> {
  *  minutes. If it did reach the server, the turn shows up in the next snapshot. */
 export const SEND_TIMEOUT_MS = 15_000;
 
-export async function sendChatTurn(id: string, text: string, timeoutMs = SEND_TIMEOUT_MS): Promise<unknown> {
+export async function sendChatTurn(id: string, text: string, sendId: string, timeoutMs = SEND_TIMEOUT_MS): Promise<unknown> {
   const url = `${chatUrl(id)}/turns`;
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    return await fetchJSON(url, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ text }), signal: ctl.signal });
+    return await fetchJSON(url, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ text, send_id: sendId }), signal: ctl.signal });
   } catch (e) {
     if (ctl.signal.aborted) throw new Error(`${url} → ${CHAT_SEND_TIMEOUT}`);
     throw e;
@@ -113,8 +164,12 @@ async function noContent(url: string, init: RequestInit): Promise<void> {
   }
 }
 
-export function cancelChatTurn(id: string): Promise<void> {
-  return noContent(`${chatUrl(id)}/cancel`, { method: 'POST' });
+/** Stop. With `sendId` (the id the send went out under) the server also
+ *  withdraws that send if it has not accepted it yet. */
+export function cancelChatTurn(id: string, sendId?: string): Promise<void> {
+  return noContent(`${chatUrl(id)}/cancel`, sendId
+    ? { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ send_id: sendId }) }
+    : { method: 'POST' });
 }
 
 export function answerChatApproval(id: string, callId: string, decision: ApprovalDecision): Promise<void> {
@@ -125,12 +180,6 @@ export function answerChatApproval(id: string, callId: string, decision: Approva
 
 export function deleteChat(id: string): Promise<void> {
   return noContent(chatUrl(id), { method: 'DELETE' });
-}
-
-/** The page is going away: end the chat. `keepalive` lets the request outlive
- *  the page. Fire and forget; the server's stream grace is the backstop. */
-export function endChatOnPageHide(id: string): void {
-  try { void fetch(chatUrl(id), { method: 'DELETE', keepalive: true }).catch(() => {}); } catch { /* going away */ }
 }
 
 export async function listChatGrants(id: string): Promise<ChatGrant[]> {
@@ -146,7 +195,7 @@ export function revokeChatGrant(id: string, grant: ChatGrant): Promise<void> {
 /** The chat model's context window, how it was resolved ("config", "memory",
  *  "trained"; absent when the model does not say) and whether Ollama reported
  *  it partly on the CPU after the first request. */
-export interface ChatContext { window: number; how?: string; spill: boolean }
+export interface ChatContext { window: number; how?: string; spill: boolean; prompt_tokens?: number }
 
 export function getChatContext(id: string): Promise<ChatContext> {
   return fetchJSON<ChatContext>(`${chatUrl(id)}/context`);
@@ -158,10 +207,10 @@ export function getChatCall(id: string, callId: string): Promise<ChatCall> {
 
 /** The server's SSE event names (internal/edge/web/api/chat/chat.go). */
 export const CHAT_EVENT_NAMES = [
-  'ready', 'text_delta', 'reasoning', 'tool_call', 'tools', 'approval', 'usage', 'warning', 'turn_done', 'turn_error', 'chat_end',
+  'ready', 'text_delta', 'thinking_delta', 'reasoning', 'tool_call', 'tools', 'approval', 'usage', 'warning', 'turn_done', 'turn_error', 'chat_state', 'chat_end',
 ] as const;
 export type ChatEventName = typeof CHAT_EVENT_NAMES[number];
 
-export function openChatEvents(id: string): EventSourceLike {
-  return openEventStream(`${chatUrl(id)}/events`);
-}
+/** The page's one events stream (see chatEvents.ts): every chat of the caller,
+ *  each event tagged with `chat`. */
+export const chatEventsUrl = (): string => `${chatsUrl()}/events`;

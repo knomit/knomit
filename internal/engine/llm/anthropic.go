@@ -400,6 +400,9 @@ func (a *AnthropicChat) Stream(ctx context.Context, s Snapshot, o StreamOptions,
 				pb.args.WriteString(ev.Delta.PartialJSON)
 			case "thinking_delta":
 				pb.thinking.WriteString(ev.Delta.Thinking)
+				if a.o.Profile.ThinkingDisplay == DisplaySummarized {
+					o.thinking(ev.Delta.Thinking)
+				}
 			case "signature_delta":
 				pb.sig.WriteString(ev.Delta.Signature)
 			}

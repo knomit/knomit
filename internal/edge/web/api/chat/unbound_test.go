@@ -72,10 +72,9 @@ func TestChat_NilStoreSessionWriteAsksAndIsNotGrantable(t *testing.T) {
 	c := &chat{
 		id: "chat-nilstore", sess: &mcp.InProcessSession{},
 		meta: map[string]callMeta{}, pending: map[string]*pendingApproval{}, grants: map[grantKey]grantInfo{},
-		subs: map[*subscriber]struct{}{},
+		m: &manager{},
 	}
-	sub := &subscriber{ch: make(chan []byte, 4)}
-	c.subs[sub] = struct{}{}
+	sub := c.m.attachPage("")
 
 	args, err := json.Marshal(map[string]any{"binding": "looks-valid", "moment_name": "m", "facts": []any{}})
 	require.NoError(t, err)

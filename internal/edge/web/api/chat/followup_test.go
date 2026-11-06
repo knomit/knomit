@@ -103,7 +103,6 @@ func TestChat_OtherPrincipalGets404(t *testing.T) {
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodGet, "/chats/" + id},
 		{http.MethodDelete, "/chats/" + id},
-		{http.MethodGet, "/chats/" + id + "/events"},
 		{http.MethodPost, "/chats/" + id + "/turns"},
 		{http.MethodPost, "/chats/" + id + "/cancel"},
 		{http.MethodPost, "/chats/" + id + "/approvals/tu_o1"},

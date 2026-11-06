@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -25,14 +27,36 @@ const registryCacheTTL = 60 * time.Second
 // capability). Reason says why a model is unavailable or toolless.
 type ModelStatus struct {
 	ID        string
+	Name      string // display name from the config; the id when none is given
 	Available bool
 	Tools     bool
 	Reason    string
+
+	// What the start screen shows. Every field comes from the config or from
+	// the provider; none is a constant of this package.
+	BestFor       string // config best_for
+	ContextWindow int    // tokens: the config's window, or the Ollama model's effective one; 0 when unknown
+	Effort        string // config effort
+	Price         *config.LLMPriceCard
+	// Ollama only. NumCtx is the value requests are sent with (configured or
+	// derived); ParameterSize and Quantization are /api/tags' details.
+	NumCtx        int
+	ParameterSize string
+	Quantization  string
+	KeepAlive     string
 }
 
 // ProviderStatus is one configured provider and its allowlisted models.
+// Host is where an Ollama provider runs (credentials stripped). KeySource is
+// the NAME of the environment variable an anthropic provider reads its key
+// from, never the key; it is empty when the key comes from elsewhere or the
+// api_key_env is not a variable name. Reachable is whether the provider
+// answered its model listing.
 type ProviderStatus struct {
 	Name, Kind string
+	Host       string
+	KeySource  string
+	Reachable  bool
 	Models     []ModelStatus
 }
 
@@ -114,16 +138,41 @@ func (r *Registry) List(ctx context.Context) []ProviderStatus {
 	for _, n := range names {
 		p := r.cfg[n]
 		st := ProviderStatus{Name: n, Kind: p.Kind}
-		if why := p.APIKeyEnvBlocked(n); why != "" {
-			st.Models = allUnavailable(p, why)
-			out = append(out, st)
-			continue
-		}
 		switch p.Kind {
 		case config.LLMKindAnthropic:
-			st.Models = r.anthropicStatus(ctx, p)
+			st.KeySource = keySource(p)
 		case config.LLMKindOllama:
-			st.Models = r.ollamaStatus(ctx, p)
+			st.Host = displayHost(ollamaHost(p))
+		}
+		if why := p.APIKeyEnvBlocked(n); why != "" {
+			st.Models = allUnavailable(p, why)
+		} else {
+			switch p.Kind {
+			case config.LLMKindAnthropic:
+				st.Models, st.Reachable = r.anthropicStatus(ctx, p)
+			case config.LLMKindOllama:
+				st.Models, st.Reachable = r.ollamaStatus(ctx, p)
+			}
+		}
+		for i := range st.Models {
+			m := &st.Models[i]
+			m.Name = p.ModelName(m.ID)
+			md := p.ModelDefaults[m.ID]
+			m.BestFor, m.Effort = md.BestFor, md.Effort
+			if md.Price != nil && len(md.Price.Tiers) > 0 {
+				c := *md.Price
+				c.Tiers = append([]config.LLMPriceTier(nil), c.Tiers...)
+				m.Price = &c
+			}
+			if p.Kind == config.LLMKindAnthropic {
+				m.ContextWindow = md.ContextWindow
+				if m.ContextWindow <= 0 {
+					m.ContextWindow = p.ContextWindow
+				}
+			}
+			if p.Kind == config.LLMKindOllama {
+				m.KeepAlive = p.KeepAlive
+			}
 		}
 		out = append(out, st)
 	}
@@ -139,13 +188,44 @@ func allUnavailable(p config.LLMProviderConfig, reason string) []ModelStatus {
 	return out
 }
 
-func (r *Registry) anthropicStatus(ctx context.Context, p config.LLMProviderConfig) []ModelStatus {
+// keySource is the name of the env var the provider's key is read from, when
+// that variable is the key in effect: it must be SET, api_key_file and a
+// plaintext api_key win over it, and a value that is not a variable name is
+// never shown. A key pasted into api_key_env whose characters are all letters,
+// digits and underscores looks like a name, so a name that is not set in the
+// environment is not reported either: a pasted key is not an environment
+// variable, and an unset name is not the key in effect.
+func keySource(p config.LLMProviderConfig) string {
+	if p.APIKeyFile != "" || p.APIKey != "" || p.APIKeyEnv == "" || p.APIKeyEnvProblem("") != "" {
+		return ""
+	}
+	if os.Getenv(p.APIKeyEnv) == "" {
+		return ""
+	}
+	return p.APIKeyEnv
+}
+
+// displayHost is host as a scheme, host and port (and path): no credentials, no
+// query and no fragment, any of which can carry a secret.
+func displayHost(host string) string {
+	o := OllamaOptions{Host: host}.withDefaults()
+	u, err := url.Parse(o.Host)
+	if err != nil {
+		return ""
+	}
+	u.User = nil
+	u.RawQuery, u.ForceQuery = "", false
+	u.Fragment, u.RawFragment = "", ""
+	return strings.TrimRight(u.String(), "/")
+}
+
+func (r *Registry) anthropicStatus(ctx context.Context, p config.LLMProviderConfig) ([]ModelStatus, bool) {
 	key, err := p.ResolveKey()
 	if err != nil {
-		return allUnavailable(p, "credentials unreadable: "+err.Error())
+		return allUnavailable(p, "credentials unreadable: "+err.Error()), false
 	}
 	if key == "" {
-		return allUnavailable(p, "no API key configured")
+		return allUnavailable(p, "no API key configured"), false
 	}
 	opts := []option.RequestOption{option.WithAPIKey(key)}
 	if p.BaseURL != "" {
@@ -163,7 +243,7 @@ func (r *Registry) anthropicStatus(ctx context.Context, p config.LLMProviderConf
 		// The key travels only as a header, but the SDK's error text includes
 		// the response body, and a proxy or misconfigured endpoint can echo
 		// request headers into it. Blank the key before the text is shown.
-		return allUnavailable(p, "could not list models: "+redactKey(err, key).Error())
+		return allUnavailable(p, "could not list models: "+redactKey(err, key).Error()), false
 	}
 	out := make([]ModelStatus, 0, len(p.Models))
 	for _, m := range p.Models {
@@ -174,35 +254,44 @@ func (r *Registry) anthropicStatus(ctx context.Context, p config.LLMProviderConf
 		}
 		out = append(out, ms)
 	}
-	return out
+	return out, true
 }
 
-func (r *Registry) ollamaStatus(ctx context.Context, p config.LLMProviderConfig) []ModelStatus {
+func (r *Registry) ollamaStatus(ctx context.Context, p config.LLMProviderConfig) ([]ModelStatus, bool) {
 	host := ollamaHost(p)
 	pulled, err := ollamaTags(ctx, host)
 	if err != nil {
-		return allUnavailable(p, "ollama unreachable: "+err.Error())
+		return allUnavailable(p, "ollama unreachable: "+err.Error()), false
 	}
 	out := make([]ModelStatus, 0, len(p.Models))
 	for _, m := range p.Models {
-		if !pulled[m] {
+		tag, ok := pulled[m]
+		if !ok {
 			out = append(out, ModelStatus{ID: m, Reason: "not pulled on the Ollama host"})
 			continue
 		}
+		ms := ModelStatus{ID: m, ParameterSize: tag.ParameterSize, Quantization: tag.Quantization}
 		c, err := NewOllamaChat(ctx, m, OllamaOptions{Host: host, NumCtx: p.NumCtx, KeepAlive: p.KeepAlive})
 		if err != nil {
-			out = append(out, ModelStatus{ID: m, Reason: err.Error()})
+			ms.Reason = err.Error()
+			out = append(out, ms)
 			continue
 		}
 		if c.ContextUnresolved() {
 			// No num_ctx configured and none derivable: unavailable, not merely toolless.
-			out = append(out, ModelStatus{ID: m, Reason: c.UnusableReason()})
+			ms.Reason = c.UnusableReason()
+			out = append(out, ms)
 			continue
 		}
-		out = append(out, ModelStatus{ID: m, Available: true, Tools: c.Caps().Tools, Reason: c.UnusableReason()})
+		ms.Available, ms.Tools, ms.Reason = true, c.Caps().Tools, c.UnusableReason()
+		ms.NumCtx, ms.ContextWindow = c.o.NumCtx, c.Caps().ContextWindow
+		out = append(out, ms)
 	}
-	return out
+	return out, true
 }
+
+// ollamaTag is what /api/tags says about one pulled model.
+type ollamaTag struct{ ParameterSize, Quantization string }
 
 func ollamaHost(p config.LLMProviderConfig) string {
 	h := p.Host
@@ -212,7 +301,7 @@ func ollamaHost(p config.LLMProviderConfig) string {
 	return h
 }
 
-func ollamaTags(ctx context.Context, host string) (map[string]bool, error) {
+func ollamaTags(ctx context.Context, host string) (map[string]ollamaTag, error) {
 	o := OllamaOptions{Host: host}.withDefaults()
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -230,17 +319,22 @@ func ollamaTags(ctx context.Context, host string) (map[string]bool, error) {
 	}
 	var body struct {
 		Models []struct {
-			Name  string `json:"name"`
-			Model string `json:"model"`
+			Name    string `json:"name"`
+			Model   string `json:"model"`
+			Details struct {
+				ParameterSize     string `json:"parameter_size"`
+				QuantizationLevel string `json:"quantization_level"`
+			} `json:"details"`
 		} `json:"models"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return nil, fmt.Errorf("unreadable response: %w", err)
 	}
-	out := map[string]bool{}
+	out := map[string]ollamaTag{}
 	for _, m := range body.Models {
-		out[m.Name] = true
-		out[m.Model] = true
+		t := ollamaTag{ParameterSize: m.Details.ParameterSize, Quantization: m.Details.QuantizationLevel}
+		out[m.Name] = t
+		out[m.Model] = t
 	}
 	return out, nil
 }
@@ -283,6 +377,17 @@ func (r *Registry) lookup(provider, model string) (config.LLMProviderConfig, err
 		}
 	}
 	return p, fmt.Errorf("%w: model %q is not in provider %q's allowlist (%s)", ErrUnknownModel, model, provider, strings.Join(p.Models, ", "))
+}
+
+// ModelName is the display name the config gives provider's model id. It is
+// the id itself when the config gives no name or no longer lists the provider
+// or the model. The name is resolved here, at read time: a chat stores only ids.
+func (r *Registry) ModelName(provider, model string) string {
+	p, ok := r.cfg[provider]
+	if !ok {
+		return model
+	}
+	return p.ModelName(model)
 }
 
 // Open builds the chat model for an allowlisted provider/model, wrapped in the

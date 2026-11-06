@@ -480,6 +480,13 @@ describe('the fleet target', () => {
     expect(screen.getByTestId('target-label')).toHaveStyle({ color: '#8ab6d6' });
   });
 
+  // SABOTAGE: check target.draft before target.kind === 'chat' in the label colour -> red.
+  it('a New chat draft reads in the chat amber, not the draft blue', () => {
+    render(bar({ label: { kind: 'chat', name: 'New chat', draft: true } }));
+    expect(screen.getByTestId('target-label')).toHaveTextContent('New chat');
+    expect(screen.getByTestId('target-label')).toHaveStyle({ color: '#e8c27a' });
+  });
+
   // SABOTAGE: always draw the gear -> red.
   it('has no gear when the server has no page (control: it has one otherwise)', () => {
     const { unmount } = render(bar({ gear: false }));
@@ -565,6 +572,12 @@ describe('TopBar — a chat target', () => {
     expect(screen.queryByText('Activity')).toBeNull();
     expect(screen.getByTestId('facet-tab-chat')).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('target-label')).toHaveTextContent('claude-test-x');
+  });
+
+  it('the crumb shows the model display name (not its id) for a chat that also carries its id', () => {
+    render(bar({ facets: ['chat', 'settings'], facet: 'chat', label: { kind: 'chat', name: 'Test X 1.0', id: 'chat-a', provider: { name: 'prov-a', kind: 'anthropic' } } }));
+    expect(screen.getByTestId('target-label')).toHaveTextContent('Test X 1.0');
+    expect(screen.getByTestId('target-label')).not.toHaveTextContent('claude-test-x');
   });
 
   const crumb = (name: string, kind: string) =>

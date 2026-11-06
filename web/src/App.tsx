@@ -25,7 +25,11 @@ import { BrowseFacet } from './BrowseFacet';
 import { ChatFacet } from './ChatFacet';
 import { ChatStartForm } from './ChatStartForm';
 import { useChats, useChatProviders } from './useChats';
+import { useSeenTurns } from './chatRail';
+import { createChat } from './chatApi';
+import { NEW_CHAT_ERROR } from './chatCopy';
 import type { ChatInfo } from './chatApi';
+import { deleteChat } from './chatApi';
 import { ActivityFacet } from './ActivityFacet';
 import { SettingsFacet } from './SettingsFacet';
 import { FacetLayoutProvider } from './facetLayout';
@@ -1086,6 +1090,13 @@ export default function App() {
   const { chats, loaded: chatsLoaded, add: addChat, remove: removeChat } = useChats(chatServed);
   const chatProviders = useChatProviders(chatServed);
   const chatsAvailable = chatServed && (chatProviders?.length ?? 0) > 0;
+  // The chat on screen has been seen; one that answered while another page was
+  // up is a "new answer" on the rail until it is opened.
+  const chatSeen = useSeenTurns(chats, displayed.kind === 'chat' ? displayed.id : null);
+  // The rail's x: the chat ends on the server (DELETE) and leaves the list.
+  const onEndChat = useCallback((id: string) => {
+    deleteChat(id).then(() => removeChat(id), e => { if ((e as { status?: number }).status === 404) removeChat(id); });
+  }, [removeChat]);
   // The card the fleet's Members shows once after a create or a join.
   const [fleetLanding, setFleetLanding] = useState<FleetLanding | null>(null);
   const shownFacet: Facet | null = displayed.kind === 'draft' ? null : facets.includes(view.facet) ? view.facet : 'settings';
@@ -1442,6 +1453,13 @@ export default function App() {
   // A chat ended (the server said so, or it is gone): it leaves the list, and
   // the auto-unpin effect leaves it.
   const onChatGone = useCallback((id: string) => removeChat(id), [removeChat]);
+  // A notice's "New chat": an EMPTY chat with the same model, shown at once.
+  // The chat joins its list and is pinned in the same batched update.
+  // A failure is not swallowed: the promise rejects and the chat shows it.
+  const onNewChatLike = useCallback((from: ChatInfo): Promise<void> => createChat(from.provider, from.model).then(chat => {
+    addChat(chat);
+    dispatchView({ type: 'SELECT_PINNED', target: { kind: 'chat', id: chat.id }, available: facetsFor({ kind: 'chat', id: chat.id }, repos, lenses, creates) });
+  }), [addChat, dispatchView, repos, lenses, creates]);
   // The fleet row: the fleet target, pinned over the context with its own
   // tabs (Members, Activity, Settings).
   const onPickFleet = useCallback(() => {
@@ -1792,6 +1810,8 @@ export default function App() {
               chats={chats}
               chatProviders={chatProviders ?? []}
               chatsAvailable={chatsAvailable}
+              chatSeen={chatSeen}
+              onEndChat={onEndChat}
               draftShown={draftShownKind}
               onNewDraft={onNewDraft}
               onPickDraft={onPickDraft}
@@ -1887,8 +1907,8 @@ export default function App() {
             )}
             {drafts.chat && (
               <div data-testid="draft-chat" style={draftBody(!serverOpen && draftShownKind === 'chat')}>
-                <ErrorBoundary variant="inline" label="New chat hit an error">
-                  <ChatStartForm providers={chatProviders ?? []} onCreated={onChatCreated} onCancel={onCancelDraft} />
+                <ErrorBoundary variant="inline" label={NEW_CHAT_ERROR}>
+                  <ChatStartForm providers={chatProviders ?? []} repoNames={repos.map(r => r.name)} onCreated={onChatCreated} onCancel={onCancelDraft} />
                 </ErrorBoundary>
               </div>
             )}
@@ -1921,7 +1941,7 @@ export default function App() {
               <div key={c.id} data-testid={`chat-body-${c.id}`}
                 style={draftBody(!serverOpen && displayed.kind === 'chat' && displayed.id === c.id)}>
                 <ErrorBoundary variant="inline" label="The chat hit an error">
-                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} />
+                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} />
                 </ErrorBoundary>
               </div>
             ))}
@@ -1949,6 +1969,7 @@ export default function App() {
                   target={state.context.kind === 'repo'
                     ? { kind: 'repo', uid: currentRepoInfo?.uid ?? '' }
                     : { kind: 'lens', uid: lenses.find(l => l.name === (state.context.kind === 'lens' ? state.context.name : ''))?.uid ?? '' }}
+                  chatProviders={chatProviders ?? []}
                 />
               </ErrorBoundary>
             )}

@@ -8,7 +8,12 @@
 kind = "anthropic"
 api_key_env = "ANTHROPIC_API_KEY"
 # api_key_file = "/path/to/key"   # owner-only; wins over the env var
-models = ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]
+# An entry is a model id, or { id, name } to show a shorter name.
+models = [
+  { id = "claude-haiku-5-5", name = "Haiku 5.5" },
+  "claude-sonnet-5-5",
+  { id = "claude-opus-5-5", name = "Opus 5.5" },
+]
 # The chat default is the first listed model.
 
 # Haiku 5.5: $0.10 / $0.50 per MTok up to 100K prompt tokens, $0.50 / $2.50 above.
@@ -17,6 +22,7 @@ effort = "medium"
 max_output_tokens = 64000
 thinking_display = "summarized"
 context_window = 1000000
+best_for = "Quick lookups and everyday questions" # optional: one line on the start screen's card
 [llm.providers.anthropic.model.claude-haiku-5-5.price]
 cache_read_mult = 0.1
 cache_write_5m_mult = 1.25

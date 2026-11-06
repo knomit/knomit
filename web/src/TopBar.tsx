@@ -6,7 +6,8 @@ import type { RepoInfo } from './api';
 import { BookIcon, FleetIcon, GearIcon, LayersIcon, ProviderIcon } from './icons';
 import { noMouseFocus } from './utils';
 import { useMatFocus } from './matFocus';
-import { otherRepoFailing } from './facets';
+import { CHAT_ACCENT, FLEET_ACCENT, otherRepoFailing } from './facets';
+import { ChatPill } from './ChatPill';
 import type { Facet, ServerPage, TargetLabel } from './facets';
 
 interface Props {
@@ -145,13 +146,13 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
   // The label names the DISPLAYED target, which is the browse context unless a
   // settings-only target is pinned or a draft is on screen. A draft is named
   // by what it will create, in the create flow's blue (a lens draft in the
-  // lens accent).
+  // lens accent, a chat draft in the chat amber).
   const target: TargetLabel = given ?? (lensCtx
     ? { kind: 'lens', name: state.context.kind === 'lens' ? state.context.name : '' }
     : { kind: 'repo', name: state.repo });
   const label = {
     name: target.name,
-    color: target.kind === 'lens' ? LENS_ACCENT : target.draft ? '#8ab6d6' : target.kind === 'fleet' ? FLEET_ACCENT : target.kind === 'chat' ? CHAT_ACCENT : '#7c9',
+    color: target.kind === 'lens' ? LENS_ACCENT : target.kind === 'chat' ? CHAT_ACCENT : target.draft ? '#8ab6d6' : target.kind === 'fleet' ? FLEET_ACCENT : '#7c9',
     icon: target.kind === 'lens' ? <LayersIcon color="currentColor" size={13} />
       : target.kind === 'fleet' ? <FleetIcon color="currentColor" size={13} />
         : target.kind === 'chat' ? <ProviderIcon kind={target.provider?.kind} name={target.provider?.name ?? ''} color="currentColor" size={13} />
@@ -235,13 +236,16 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
         {!serverOpen && (
           <>
             <span className="k-bar-sep" data-testid="crumb-sep" aria-hidden="true" style={{ display: 'flex', alignItems: 'center', margin: '0 8px 0 12px', color: '#555', fontSize: 13, flexShrink: 0 }}>/</span>
-            <span className="k-bar-label" data-testid="target-label" title={label.name ? (target.chip ? `${label.name} (${target.chip.text})` : label.name) : undefined} style={{
+            <span className="k-bar-label" data-testid="target-label" title={label.name ? (target.chip ? `${label.name} (${target.chip.text})` : target.sub ? `${label.name} · ${target.sub}` : label.name) : undefined} style={{
               display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden',
               fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
               color: label.color,
             }}>
               {label.icon}
               <span className="k-bar-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label.name}</span>
+              {/* The grey model name gives way first: it shrinks before the title does,
+                  and is dropped below the narrow breakpoint (App.css). */}
+              {target.sub && <span className="k-bar-sub" data-testid="target-label-sub" style={{ color: '#7a7a7a', fontWeight: 400, flexShrink: 100, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{target.sub}</span>}
               {/* A target with only Settings says why: archived, its store
                   missing, or still being created. */}
               {target.chip && (
@@ -317,6 +321,9 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
         )}
 
         <div style={{ flex: 1 }} />
+        {!serverOpen && target.kind === 'chat' && target.id && !target.draft && (
+          <span className="k-bar-pill" style={{ display: 'flex' }}><ChatPill chatId={target.id} /></span>
+        )}
 
         {/* One control, one anchor: the gear opens the server pages, and the
             same button in the same pixel takes you back from them. While they
@@ -368,9 +375,6 @@ const tabBadge: CSSProperties = {
 
 // The spec's lens accent, for the label.
 const LENS_ACCENT = '#b9a6f0';
-// The fleet's teal (Q5): its row, its crumb and the master chip.
-const FLEET_ACCENT = '#8ad6c8';
-const CHAT_ACCENT = '#e8c27a';
 
 // The label's state chip: the rail's chip geometry, in the spec's tones —
 // archive warm, error red, creating blue.

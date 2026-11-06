@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, fireEvent, cleanup, within } from '@testing-library/react';
 import { ChatFacet } from './ChatFacet';
 import { ChatToolGroup } from './ChatToolGroup';
-import { installFakeEventSource, uninstallFakeEventSource, latestStream } from './testEventSource';
+import { installFakeEventSource, uninstallFakeEventSource, chatStream } from './testEventSource';
 import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatApproval, ChatSnapshot } from './chatApi';
 import { APPROVAL_TARGET_UNRESOLVED, loadedToolsRow } from './chatCopy';
@@ -70,7 +70,7 @@ describe('approvals in a tool row', () => {
     render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} />);
     await screen.findByTestId('chat-tool-group');
     expect(screen.queryByTestId('chat-approval-tu_2')).toBeNull();
-    act(() => { latestStream('/chats/chat-a/events')!.emit('approval', learn); });
+    act(() => { chatStream('chat-a')!.emit('approval', learn); });
     expect(await screen.findByTestId('chat-approval-tu_2')).toBeInTheDocument();
   });
 
@@ -118,7 +118,7 @@ describe('the loader row', () => {
     fireEvent.click(screen.getByTestId('chat-tool-group-toggle'));
     expect(screen.getByTestId('chat-tool-row-tu_1')).toHaveTextContent('Loaded tools: knomit_query, knomit_explain');
     expect(screen.getByTestId('chat-tool-row-tu_1')).toHaveTextContent(loadedToolsRow(['knomit_query', 'knomit_explain']));
-    expect(screen.getByTestId('chat-tool-row-tu_2')).toHaveTextContent('knomit: Knomit query');
+    expect(screen.getByTestId('chat-tool-row-tu_2')).toHaveTextContent('Searched');
     expect(screen.getByTestId('chat-tool-row-tu_2')).not.toHaveTextContent('Loaded tools');
   });
 

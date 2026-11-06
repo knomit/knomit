@@ -393,6 +393,10 @@ export interface TargetLabel {
   /** A chat's provider: its configured name and its kind. The crumb draws the
    *  kind's product mark, named by the name, in place of the generic glyph. */
   provider?: { name: string; kind: string };
+  /** A chat target's id: what the top bar's session pill is keyed by. */
+  id?: string;
+  /** Grey text after the name: a chat's model display name, after its title. */
+  sub?: string;
   draft?: boolean;
 }
 
@@ -409,6 +413,11 @@ export function fleetChip(fleet: Pick<FleetStatus, 'master' | 'record_state' | '
 }
 
 /** What a draft is called in the rail, the crumb and its index heading. */
+/** The chat's amber (its rail row, its crumb and the start screen's selection)
+ *  and the fleet's teal (also the local-model tag). */
+export const CHAT_ACCENT = '#e8c27a';
+export const FLEET_ACCENT = '#8ad6c8';
+
 export const DRAFT_NAME: Record<DraftKind, string> = { repo: 'New repository', lens: 'New lens', fleet: 'New fleet', chat: 'New chat' };
 
 /** The chip word for a repo with no store: "store missing" for the common
@@ -427,11 +436,19 @@ export function targetLabelFor(
     case 'fleet':
       return { kind: 'fleet', name: fleet?.fleet_repo || 'fleet', chip: fleetChip(fleet) };
     case 'chat': {
-      // A chat is named by its model; its provider's mark (by kind) stands in
+      // A chat is named by its title; its provider's mark (by kind) stands in
       // the crumb. A kind the list does not know yet keeps the chat glyph.
       const chat = chats.find(c => c.id === target.id);
       const kind = chat ? chatProviders.find(p => p.name === chat.provider)?.kind ?? '' : '';
-      return { kind: 'chat', name: chat?.model ?? '', ...(chat ? { provider: { name: chat.provider, kind } } : {}) };
+      // The crumb is the chat's title with the model's display name in grey
+      // after it; before the first turn there is no title, so the model's name
+      // is the label and nothing follows it.
+      const model = chat ? (chat.name || chat.model) : '';
+      return {
+        kind: 'chat', name: chat?.title || model, id: target.id,
+        ...(chat?.title && model ? { sub: model } : {}),
+        ...(chat ? { provider: { name: chat.provider, kind } } : {}),
+      };
     }
     case 'archived':
       return { kind: 'repo', name: archived.find(a => a.id === target.id)?.name ?? '', chip: { text: 'archived', tone: 'archived' } };

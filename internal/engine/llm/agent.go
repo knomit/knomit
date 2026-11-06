@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 // ErrWindowWithStablePrefix is returned by RunTurn when Loop.Window is set for a
@@ -137,6 +138,8 @@ var (
 type turnError struct {
 	msg string
 	err error
+	// needed and window are set on a context-full error whose sizes are known.
+	needed, window int
 }
 
 func (e *turnError) Error() string { return e.msg }
@@ -194,8 +197,10 @@ func promptTokens(u Usage) int64 { return u.Input + u.CacheRead + u.CacheWrite }
 type LoopEventKind string
 
 const (
-	LoopText       LoopEventKind = "text_delta"
-	LoopReasoning  LoopEventKind = "reasoning"
+	LoopText      LoopEventKind = "text_delta"
+	LoopReasoning LoopEventKind = "reasoning"
+	// LoopThinking is a piece of the model's reasoning as it streams (Text).
+	LoopThinking   LoopEventKind = "thinking_delta"
 	LoopToolUse    LoopEventKind = "tool_use"    // the model's call is complete; ToolUse is set
 	LoopToolResult LoopEventKind = "tool_result" // Result is set; the call ran, was declined, or was refused
 	LoopUsage      LoopEventKind = "usage"       // one request's Usage and Cost
@@ -215,6 +220,21 @@ type LoopEvent struct {
 	Cost    *Cost // nil when the loop has no price card
 	Warning *PriceWarning
 	Tools   *ToolsChange
+	// Took is how long the tool itself ran (LoopToolResult only): not the wait
+	// for an approval. Zero for a call that did not run (declined, skipped,
+	// cancelled, refused).
+	Took time.Duration
+}
+
+// ContextFullInfo reports the sizes behind a context-full turn error: the
+// tokens the request needed (prompt plus the reply reserve; 0 when only the
+// provider knew it was too big) and the model's window (0 when unknown).
+func ContextFullInfo(err error) (needed, window int, ok bool) {
+	var te *turnError
+	if errors.As(err, &te) && errors.Is(te.err, ErrContextFull) {
+		return te.needed, te.window, true
+	}
+	return 0, 0, false
 }
 
 // PriceWarning is the structured near-the-price-cliff warning: the prompt
@@ -402,17 +422,25 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 		l.maybeWarn(int64(est), true)
 		var streamed strings.Builder
 		rs := newRepeatStop(ctx, l.Model.Caps().StreamStoppable)
-		resp, err := l.Model.Stream(rs.ctx, snap, l.Options, func(ev Event) {
+		opts := l.Options
+		opts.Thinking = func(text string) {
+			if rs.stopped {
+				return // the request is being cancelled: nothing after the repeat counts
+			}
+			l.emit(LoopEvent{Kind: LoopThinking, Text: text})
+		}
+		resp, err := l.Model.Stream(rs.ctx, snap, opts, func(ev Event) {
 			if rs.stopped {
 				return // the request is being cancelled: nothing after the repeat counts
 			}
 			switch ev.Kind {
 			case EventTextDelta:
 				streamed.WriteString(ev.Text)
+				rs.text(ev.Text)
 				l.emit(LoopEvent{Kind: LoopText, Text: ev.Text})
 			case EventReasoning:
 				if ev.Reasoning != nil {
-					rs.reasoning = append(rs.reasoning, Block{Kind: BlockReasoning, Reasoning: ev.Reasoning})
+					rs.addReasoning(ev.Reasoning)
 				}
 				l.emit(LoopEvent{Kind: LoopReasoning})
 			case EventToolUse:
@@ -426,7 +454,7 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 			// The generation was cancelled at a repeated call. Whatever the
 			// provider then returned (the cancellation, or a response that was
 			// already complete) is replaced by what streamed before the repeat.
-			resp, err = rs.response(streamed.String(), resp, est), nil
+			resp, err = rs.response(resp, est), nil
 			l.repeatsDropped = true
 		}
 		rs.release()
@@ -442,7 +470,7 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 				if caps := l.Model.Caps(); isOpening(snap) && caps.ContextWindow > 0 {
 					runErr = l.openingRefused(est, caps.ContextWindow, err)
 				} else {
-					runErr = &turnError{msg: contextFullMessage, err: err}
+					runErr = &turnError{msg: contextFullMessage, err: err, window: l.Model.Caps().ContextWindow}
 				}
 			} else {
 				runErr = err
@@ -538,17 +566,21 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 	var results []Block
 	var approvals []Approval
 	stubSeen := map[string]bool{} // stub calls answered "call it again" in this response, by name and arguments
+	// took is how long the call being answered ran; 0 until a tool really ran.
+	var took time.Duration
 	answer := func(c ToolUse, content string, isErr bool) {
 		tr := &ToolResult{ToolUseID: c.ID, Content: content, IsError: isErr}
 		results = append(results, Block{Kind: BlockToolResult, ToolResult: tr})
-		l.emit(LoopEvent{Kind: LoopToolResult, Result: tr})
+		l.emit(LoopEvent{Kind: LoopToolResult, Result: tr, Took: took})
 	}
 	abort := func(from int, content string) {
+		took = 0
 		for _, c := range calls[from:] {
 			answer(c, content, true)
 		}
 	}
 	for i, c := range calls {
+		took = 0
 		if ctx.Err() != nil {
 			abort(i, CancelledResult)
 			return results, approvals, &turnError{msg: "The turn was cancelled.", err: ErrCancelled}
@@ -670,7 +702,9 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 		if l.ArgsHook != nil {
 			args = l.ArgsHook(c)
 		}
+		began := time.Now()
 		out, err := l.Tools.CallTool(ctx, c.Name, args)
+		took = max(time.Since(began), time.Nanosecond)
 		if err != nil {
 			if ctx.Err() != nil {
 				abort(i, CancelledResult)
@@ -923,7 +957,7 @@ func (l *Loop) checkBudget(snap Snapshot, est int) error {
 		return &turnError{
 			msg: fmt.Sprintf("%s (about %d prompt tokens plus %d reserved for the reply, window %d)",
 				contextFullMessage, est, reserve, window),
-			err: ErrContextFull,
+			err: ErrContextFull, needed: est + reserve, window: window,
 		}
 	}
 	return nil
@@ -1104,7 +1138,7 @@ func OpeningTooBigError(adaptive bool, provider, model string, est, reserve, win
 	left := max(window-reserve, 0)
 	return &turnError{
 		msg: fmt.Sprintf(format, est, model, window, reserve, left, hint),
-		err: ErrContextFull,
+		err: ErrContextFull, needed: est + reserve, window: window,
 	}
 }
 
@@ -1132,7 +1166,7 @@ func (l *Loop) openingRefused(est, window int, cause error) error {
 	}
 	return &turnError{
 		msg: fmt.Sprintf(OpeningRefusedByServerMessage, est, l.Model.Model(), window, hint),
-		err: cause,
+		err: cause, needed: est, window: window,
 	}
 }
 
@@ -1274,14 +1308,21 @@ func toolUses(bs []Block) []ToolUse {
 // generation. The calls received before it are kept; the repeat and anything
 // after it are dropped, so no tool_use is left unanswered. It is armed only for
 // a provider whose cancelled stream leaves a coherent partial (Caps.StreamStoppable).
+//
+// blocks are kept in the order the stream delivered them: a provider that
+// builds its blocks in stream order (Ollama: a thinking run and a content run
+// each close when the stream switches kind or a call arrives) interleaves
+// reasoning, text and calls, and the partial response must keep that order.
+// Text arrives as deltas, so pending holds the open text run; it becomes a
+// block when a reasoning block or a call arrives, or when the response is made.
 type repeatStop struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	armed     bool
-	stopped   bool
-	seen      map[string]bool
-	kept      []Block
-	reasoning []Block
+	ctx     context.Context
+	cancel  context.CancelFunc
+	armed   bool
+	stopped bool
+	seen    map[string]bool
+	blocks  []Block
+	pending strings.Builder
 }
 
 func newRepeatStop(parent context.Context, armed bool) *repeatStop {
@@ -1291,6 +1332,23 @@ func newRepeatStop(parent context.Context, armed bool) *repeatStop {
 		r.seen = map[string]bool{}
 	}
 	return r
+}
+
+// text records a streamed content delta into the open text run.
+func (r *repeatStop) text(s string) { r.pending.WriteString(s) }
+
+func (r *repeatStop) closeText() {
+	if r.pending.Len() == 0 {
+		return
+	}
+	r.blocks = append(r.blocks, Block{Kind: BlockText, Text: r.pending.String()})
+	r.pending.Reset()
+}
+
+// addReasoning records a closed reasoning run; the text before it is closed.
+func (r *repeatStop) addReasoning(re *Reasoning) {
+	r.closeText()
+	r.blocks = append(r.blocks, Block{Kind: BlockReasoning, Reasoning: re})
 }
 
 // repeat records tu and reports whether it repeats an earlier call of the
@@ -1306,7 +1364,8 @@ func (r *repeatStop) repeat(tu *ToolUse) bool {
 		return true
 	}
 	r.seen[key] = true
-	r.kept = append(r.kept, Block{Kind: BlockToolUse, ToolUse: tu})
+	r.closeText()
+	r.blocks = append(r.blocks, Block{Kind: BlockToolUse, ToolUse: tu})
 	return false
 }
 
@@ -1316,22 +1375,24 @@ func (r *repeatStop) release() {
 	}
 }
 
-// response is the response up to the repeat: the reasoning and text that
-// streamed and the distinct calls. Its usage is the provider's when it
+// response is the response up to the repeat: the reasoning, text and distinct
+// calls that streamed, in stream order. Its usage is the provider's when it
 // returned a complete one, otherwise an estimate: the prompt as the loop
-// estimated it and the bytes that streamed as output (bytes/4).
-func (r *repeatStop) response(text string, got *Response, est int) *Response {
-	blocks := append([]Block(nil), r.reasoning...)
-	if text != "" {
-		blocks = append(blocks, Block{Kind: BlockText, Text: text})
-	}
-	out := len(text)
-	for _, b := range r.kept {
-		blocks = append(blocks, b)
-		out += len(b.ToolUse.Name) + len(b.ToolUse.Args)
-	}
-	for _, b := range r.reasoning {
-		out += len(b.Reasoning.Native)
+// estimated it and the bytes that streamed as output (bytes/4), counting text,
+// reasoning and the kept calls.
+func (r *repeatStop) response(got *Response, est int) *Response {
+	r.closeText()
+	blocks := append([]Block(nil), r.blocks...)
+	out := 0
+	for _, b := range blocks {
+		switch b.Kind {
+		case BlockText:
+			out += len(b.Text)
+		case BlockReasoning:
+			out += len(b.Reasoning.Native)
+		case BlockToolUse:
+			out += len(b.ToolUse.Name) + len(b.ToolUse.Args)
+		}
 	}
 	u := Usage{Input: int64(est), Output: int64(out / 4), Estimated: true, EstimatedFields: []string{"input", "output"}}
 	if got != nil && (got.Usage.Input != 0 || got.Usage.Output != 0) {

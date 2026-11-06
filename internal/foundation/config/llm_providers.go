@@ -38,7 +38,13 @@ type LLMProviderConfig struct {
 	BaseURL string `toml:"base_url"`
 	Host    string `toml:"host"`
 
-	Models []string `toml:"models"` // allowlist; required and non-empty
+	// Entries is the models allowlist as written: each element a model id or
+	// { id, name }. Load derives Models from it.
+	Entries []LLMModelEntry `toml:"models"`
+
+	// Models is the allowlist of model ids, in order; required and non-empty.
+	// The id is the identity everywhere; a name is display-only (ModelName).
+	Models []string `toml:"-"`
 
 	KeepAlive     string `toml:"keep_alive"`     // ollama
 	NumCtx        int    `toml:"num_ctx"`        // ollama
@@ -83,11 +89,66 @@ func (p LLMProviderConfig) validateAdaptiveTools(name, at string) error {
 	return fmt.Errorf(AdaptiveToolsInvalid, at, p.AdaptiveTools)
 }
 
+// LLMModelEntry is one element of [llm.providers.<name>] models: a model id, or
+// an inline table { id, name } whose name is what a person sees. Shape problems
+// are recorded here and refused by validate, which knows the provider and index.
+type LLMModelEntry struct {
+	ID   string
+	Name string // display name; "" when the entry names none
+
+	bad     bool // neither a string nor a table with only string id and name
+	hasName bool
+}
+
+// UnmarshalTOML decodes a string or an inline table; anything else is marked bad.
+func (e *LLMModelEntry) UnmarshalTOML(v any) error {
+	switch x := v.(type) {
+	case string:
+		e.ID = x
+	case map[string]any:
+		for k, val := range x {
+			s, ok := val.(string)
+			switch {
+			case !ok || (k != "id" && k != "name"):
+				e.bad = true
+			case k == "id":
+				e.ID = s
+			default:
+				e.Name, e.hasName = s, true
+			}
+		}
+	default:
+		e.bad = true
+	}
+	return nil
+}
+
+// displayName is the name a person sees: Name, or the id when none is given.
+func (e LLMModelEntry) displayName() string {
+	if e.Name != "" {
+		return e.Name
+	}
+	return e.ID
+}
+
+// ModelName is the display name of model id in this provider: the name its
+// entry gives, or the id itself when it gives none or the model is not listed.
+func (p LLMProviderConfig) ModelName(id string) string {
+	for _, e := range p.Entries {
+		if e.ID == id && e.Name != "" {
+			return e.Name
+		}
+	}
+	return id
+}
+
 // LLMModelConfig is [llm.providers.<name>.model.<id>].
 type LLMModelConfig struct {
 	Effort          string `toml:"effort"` // low|medium|high|xhigh|max; always sent
 	MaxOutputTokens int    `toml:"max_output_tokens"`
 	ThinkingDisplay string `toml:"thinking_display"` // summarized|omitted
+	// BestFor is one line the start screen shows on the model's card; optional.
+	BestFor string `toml:"best_for"`
 	// ContextWindow is this model's window in tokens (anthropic). It comes
 	// from config, not code: Haiku, Sonnet and Opus 5.5 are 1M.
 	ContextWindow int           `toml:"context_window"`
@@ -124,6 +185,10 @@ var (
 // applyProviderDefaults fills the provider defaults that depend on its kind.
 func (c *LLMConfig) applyProviderDefaults() {
 	for name, p := range c.Providers {
+		p.Models = make([]string, 0, len(p.Entries))
+		for _, e := range p.Entries {
+			p.Models = append(p.Models, e.ID)
+		}
 		switch p.Kind {
 		case LLMKindOllama:
 			if p.KeepAlive == "" {
@@ -235,11 +300,36 @@ func (p LLMProviderConfig) validate(name string) error {
 		return err
 	}
 	allowed := map[string]bool{}
-	for _, m := range p.Models {
-		if strings.TrimSpace(m) == "" {
-			return fmt.Errorf("%s.models has an empty model id", at)
+	for i, e := range p.Entries {
+		ep := fmt.Sprintf("%s.models[%d]", at, i)
+		if e.bad {
+			return fmt.Errorf("%s: must be a model id or { id, name }", ep)
 		}
-		allowed[m] = true
+		if strings.TrimSpace(e.ID) == "" {
+			return fmt.Errorf("%s: id is required", ep)
+		}
+		if e.hasName && strings.TrimSpace(e.Name) == "" {
+			return fmt.Errorf("%s: name must not be empty", ep)
+		}
+		if allowed[e.ID] {
+			return fmt.Errorf("%s.models: id %q is listed more than once", at, e.ID)
+		}
+		allowed[e.ID] = true
+	}
+	// A name is unique within the provider and is never another model's id.
+	// Two providers may share a name.
+	names := map[string]bool{}
+	for _, e := range p.Entries {
+		n := e.displayName()
+		for _, o := range p.Entries {
+			if o.ID == n && o.ID != e.ID {
+				return fmt.Errorf("%s.models: name %q is the id of another model", at, n)
+			}
+		}
+		if names[n] {
+			return fmt.Errorf("%s.models: name %q is used by more than one model", at, n)
+		}
+		names[n] = true
 	}
 	ids := make([]string, 0, len(p.ModelDefaults))
 	for id := range p.ModelDefaults {

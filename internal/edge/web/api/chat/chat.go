@@ -1,11 +1,13 @@
 package chat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,9 +18,10 @@ import (
 	"knomit/internal/engine/llm"
 )
 
-// chatStreamGrace is how long a chat lives with no events stream attached
-// (plan P11). A package variable so tests can shorten it; production never
-// changes it.
+// chatStreamGrace is how long a chat lives once its owner has no page events
+// stream attached (plan P11): the clock starts when the owner's LAST page
+// stream closes, or at creation when none is attached. A package variable so
+// tests can shorten it; production never changes it.
 var chatStreamGrace = 60 * time.Second
 
 // maxApprovalArgs bounds the arguments echoed in an approval event; a larger
@@ -47,17 +50,64 @@ type viewItem struct {
 	// Loaded, on the call to the loader tool only: the tools that call loaded,
 	// which the page words as the call's row.
 	Loaded []string `json:"loaded,omitempty"`
+	// On a "tool_call" item, once done: how long the tool ran and a small
+	// summary of its result when one is cheap to compute.
+	DurationMS int64        `json:"duration_ms,omitempty"`
+	Summary    *callSummary `json:"summary,omitempty"`
+
+	// SendID, on a "user" item, is the send_id the page put on the POST that
+	// started the turn ("" for a turn that came without one). It is how the page
+	// tells whether ITS send landed: an exact identity, not a count of messages.
+	SendID string `json:"send_id,omitempty"`
 
 	// On a "user" item only: what the page shows for the turn it opens, so a
 	// snapshot is the whole truth about the turn and the page patches nothing.
-	Usage     *turnUsage `json:"usage,omitempty"`     // summed over the turn's requests
-	CostUSD   *float64   `json:"cost_usd,omitempty"`  // summed; absent without a price card
-	Warning   string     `json:"warning,omitempty"`   // the price-tier warning, worded
-	Error     string     `json:"error,omitempty"`     // how the turn ended, if it did not succeed
-	Cancelled bool       `json:"cancelled,omitempty"` // Error is the person's own Stop
+	Usage   *turnUsage `json:"usage,omitempty"`    // summed over the turn's requests
+	CostUSD *float64   `json:"cost_usd,omitempty"` // summed; absent without a price card
+	Warning string     `json:"warning,omitempty"`  // the price-tier warning, worded
+	// WarningInfo is the same warning, structured, for the page to word its own line.
+	WarningInfo *noticeView `json:"warning_info,omitempty"`
+	// ErrorInfo is the structured detail of Error when it has one (context full).
+	ErrorInfo *noticeView `json:"error_info,omitempty"`
+	Error     string      `json:"error,omitempty"`     // how the turn ended, if it did not succeed
+	Cancelled bool        `json:"cancelled,omitempty"` // Error is the person's own Stop
 	// Tools is the turn's view of the loaded tools; present on an adaptive chat
 	// only (see adaptive.go).
 	Tools *turnTools `json:"tools,omitempty"`
+}
+
+// callSummary is a finished call's result in one number: a query's result count.
+type callSummary struct {
+	Count int `json:"count"`
+}
+
+// noticeView is a notice's numbers, so the page words the line itself. Kind is
+// "price_tier" (PromptTokens, Threshold, TierTokens, Mult, Model) or
+// "context_full" (Needed, Window; Needed is 0 when only the provider knew).
+type noticeView struct {
+	Kind         string  `json:"kind"`
+	PromptTokens int64   `json:"prompt_tokens,omitempty"`
+	Threshold    int     `json:"threshold,omitempty"`
+	TierTokens   int     `json:"tier_tokens,omitempty"`
+	Mult         float64 `json:"mult,omitempty"`
+	Model        string  `json:"model,omitempty"`
+	Needed       int     `json:"needed,omitempty"`
+	Window       int     `json:"window,omitempty"`
+}
+
+// summarize words a finished call's result as a number, when that is cheap:
+// only knomit_query has one (the facts it returned).
+func summarize(name, content string, isErr bool) *callSummary {
+	if isErr || name != "knomit_query" {
+		return nil
+	}
+	var r struct {
+		Facts []json.RawMessage `json:"facts"`
+	}
+	if json.Unmarshal([]byte(content), &r) != nil || r.Facts == nil {
+		return nil
+	}
+	return &callSummary{Count: len(r.Facts)}
 }
 
 // turnUsage is a turn's token counts, summed over its requests.
@@ -100,9 +150,11 @@ type grantInfo struct {
 
 type callMeta struct{ action, pin string }
 
-// subscriber is one attached events stream.
-type subscriber struct {
-	ch chan []byte
+// pageSub is one attached page events stream (one per browser tab): it
+// carries the events of every chat its owner has, each tagged with its chat id.
+type pageSub struct {
+	owner string
+	ch    chan []byte
 }
 
 // chat is one live chat: its MCP session, loop, approvals, grants and temp
@@ -128,19 +180,31 @@ type chat struct {
 	ended      bool
 	running    bool
 	turnCancel context.CancelFunc
-	// missedEnd is the last turn's terminal frame when no stream was attached
-	// to take it; the next stream to attach is sent it once.
-	missedEnd []byte
-	turns     sync.WaitGroup
-	view      []viewItem
-	turnAt    int // index in view of the running (or last) turn's user item
-	calls     map[string]llm.ToolUse
-	pending   map[string]*pendingApproval
-	grants    map[grantKey]grantInfo
-	meta      map[string]callMeta
-	subs      map[*subscriber]struct{}
-	attached  int
-	grace     *time.Timer
+	turnSend   string   // the send_id of the running turn, if it had one
+	sends      []string // send ids seen, oldest first (bounded): see sendState
+	sendState  map[string]string
+	turnBegan  time.Time // when the running turn was accepted
+	firstSeen  bool      // the running turn has shown its first sign of life
+	lastPrompt int64     // the last request's prompt tokens (input + cache read + cache write)
+	turns      sync.WaitGroup
+	view       []viewItem
+	turnAt     int // index in view of the running (or last) turn's user item
+	calls      map[string]llm.ToolUse
+	pending    map[string]*pendingApproval
+	grants     map[grantKey]grantInfo
+	meta       map[string]callMeta
+	// missedEnd is the last turn's terminal frame when no page stream was
+	// attached to take it; the next page stream to attach is sent it once,
+	// right after ready.
+	missedEnd  []byte
+	lastState  []byte    // the last chat_state frame body sent, to send only changes
+	title      string    // the first message, cut (see titleOf); empty until the first turn
+	startedAt  time.Time // when the chat was made
+	lastActive time.Time // the last turn start or row change
+	// afterGraceStep is a test seam: graceFired calls it after clearing the
+	// fired timer and before it counts the owner's streams.
+	afterGraceStep func()
+	grace          *time.Timer
 
 	// Per-request flags the truncation wording needs: whether the last
 	// request streamed text, and whether it streamed reasoning.
@@ -219,6 +283,7 @@ func (c *chat) Decide(ctx context.Context, call llm.ToolUse) (llm.Decision, erro
 	c.mu.Unlock()
 
 	c.emit("approval", p)
+	c.noteState()
 	select {
 	case d := <-p.ch:
 		switch d {
@@ -232,6 +297,7 @@ func (c *chat) Decide(ctx context.Context, call llm.ToolUse) (llm.Decision, erro
 		c.mu.Lock()
 		delete(c.pending, call.ID)
 		c.mu.Unlock()
+		c.noteState()
 		return llm.Decision{}, ctx.Err()
 	}
 }
@@ -258,6 +324,7 @@ func (c *chat) answerApproval(callID, decision string) (bool, error) {
 	delete(c.pending, callID)
 	c.mu.Unlock()
 	p.ch <- decision
+	c.noteState()
 	return true, nil
 }
 
@@ -308,38 +375,45 @@ func (c *chat) callMetaOf(callID string) (string, string) {
 
 // ---- events ----
 
-// emit sends one SSE event to every attached stream. A stream that cannot keep
-// up is dropped (its channel closed); the client reconnects and refetches.
+// tagChat puts the chat id first in the JSON object b. Every payload the chat
+// emits is an object.
+func tagChat(id string, b []byte) []byte {
+	tag := `{"chat":` + strconv.Quote(id)
+	if len(b) <= 2 {
+		return []byte(tag + "}")
+	}
+	return append([]byte(tag+","), b[1:]...)
+}
+
+// emit sends one SSE event, tagged with this chat's id, to every page stream
+// of the chat's owner. A stream that cannot keep up is dropped (its channel
+// closed); the client reconnects and reloads.
 func (c *chat) emit(kind string, data any) {
-	c.send(kind, data, false)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sendLocked(kind, data, false)
 }
 
-// emitEnd sends a turn's terminal event (turn_done or turn_error). If no
-// stream took it, the frame is kept for the next stream to attach, which gets
-// it right after ready: a turn can outlive the stream it started on, and the
-// end of a turn must reach the client once whichever stream is attached then.
+// emitEnd sends a turn's terminal event (turn_done or turn_error). If no page
+// stream took it, the frame is kept for the next page stream to attach, which
+// gets it right after ready: a turn can outlive the streams it started on, and
+// the end of a turn must reach the client once whichever stream is attached
+// then.
 func (c *chat) emitEnd(kind string, data any) {
-	c.send(kind, data, true)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sendLocked(kind, data, true)
 }
 
-func (c *chat) send(kind string, data any, terminal bool) {
+// sendLocked requires c.mu. Lock order: c.mu, then manager.pageMu.
+func (c *chat) sendLocked(kind string, data any, terminal bool) {
 	b, err := json.Marshal(data)
 	if err != nil {
 		return
 	}
-	frame := []byte("event: " + kind + "\ndata: " + string(b) + "\n\n")
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delivered := false
-	for s := range c.subs {
-		select {
-		case s.ch <- frame:
-			delivered = true
-		default:
-			delete(c.subs, s)
-			close(s.ch)
-		}
-	}
+	frame := []byte("event: " + kind + "\ndata: " + string(tagChat(c.id, b)) + "\n\n")
+	c.lastActive = time.Now()
+	delivered := c.m.broadcast(c.owner, frame)
 	if terminal {
 		c.missedEnd = nil
 		if !delivered {
@@ -348,54 +422,180 @@ func (c *chat) send(kind string, data any, terminal bool) {
 	}
 }
 
-// attach registers an events stream and cancels the grace timer. ok is false
-// when the chat has ended.
-func (c *chat) attach() (*subscriber, bool) {
+// rowState is the chat's row in the rail: what the chat_state event carries
+// (tagged with the chat id) and what a GET /chats row carries beside the chat's
+// identity, so the two never disagree.
+//
+// Title is the first message cut (empty before the first turn); State is
+// idle | running | awaiting_approval | error; Turns counts the user turns;
+// CostUSD sums them (absent without a price card); LastActivity and StartedAt
+// are RFC 3339 UTC.
+type rowState struct {
+	Title        string   `json:"title"`
+	State        string   `json:"state"`
+	Turns        int      `json:"turns"`
+	CostUSD      *float64 `json:"cost_usd,omitempty"`
+	LastActivity string   `json:"last_activity"`
+	StartedAt    string   `json:"started_at"`
+}
+
+// stateLocked requires c.mu.
+func (c *chat) stateLocked() rowState {
+	st := rowState{
+		Title: c.title, State: "idle",
+		LastActivity: c.lastActive.UTC().Format(time.RFC3339Nano), StartedAt: c.startedAt.UTC().Format(time.RFC3339Nano),
+	}
+	var cost float64
+	priced := false
+	for _, it := range c.view {
+		if it.Kind != "user" {
+			continue
+		}
+		st.Turns++
+		if it.CostUSD != nil {
+			cost += *it.CostUSD
+			priced = true
+		}
+	}
+	if priced {
+		st.CostUSD = &cost
+	}
+	switch {
+	case len(c.pending) > 0:
+		st.State = "awaiting_approval"
+	case c.running:
+		st.State = "running"
+	case c.turnAt < len(c.view) && c.view[c.turnAt].Kind == "user" && c.view[c.turnAt].Error != "" && !c.view[c.turnAt].Cancelled:
+		st.State = "error"
+	}
+	return st
+}
+
+// noteState sends chat_state when the chat's row changed since the last one.
+// Call it after any change to running, pending approvals, the turn count, the
+// turn's error or its cost; it must not be called with c.mu held.
+func (c *chat) noteState() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.ended {
-		return nil, false
+		return
 	}
-	s := &subscriber{ch: make(chan []byte, 256)}
-	if c.missedEnd != nil {
-		s.ch <- c.missedEnd
-		c.missedEnd = nil
+	st := c.stateLocked()
+	// last_activity moves with every frame; only a change of the row itself is
+	// worth a chat_state.
+	key := st
+	key.LastActivity = ""
+	b, err := json.Marshal(key)
+	if err != nil || bytes.Equal(b, c.lastState) {
+		return
 	}
-	c.subs[s] = struct{}{}
-	c.attached++
+	c.lastState = b
+	c.sendLocked("chat_state", st, false)
+}
+
+// adoptPage is what a newly attached page stream does to a chat: stop its
+// grace clock and take the terminal event no stream received.
+func (c *chat) adoptPage(s *pageSub) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ended {
+		return
+	}
 	if c.grace != nil {
 		c.grace.Stop()
 		c.grace = nil
 	}
-	return s, true
+	if c.missedEnd != nil && c.m.deliverTo(s, c.missedEnd) {
+		c.missedEnd = nil
+	}
 }
 
-// detach removes a stream; the last one out starts the grace timer.
-func (c *chat) detach(s *subscriber) {
+// startGrace starts the clock that ends the chat unless a page stream of its
+// owner is attached when it runs out.
+func (c *chat) startGrace() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.subs[s]; ok {
-		delete(c.subs, s)
-		close(s.ch)
+	if c.ended || c.grace != nil {
+		return
 	}
-	c.attached--
-	if c.attached <= 0 && !c.ended && c.grace == nil {
-		c.grace = time.AfterFunc(chatStreamGrace, func() { c.end("stream_grace") })
+	c.grace = time.AfterFunc(chatStreamGrace, c.graceFired)
+}
+
+func (c *chat) graceFired() {
+	// Clear the fired timer FIRST, then look at the streams: a stream that
+	// closes after the look finds no timer and starts a new one (startGrace
+	// returns early while c.grace is set), so the chat is never left with no
+	// stream and no clock.
+	c.mu.Lock()
+	c.grace = nil
+	hook := c.afterGraceStep
+	c.mu.Unlock()
+	if hook != nil {
+		hook()
 	}
+	// A stream may have attached while the timer was already running out.
+	if c.m.pageCount(c.owner) > 0 {
+		return
+	}
+	c.end("stream_grace")
 }
 
 // ---- the turn ----
 
 var errBusy = errors.New("a turn is already running")
+var errWithdrawn = errors.New("the send was withdrawn before it was accepted")
+
+// maxSends bounds how many send ids a chat remembers.
+const maxSends = 256
+
+// noteSend records a send id's state ("started" or "withdrawn"); c.mu is held.
+func (c *chat) noteSend(id, state string) {
+	if c.sendState == nil {
+		c.sendState = map[string]string{}
+	}
+	if _, ok := c.sendState[id]; !ok {
+		c.sends = append(c.sends, id)
+		if len(c.sends) > maxSends {
+			delete(c.sendState, c.sends[0])
+			c.sends = c.sends[1:]
+		}
+	}
+	c.sendState[id] = state
+}
+
+// cancelSend is Stop for a send the page can name. A turn that already runs
+// under that id is cancelled. A send that has not been accepted yet (its POST
+// is still on the way) is withdrawn: when it arrives it is refused, and no turn
+// starts. A send whose turn already ended is left alone.
+func (c *chat) cancelSend(id string) {
+	c.mu.Lock()
+	if c.running && c.turnSend == id {
+		cancel := c.turnCancel
+		c.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return
+	}
+	if _, seen := c.sendState[id]; !seen {
+		c.noteSend(id, "withdrawn")
+	}
+	c.mu.Unlock()
+}
+
 var errEnded = errors.New("the chat has ended")
 
 // startTurn runs one user turn on its own goroutine.
 // It returns the view index of the turn's user item, which the 202 carries.
-func (c *chat) startTurn(text string) (int, error) {
+func (c *chat) startTurn(text, sendID string) (int, error) {
 	c.mu.Lock()
 	if c.ended {
 		c.mu.Unlock()
 		return 0, errEnded
+	}
+	if sendID != "" && c.sendState[sendID] == "withdrawn" {
+		c.mu.Unlock()
+		return 0, errWithdrawn
 	}
 	if c.running {
 		c.mu.Unlock()
@@ -405,17 +605,27 @@ func (c *chat) startTurn(text string) (int, error) {
 	c.missedEnd = nil // the previous turn's end is history now: a refetch has it
 	ctx, cancel := context.WithCancel(c.ctx)
 	c.turnCancel = cancel
+	c.turnSend = sendID
+	if sendID != "" {
+		c.noteSend(sendID, "started")
+	}
+	c.turnBegan, c.firstSeen = time.Now(), false
 	c.turnAt = len(c.view)
 	turn := c.turnAt
-	user := viewItem{Kind: "user", Text: text}
+	user := viewItem{Kind: "user", Text: text, SendID: sendID}
 	if c.adapt != nil {
 		// Every turn of an adaptive chat shows the loaded set it opens with.
 		user.Tools = c.adapt.turnView(0, 0)
 	}
 	c.view = append(c.view, user)
+	if c.title == "" {
+		c.title = titleOf(text)
+	}
+	c.lastActive = time.Now()
 	c.turns.Add(1)
 	c.mu.Unlock()
-	c.store.appendTranscript(viewItem{Kind: "user", Text: text})
+	c.store.appendTranscript(viewItem{Kind: "user", Text: text, SendID: sendID})
+	c.noteState()
 
 	go func() {
 		defer c.turns.Done()
@@ -446,6 +656,17 @@ func (c *chat) finishTurn(ctx context.Context, res *llm.TurnResult, err error) {
 		c.view[c.turnAt].Error, c.view[c.turnAt].Cancelled = msg, cancelled && msg == err.Error()
 	}
 	truncatedBare := msg == reasoningTruncatedMessage
+	var errInfo *noticeView
+	if err != nil && errors.Is(err, llm.ErrContextFull) {
+		needed, window, _ := llm.ContextFullInfo(err)
+		if window <= 0 {
+			window, _, _ = contextOf(c.loop.Model)
+		}
+		errInfo = &noticeView{Kind: "context_full", Needed: needed, Window: window}
+		if c.turnAt < len(c.view) {
+			c.view[c.turnAt].ErrorInfo = errInfo
+		}
+	}
 	ended := c.ended
 	var tools *turnTools
 	if turn < len(c.view) {
@@ -457,6 +678,7 @@ func (c *chat) finishTurn(ctx context.Context, res *llm.TurnResult, err error) {
 	if ended {
 		return
 	}
+	c.noteState()
 	if err == nil {
 		done := map[string]any{
 			"turn": turn, "stop_reason": res.StopReason, "requests": res.Requests, "tool_calls": res.ToolCalls,
@@ -472,7 +694,11 @@ func (c *chat) finishTurn(ctx context.Context, res *llm.TurnResult, err error) {
 		c.emitEnd("turn_error", map[string]any{"message": msg, "cancelled": true, "turn": turn})
 		return
 	}
-	c.emitEnd("turn_error", map[string]any{"message": msg, "turn": turn})
+	out := map[string]any{"message": msg, "turn": turn}
+	if errInfo != nil {
+		out["error_info"] = errInfo
+	}
+	c.emitEnd("turn_error", out)
 }
 
 func errString(err error) string {
@@ -498,6 +724,15 @@ func (c *chat) cancelTurn() {
 // and forwards the event to attached streams. It runs on the turn goroutine.
 func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 	switch ev.Kind {
+	case llm.LoopText, llm.LoopThinking, llm.LoopReasoning, llm.LoopToolUse:
+		c.noteFirstSign()
+	}
+	switch ev.Kind {
+	case llm.LoopThinking:
+		c.mu.Lock()
+		turn := c.turnAt
+		c.mu.Unlock()
+		c.emit("thinking_delta", map[string]any{"text": ev.Text, "turn": turn})
 	case llm.LoopText:
 		c.mu.Lock()
 		c.reqText = true
@@ -524,7 +759,11 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		c.view = append(c.view, viewItem{Kind: "tool_call", ID: tu.ID, Name: tu.Name, Arguments: tu.Args, State: "running"})
 		turn := c.turnAt
 		c.mu.Unlock()
-		c.emit("tool_call", map[string]any{"id": tu.ID, "name": tu.Name, "state": "running", "turn": turn})
+		out := map[string]any{"id": tu.ID, "name": tu.Name, "state": "running", "turn": turn}
+		if len(tu.Args) > 0 && len(tu.Args) <= maxApprovalArgs {
+			out["arguments"] = tu.Args
+		}
+		c.emit("tool_call", out)
 	case llm.LoopToolResult:
 		r := ev.Result
 		c.mu.Lock()
@@ -536,9 +775,15 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		if c.adapt != nil && tu.Name == llm.LoadToolsName {
 			loaded, c.adapt.loadRow = c.adapt.loadRow, nil
 		}
+		ms := ev.Took.Milliseconds()
+		if ev.Took > 0 && ms == 0 {
+			ms = 1
+		}
+		sum := summarize(tu.Name, r.Content, r.IsError)
 		for i := range c.view {
 			if c.view[i].Kind == "tool_call" && c.view[i].ID == r.ToolUseID {
-				c.view[i].State, c.view[i].IsError, c.view[i].Loaded = "done", r.IsError, loaded
+				c.view[i].State, c.view[i].IsError = "done", r.IsError
+				c.view[i].DurationMS, c.view[i].Summary, c.view[i].Loaded = ms, sum, loaded
 			}
 		}
 		turn := c.turnAt
@@ -547,6 +792,12 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 			log.Warn().Err(err).Str("chat", c.id).Msg("chat: could not store a tool call")
 		}
 		done := map[string]any{"id": r.ToolUseID, "name": tu.Name, "state": "done", "is_error": r.IsError, "turn": turn}
+		if ms > 0 {
+			done["duration_ms"] = ms
+		}
+		if sum != nil {
+			done["summary"] = sum
+		}
 		if len(loaded) > 0 {
 			done["loaded"] = loaded
 		}
@@ -555,6 +806,7 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		c.onToolsChanged(*ev.Tools)
 	case llm.LoopUsage:
 		c.mu.Lock()
+		c.lastPrompt = ev.Usage.Input + ev.Usage.CacheRead + ev.Usage.CacheWrite
 		c.lastText, c.lastReasoning = c.reqText, c.reqReasoning
 		c.reqText, c.reqReasoning = false, false
 		c.usageSeq++
@@ -590,19 +842,49 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 			out["cost_usd"] = ev.Cost.USD
 		}
 		c.emit("usage", out)
+		c.noteState()
 	case llm.LoopWarning:
 		text := priceWarningText(*ev.Warning)
+		info := &noticeView{
+			Kind: "price_tier", PromptTokens: ev.Warning.PromptTokens, Threshold: ev.Warning.Threshold,
+			TierTokens: ev.Warning.TierTokens, Mult: tierMult(c.loop.Price), Model: ev.Warning.Model,
+		}
 		c.mu.Lock()
 		if c.turnAt < len(c.view) {
 			c.view[c.turnAt].Warning = text
+			c.view[c.turnAt].WarningInfo = info
 		}
 		turn := c.turnAt
 		c.mu.Unlock()
 		c.emit("warning", map[string]any{
-			"turn": turn, "message": text, "threshold": ev.Warning.Threshold,
-			"prompt_tokens": ev.Warning.PromptTokens, "model": ev.Warning.Model,
+			"turn": turn, "message": text, "kind": info.Kind, "threshold": info.Threshold,
+			"prompt_tokens": info.PromptTokens, "tier_tokens": info.TierTokens, "mult": info.Mult, "model": info.Model,
 		})
 	}
+}
+
+// noteFirstSign records, once per turn, how long the model took to show its
+// first sign of life (reasoning, text or a tool call) since the turn was
+// accepted. The manager keeps the slowest per model for this server run.
+func (c *chat) noteFirstSign() {
+	c.mu.Lock()
+	if c.firstSeen || c.turnBegan.IsZero() {
+		c.mu.Unlock()
+		return
+	}
+	c.firstSeen = true
+	d := time.Since(c.turnBegan)
+	c.mu.Unlock()
+	c.m.noteFirstToken(c.provider, c.model, d)
+}
+
+// tierMult is the factor the input price rises by past the price tier: tier 2
+// input over tier 1 input. 0 when the card has no second tier.
+func tierMult(p *llm.PriceCard) float64 {
+	if p == nil || p.InputPerMTok <= 0 || p.HighInputPerMTok <= 0 {
+		return 0
+	}
+	return p.HighInputPerMTok / p.InputPerMTok
 }
 
 // argsHook adds `trace: {Knomit-Trace: chat:<id>}` to a call whose tool
@@ -667,12 +949,6 @@ func (c *chat) end(reason string) {
 		}
 
 		c.emit("chat_end", map[string]string{"reason": reason})
-		c.mu.Lock()
-		for s := range c.subs {
-			delete(c.subs, s)
-			close(s.ch)
-		}
-		c.mu.Unlock()
 
 		if err := c.sess.Close(context.Background()); err != nil {
 			log.Warn().Err(err).Str("chat", c.id).Msg("chat: closing the MCP session failed")
@@ -684,3 +960,26 @@ func (c *chat) end(reason string) {
 }
 
 func (c *chat) String() string { return fmt.Sprintf("chat %s", c.id) }
+
+// chatTitleMax is how many characters of the first message the chat's title
+// keeps.
+const chatTitleMax = 60
+
+// titleOf is the chat's title: the first message with its whitespace collapsed,
+// cut to chatTitleMax characters (runes), at a word boundary when one falls in
+// the last 15, with an ellipsis when anything was cut.
+func titleOf(text string) string {
+	t := strings.Join(strings.Fields(text), " ")
+	r := []rune(t)
+	if len(r) <= chatTitleMax {
+		return t
+	}
+	cut := r[:chatTitleMax]
+	for i := len(cut) - 1; i >= chatTitleMax-15; i-- {
+		if cut[i] == ' ' {
+			cut = cut[:i]
+			break
+		}
+	}
+	return strings.TrimRight(string(cut), " ") + "\u2026"
+}

@@ -40,9 +40,9 @@ func fakeOllama(t *testing.T, caps map[string][]string, trained int) *httptest.S
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/tags":
-			ms := []map[string]string{}
+			ms := []map[string]any{}
 			for m := range caps {
-				ms = append(ms, map[string]string{"name": m, "model": m})
+				ms = append(ms, map[string]any{"name": m, "model": m, "details": map[string]string{"parameter_size": "7B", "quantization_level": "Q4_K_M"}})
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"models": ms})
 		case "/api/show":
@@ -60,6 +60,22 @@ func fakeOllama(t *testing.T, caps map[string][]string, trained int) *httptest.S
 	return srv
 }
 
+// The display name comes from the config at read time: a named model shows its
+// name, an unnamed one its id, and a provider or model no longer configured its id.
+func TestRegistry_ModelNameFromConfig(t *testing.T) {
+	reg := NewRegistry(map[string]config.LLMProviderConfig{
+		"prov": {Kind: "ollama", Host: "http://127.0.0.1:1", Models: []string{"o1", "o2"},
+			Entries: []config.LLMModelEntry{{ID: "o1", Name: "Ollama One"}, {ID: "o2"}}},
+	})
+	require.Equal(t, "Ollama One", reg.ModelName("prov", "o1"))
+	require.Equal(t, "o2", reg.ModelName("prov", "o2"))
+	require.Equal(t, "gone", reg.ModelName("prov", "gone"))
+	require.Equal(t, "o1", reg.ModelName("nope", "o1"))
+	st := reg.List(context.Background())
+	require.Equal(t, "Ollama One", st[0].Models[0].Name)
+	require.Equal(t, "o1", st[0].Models[0].ID, "the id stays the identity")
+}
+
 func TestRegistry_ListMarksUnavailableAndToolless(t *testing.T) {
 	an, _ := fakeAnthropicModels(t, "a1")
 	ol := fakeOllama(t, map[string][]string{"o1": {"completion"}}, 8192)
@@ -69,12 +85,12 @@ func TestRegistry_ListMarksUnavailableAndToolless(t *testing.T) {
 	})
 	got := r.List(context.Background())
 	require.Equal(t, []ProviderStatus{
-		{Name: "anthropic", Kind: "anthropic", Models: []ModelStatus{
-			{ID: "a1", Available: true, Tools: true},
-			{ID: "a2", Available: false, Reason: "not offered by the provider"},
+		{Name: "anthropic", Kind: "anthropic", Reachable: true, Models: []ModelStatus{
+			{ID: "a1", Name: "a1", Available: true, Tools: true},
+			{ID: "a2", Name: "a2", Available: false, Reason: "not offered by the provider"},
 		}},
-		{Name: "local", Kind: "ollama", Models: []ModelStatus{
-			{ID: "o1", Available: true, Tools: false, Reason: "model does not support tool calling (capabilities: completion)"},
+		{Name: "local", Kind: "ollama", Host: ol.URL, Reachable: true, Models: []ModelStatus{
+			{ID: "o1", Name: "o1", Available: true, Tools: false, Reason: "model does not support tool calling (capabilities: completion)", ParameterSize: "7B", Quantization: "Q4_K_M"},
 		}},
 	}, got)
 }
@@ -94,8 +110,8 @@ func TestRegistry_APIKeyEnvHoldingAKeyMakesOnlyThatProviderUnavailable(t *testin
 	got := r.List(context.Background())
 	want := fmt.Sprintf(config.APIKeyEnvNotANameMessage, "prov-x")
 	require.Equal(t, []ProviderStatus{
-		{Name: "prov-x", Kind: "anthropic", Models: []ModelStatus{{ID: "a1", Reason: want}, {ID: "a2", Reason: want}}},
-		{Name: "prov-y", Kind: "anthropic", Models: []ModelStatus{{ID: "a3", Available: true, Tools: true}}},
+		{Name: "prov-x", Kind: "anthropic", Models: []ModelStatus{{ID: "a1", Name: "a1", Reason: want}, {ID: "a2", Name: "a2", Reason: want}}},
+		{Name: "prov-y", Kind: "anthropic", Reachable: true, Models: []ModelStatus{{ID: "a3", Name: "a3", Available: true, Tools: true}}},
 	}, got)
 	for i := 0; i+8 <= len(key); i++ {
 		require.NotContains(t, want, key[i:i+8])
@@ -121,8 +137,8 @@ func TestRegistry_APIKeyEnvBadButAnotherKeySourceSetStaysAvailable(t *testing.T)
 	})
 	got := r.List(context.Background())
 	require.Equal(t, []ProviderStatus{
-		{Name: "prov-f", Kind: "anthropic", Models: []ModelStatus{{ID: "a1", Available: true, Tools: true}}},
-		{Name: "prov-k", Kind: "anthropic", Models: []ModelStatus{{ID: "a2", Available: true, Tools: true}}},
+		{Name: "prov-f", Kind: "anthropic", Reachable: true, Models: []ModelStatus{{ID: "a1", Name: "a1", Available: true, Tools: true}}},
+		{Name: "prov-k", Kind: "anthropic", Reachable: true, Models: []ModelStatus{{ID: "a2", Name: "a2", Available: true, Tools: true}}},
 	}, got)
 	for _, p := range []string{"prov-f", "prov-k"} {
 		m, err := r.Open(context.Background(), p, map[string]string{"prov-f": "a1", "prov-k": "a2"}[p])
@@ -261,4 +277,132 @@ func TestRegistry_EchoedAPIKeyIsRedacted(t *testing.T) {
 	require.Contains(t, err.Error(), "bad key [redacted]")
 	var re *redactedError
 	require.ErrorAs(t, err, &re, "the original error is still reachable through Unwrap")
+}
+
+// The start screen's details come from the config and the provider: best_for,
+// effort, the price card and the context window from config; num_ctx, size and
+// quantization from Ollama; the key source is the env var's NAME.
+func TestRegistry_ListCarriesStartScreenDetails(t *testing.T) {
+	an, _ := fakeAnthropicModels(t, "a1")
+	ol := fakeOllama(t, map[string][]string{"o1": {"completion", "tools"}}, 8192)
+	t.Setenv("KNOMIT_TEST_ANTHROPIC_KEY", "sk-ant-should-never-show")
+	card := &config.LLMPriceCard{
+		Tiers:         []config.LLMPriceTier{{UpToPromptTokens: 100_000, InputPerMTok: 0.7, OutputPerMTok: 3.5}, {InputPerMTok: 1.4, OutputPerMTok: 7}},
+		CacheReadMult: 0.1, CacheWrite5mMult: 1.25, WarnPromptTokens: 95_000,
+	}
+	r := NewRegistry(map[string]config.LLMProviderConfig{
+		"cloud": {Kind: "anthropic", BaseURL: an.URL, APIKeyEnv: "KNOMIT_TEST_ANTHROPIC_KEY", Models: []string{"a1"},
+			ModelDefaults: map[string]config.LLMModelConfig{"a1": {BestFor: "Everything", Effort: "high", ContextWindow: 500_000, Price: card}}},
+		"local": {Kind: "ollama", Host: ol.URL, NumCtx: 4096, KeepAlive: "5m", Models: []string{"o1"}},
+	})
+	got := r.List(context.Background())
+	require.Len(t, got, 2)
+	cloud, local := got[0], got[1]
+	require.Equal(t, "KNOMIT_TEST_ANTHROPIC_KEY", cloud.KeySource, "the NAME of the variable")
+	require.True(t, cloud.Reachable)
+	require.Equal(t, "", cloud.Host)
+	a1 := cloud.Models[0]
+	require.Equal(t, "Everything", a1.BestFor)
+	require.Equal(t, "high", a1.Effort)
+	require.Equal(t, 500_000, a1.ContextWindow)
+	require.Equal(t, card, a1.Price)
+	require.Equal(t, ol.URL, local.Host)
+	require.True(t, local.Reachable)
+	o1 := local.Models[0]
+	require.Equal(t, 4096, o1.NumCtx)
+	require.Equal(t, 4096, o1.ContextWindow, "the trained length (8192) is above num_ctx")
+	require.Equal(t, "5m", o1.KeepAlive)
+	require.Equal(t, "7B", o1.ParameterSize)
+	require.Equal(t, "Q4_K_M", o1.Quantization)
+	require.Nil(t, o1.Price, "an Ollama model without a price card has none")
+	require.NotContains(t, fmt.Sprintf("%+v", got), "sk-ant-should-never-show")
+}
+
+// key_source is shown only when the env var is the key source in effect and is
+// a variable name: a key pasted into api_key_env, a key file and a plaintext
+// key all give none, and the pasted value is never repeated.
+//
+// SABOTAGE: keySource returns p.APIKeyEnv unconditionally -> the pasted-key
+// case shows the key.
+func TestRegistry_KeySourceIsNeverTheKey(t *testing.T) {
+	const pasted = "sk-ant-api03-Zq9xT7mK2vLpR4wB"
+	t.Setenv("SOME_NAME", "a-key-value")
+	an, _ := fakeAnthropicModels(t, "a1")
+	keyFile := filepath.Join(t.TempDir(), "key")
+	require.NoError(t, os.WriteFile(keyFile, []byte("sk-test-file\n"), 0o600))
+	r := NewRegistry(map[string]config.LLMProviderConfig{
+		"a-env":    {Kind: "anthropic", BaseURL: an.URL, APIKeyEnv: "SOME_NAME", Models: []string{"a1"}},
+		"b-pasted": {Kind: "anthropic", BaseURL: an.URL, APIKeyEnv: pasted, Models: []string{"a1"}},
+		"c-file":   {Kind: "anthropic", BaseURL: an.URL, APIKeyEnv: "SOME_NAME", APIKeyFile: keyFile, Models: []string{"a1"}},
+		"d-plain":  {Kind: "anthropic", BaseURL: an.URL, APIKeyEnv: "SOME_NAME", APIKey: "sk-test-plain", Models: []string{"a1"}},
+	})
+	got := r.List(context.Background())
+	var sources []string
+	for _, p := range got {
+		sources = append(sources, p.KeySource)
+	}
+	require.Equal(t, []string{"SOME_NAME", "", "", ""}, sources)
+	require.NotContains(t, sources, "a-key-value")
+	all, err := json.Marshal(got)
+	require.NoError(t, err)
+	for _, secret := range []string{pasted, "sk-test-file", "sk-test-plain", keyFile} {
+		require.NotContains(t, string(all), secret)
+	}
+}
+
+// A key pasted into api_key_env that happens to be made only of letters, digits
+// and underscores looks like a variable name; it is reported only if such a
+// variable is set, and an unset name is not the key in effect.
+//
+// SABOTAGE: keySource drops the os.Getenv check -> the pasted key and the unset
+// name are reported.
+func TestRegistry_KeySourceNeedsTheVariableToBeSet(t *testing.T) {
+	const pasted = "skantapi03abcDEF123"
+	an, _ := fakeAnthropicModels(t, "a1")
+	t.Setenv("KNOMIT_TEST_SET_VAR", "value")
+	r := NewRegistry(map[string]config.LLMProviderConfig{
+		"a-set":    {Kind: "anthropic", BaseURL: an.URL, APIKeyEnv: "KNOMIT_TEST_SET_VAR", Models: []string{"a1"}},
+		"b-unset":  {Kind: "anthropic", BaseURL: an.URL, APIKeyEnv: "KNOMIT_TEST_NOT_SET_VAR", Models: []string{"a1"}},
+		"c-pasted": {Kind: "anthropic", BaseURL: an.URL, APIKeyEnv: pasted, Models: []string{"a1"}},
+	})
+	var sources []string
+	for _, p := range r.List(context.Background()) {
+		sources = append(sources, p.KeySource)
+	}
+	require.Equal(t, []string{"KNOMIT_TEST_SET_VAR", "", ""}, sources)
+}
+
+// An Ollama host is shown as scheme, host and port: no credentials, no query
+// and no fragment.
+//
+// SABOTAGE: displayHost keeps RawQuery and Fragment -> the token cases fail.
+func TestRegistry_HostDropsCredentials(t *testing.T) {
+	for in, want := range map[string]string{
+		"http://user:secret@box:11434/":        "http://box:11434",
+		"box:11434":                            "http://box:11434",
+		"http://box:11434?token=SECRET":        "http://box:11434",
+		"http://box:11434/#x":                  "http://box:11434",
+		"http://box:11434#SECRET":              "http://box:11434",
+		"http://box:11434/v1?api_key=SECRET":   "http://box:11434/v1",
+		"http://u:p@box:11434/v1?a=b&c=d#frag": "http://box:11434/v1",
+		"http://box:11434?":                    "http://box:11434",
+	} {
+		got := displayHost(in)
+		require.Equal(t, want, got, in)
+		require.NotContains(t, got, "SECRET")
+	}
+}
+
+// A provider that cannot be reached is not reachable, and says why per model.
+func TestRegistry_UnreachableProvider(t *testing.T) {
+	r := NewRegistry(map[string]config.LLMProviderConfig{
+		"gone":  {Kind: "ollama", Host: "http://127.0.0.1:1", Models: []string{"o1"}},
+		"nokey": {Kind: "anthropic", APIKeyEnv: "KNOMIT_TEST_UNSET_KEY_VAR", Models: []string{"a1"}},
+	})
+	got := r.List(context.Background())
+	require.False(t, got[0].Reachable)
+	require.Contains(t, got[0].Models[0].Reason, "ollama unreachable")
+	require.False(t, got[1].Reachable)
+	require.Equal(t, "", got[1].KeySource, "an unset variable is not the key in effect")
+	require.Equal(t, "no API key configured", got[1].Models[0].Reason)
 }

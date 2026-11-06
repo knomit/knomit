@@ -157,8 +157,8 @@ func TestLoop_RepeatStopIsOffForAProviderThatIsNotStoppable(t *testing.T) {
 // kept calls' names and arguments and the text, divided by 4. The repeat is
 // not counted.
 //
-// SABOTAGE: agent.go repeatStop.response, delete the loop over r.reasoning ->
-// the exact value is off by len(reasoning)/4 and this fails.
+// SABOTAGE: agent.go repeatStop.response, delete the `case BlockReasoning:`
+// arm -> the exact value is off by len(reasoning)/4 and this fails.
 func TestLoop_RepeatStopOutputEstimateCountsReasoningAndKeptCalls(t *testing.T) {
 	reasoning := `{"thinking":"0123456789012345678901234567890123456789"}`
 	m := &streamModel{stoppable: true, steps: []streamStep{
@@ -245,4 +245,56 @@ func TestLoop_RepeatStopLeavesNoGoroutine(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	require.LessOrEqual(t, runtime.NumGoroutine(), before)
+}
+
+// orderedModel streams the way Ollama does since blocks are built in stream
+// order: a content run, a thinking run closed into one reasoning event, more
+// content, then calls, the second of them a repeat.
+type orderedModel struct{ streamModel }
+
+func (m *orderedModel) Stream(ctx context.Context, s Snapshot, _ StreamOptions, sink func(Event)) (*Response, error) {
+	m.snaps = append(m.snaps, s)
+	if len(m.snaps) > 1 {
+		sink(Event{Kind: EventTextDelta, Text: "done"})
+		return &Response{Blocks: []Block{{Kind: BlockText, Text: "done"}}, StopReason: StopEndTurn, Usage: Usage{Input: 10, Output: 5}}, nil
+	}
+	sink(Event{Kind: EventTextDelta, Text: "aaaa"})
+	sink(Event{Kind: EventTextDelta, Text: "bbbb"})
+	sink(Event{Kind: EventReasoning, Reasoning: &Reasoning{Provider: "fake", Model: "m", Native: json.RawMessage(`{"thinking":"first"}`)}})
+	sink(Event{Kind: EventTextDelta, Text: "cccc"})
+	sink(Event{Kind: EventReasoning, Reasoning: &Reasoning{Provider: "fake", Model: "m", Native: json.RawMessage(`{"thinking":"second"}`)}})
+	for i := 0; i < 3; i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		c := callOf("knomit_a", `{}`)
+		c.ID = fmt.Sprintf("tu_%d", i)
+		sink(Event{Kind: EventToolUse, ToolUse: &c})
+	}
+	return nil, ctx.Err()
+}
+
+// A response cut at a repeat keeps the order the stream delivered: text,
+// reasoning, text, reasoning, call. The estimate counts all of their bytes.
+//
+// SABOTAGE: agent.go repeatStop.addReasoning, delete `r.closeText()` -> the
+// first text run lands after the reasoning and this fails.
+func TestLoop_RepeatStopKeepsStreamOrderAndCountsEveryRun(t *testing.T) {
+	m := &orderedModel{streamModel{stoppable: true}}
+	b := NewBuilder()
+	require.NoError(t, b.Add(Item{ID: "system", Hook: HookSystem, Text: "sys"}))
+	h := &fakeHost{out: map[string]ToolOutcome{"knomit_a": {Content: "a"}}}
+	l := &Loop{Model: m, Builder: b, Tools: h, Log: &recLog{}}
+	res, err := l.RunTurn(context.Background(), "go")
+	require.NoError(t, err)
+	var kinds []BlockKind
+	var text string
+	for _, bl := range history(l.Builder)[1].Blocks {
+		kinds = append(kinds, bl.Kind)
+		text += bl.Text
+	}
+	require.Equal(t, []BlockKind{BlockText, BlockReasoning, BlockText, BlockReasoning, BlockToolUse}, kinds)
+	require.Equal(t, "aaaabbbbcccc", text)
+	want := (12 + len(`{"thinking":"first"}`) + len(`{"thinking":"second"}`) + len("knomit_a") + len("{}")) / 4
+	require.Equal(t, int64(want)+5, res.Usage.Output)
 }

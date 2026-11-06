@@ -78,3 +78,200 @@ export function toolsInContextLine(loadedNow: number, total: number, tokens: num
 export function loadedToolsRow(names: string[]): string {
   return `Loaded tools: ${names.join(', ')}`;
 }
+
+// ── APPROVED (2026-11-06) ──
+// Chat UX v2, PR 1 (design 2026-11-05-chat-ux-v2, section 2). Approved by the
+// user on 2026-11-06, with the singular forms ("1 step", "read 1 fact",
+// "used 1 tool", "Session (1 turn)") and the timeline verbs below.
+
+/** The activity line's words. ONE function words the whole summary: the pieces
+ *  are joined with " · ". `strong` marks the parts drawn bold (the target and
+ *  the counts). A tool with no wording here counts toward "used N tools". */
+export interface SummarySeg { text: string; strong?: boolean }
+export interface SummaryCall { kind: 'bind' | 'query' | 'read' | null; target: string }
+
+export function activitySummary(calls: SummaryCall[]): SummarySeg[][] {
+  const pieces: SummarySeg[][] = [];
+  const bound: string[] = [];
+  const queries = new Map<string, number>();
+  let reads = 0;
+  let other = 0;
+  for (const c of calls) {
+    if (c.kind === 'bind') { if (!bound.includes(c.target)) bound.push(c.target); }
+    else if (c.kind === 'query') queries.set(c.target, (queries.get(c.target) ?? 0) + 1);
+    else if (c.kind === 'read') reads++;
+    else other++;
+  }
+  for (const t of bound) pieces.push(t ? [{ text: 'Bound to ' }, { text: t, strong: true }] : [{ text: 'Bound' }]);
+  for (const [t, n] of queries) {
+    pieces.push([{ text: 'searched ' }, { text: `${n}×`, strong: true }, ...(t ? [{ text: ' in ' + t }] : [])]);
+  }
+  if (reads) pieces.push([{ text: 'read ' }, { text: String(reads), strong: true }, { text: reads === 1 ? ' fact' : ' facts' }]);
+  if (other) pieces.push([{ text: 'used ' }, { text: String(other), strong: true }, { text: other === 1 ? ' tool' : ' tools' }]);
+  // The line opens a sentence: capitalize the first word.
+  const first = pieces[0]?.[0];
+  if (first) first.text = first.text.charAt(0).toUpperCase() + first.text.slice(1);
+  return pieces;
+}
+
+/** The running step of the collapsed line: Searching <t> for "<q>"… */
+export function liveStep(target: string, query: string): SummarySeg[] {
+  return [{ text: 'Searching ' }, ...(target ? [{ text: target, strong: true }, { text: ' ' }] : []), { text: `for "${query}"…` }];
+}
+
+/** The activity line's step count: "N steps · T" (the mockup words one as "1 step"). */
+export const activitySteps = (n: number): string => `${n} ${n === 1 ? 'step' : 'steps'}`;
+
+/** The turn footer: "<in> in · <out> out", and the cache meter's label. */
+export const COST_IN = 'in';
+export const COST_OUT = 'out';
+export const cachedLabel = (pct: number): string => `${pct}% cached`;
+
+/** The cost hover card. */
+export const COST_ROW_INPUT = 'Input';
+export const COST_ROW_CACHE_READ = 'Cache read';
+export const COST_ROW_CACHE_WRITE = 'Cache write (5m)';
+export const COST_ROW_OUTPUT = 'Output';
+export const COST_THIS_TURN = 'This turn';
+/** Shown for a cost when the model has no price card. */
+export const COST_UNPRICED = '–';
+export const costSession = (turns: number): string => `Session (${turns} ${turns === 1 ? 'turn' : 'turns'})`;
+
+/** The verb of a timeline row for the tools that have wording; every other tool
+ *  keeps toolRowLabel. A query that is still running reads "Searching". */
+export function toolVerb(kind: 'bind' | 'query' | 'read' | null, running: boolean): string | null {
+  switch (kind) {
+    case 'bind': return 'Bound';
+    case 'query': return running ? 'Searching' : 'Searched';
+    case 'read': return 'Read';
+    default: return null;
+  }
+}
+
+/** The top-bar pill and the composer's meter row. */
+export const PILL_SESSION = 'session';
+export const CONTEXT_LABEL = 'context';
+export const COMPOSER_HINT = 'Enter to send';
+export const CHAT_REPLY_PLACEHOLDER = 'Reply…';
+
+// ── APPROVED (2026-11-06, PR 2) ──
+// Chat UX v2, PR 2 (design sections 2 and 5). Approved by the user on
+// 2026-11-06: the design's copy-table strings for Waiting, Stop and Notices,
+// the counter "4s", the Esc keycap, "1 result" / "N results", "Not sent:
+// <reason> (<status>)", the bare "nothing sent", the duration formats ("840ms",
+// "1.9s", "22s", "1m 12s"), and the fixed Continue message.
+// The server's own sentences ("Send withdrawn", "the send was stopped before
+// the server accepted it") are in the Go handler, verbatim.
+
+/** The fixed follow-up the Continue button sends after a stop. */
+export const CHAT_CONTINUE_MESSAGE = 'Continue.';
+
+/** Waiting for the reply: the unaccepted send, the placeholder, and the stall. */
+export const CHAT_SENDING = 'Sending…';
+export const CHAT_THINKING = 'Thinking…';
+export const CHAT_NO_RESPONSE = 'No response yet';
+/** The placeholder's seconds counter (the mockup words it "4s"; not in the copy table). */
+export const waitCounter = (seconds: number): string => `${seconds}s`;
+
+/** Stop. The keycap is the key's own name; the design draws it, the table does not list it. */
+export const CHAT_STOP_KEY = 'Esc';
+export const CHAT_STOPPED = 'Stopped by you';
+export const CHAT_EDIT_RESEND = 'Edit and resend';
+export const CHAT_CONTINUE = 'Continue';
+
+/** Timeline rows: a query's result count (the mockup's "24 results"; the
+ *  singular is not in the table). */
+export const resultCount = (n: number): string => `${n} ${n === 1 ? 'result' : 'results'}`;
+
+/** Notices. The price-tier line is `<n> of <m>` then the rest; the model is its display name. */
+export const noticeOf = (n: string, m: string): string => `${n} of ${m}`;
+export const noticeTierNext = (model: string, mult: number): string =>
+  `${model}'s higher price tier is next${mult > 0 ? ` (${parseFloat(mult.toFixed(2))}×)` : ''}`;
+export const NOTICE_NEW_CHAT = 'New chat';
+export const NOTICE_FULL = 'Chat is full';
+/** `<needed> > <window>, nothing sent`; with no known size, just `nothing sent`. */
+export const noticeFullRest = (needed: string, window: string): string =>
+  `${needed && window ? `${needed} > ${window}, ` : ''}nothing sent`;
+export const NOT_SENT = 'Not sent';
+export const NOT_SENT_RETRY = 'Retry';
+/** Existing approved wording (App's boundary label for the new-chat draft), reused when starting a chat from a notice fails. */
+export const NEW_CHAT_ERROR = 'New chat hit an error';
+
+/** A tool's run time on a timeline row and in "N steps · T": 840ms, 1.9s, 22s, 1m 12s. */
+export const durationMs = (ms: number): string => `${ms}ms`;
+export const durationSeconds = (s: number): string => `${s}s`;
+export const durationMinutes = (m: number, s: number): string => `${m}m ${s}s`;
+
+
+// ── APPROVED (2026-11-06) ──
+// Chat UX v2, PR 5 (design section 1, the start screen). Approved by the user
+// on 2026-11-06: every section 1 string of the design's copy table, "free" on
+// Ollama cards, the labels Context, Effort, Cost, Size, Keep alive, "none" and
+// "cloud ·", and the formats "$x / MTok", "N tokens" and "N (num_ctx)". The
+// strings the design gives are marked "design"; the rest are the mockup's
+// wording (P1-new-chat.png).
+
+/** design: the heading and the line under it. */
+export const START_HEADING = 'Start a chat';
+export const START_INTRO = 'Pick a model, then ask. It can read every repo and lens you can; anything that writes asks you first.';
+/** design: the composer. `name` is the selected model's display name. */
+export const startPlaceholder = (name: string): string => `Ask ${name} about your knowledge…`;
+export const START_HINT = 'Enter to start · Shift+Enter for a new line';
+export const START_BUTTON = 'Start chat';
+/** design: the reachability word beside a provider. */
+export const PROVIDER_CONNECTED = 'connected';
+export const PROVIDER_RUNNING = 'running';
+/** design: the card's tags. "Price tier at 100K": the number is the model's own first tier. */
+export const TAG_DEFAULT = 'Default';
+export const TAG_TOOLS = 'Tools';
+export const TAG_OLLAMA = 'Ollama';
+export const TAG_NO_TOOLS = 'No tools';
+export const tagPriceTier = (at: string): string => `Price tier at ${at}`;
+/** design: the cost mark of a model that costs nothing. */
+export const COST_FREE = 'free';
+/** design, Suggestions. {repo} is a repo the reader has. */
+export const SUGGEST_CHANGED = 'What changed in knomit-kb this week?';
+export const SUGGEST_BIND = 'Bind to the all lens';
+export const suggestReview = (repo: string): string => `Review open items in ${repo}`;
+export const suggestContradictions = (repo: string): string => `Find contradictions in ${repo}`;
+
+/** Reused from approved PR 1 copy: "Input", "Output" and "Cache read" are
+ *  COST_ROW_INPUT, COST_ROW_OUTPUT and COST_ROW_CACHE_READ. From the mockup: */
+export const STAT_CONTEXT = 'Context';
+export const STAT_EFFORT = 'Effort';
+export const STAT_COST = 'Cost';
+export const STAT_SIZE = 'Size';
+export const STAT_KEEP_ALIVE = 'Keep alive';
+/** A price: "$0.10 / MTok". */
+export const perMTok = (usd: string): string => `${usd} / MTok`;
+/** An Ollama model's cost. */
+export const COST_NONE = 'none';
+/** A context window: "1M tokens", "32K (num_ctx)". */
+export const contextTokens = (n: string): string => `${n} tokens`;
+export const contextNumCtx = (n: string): string => `${n} (num_ctx)`;
+/** The cloud provider's "where it runs" prefix: "cloud · ANTHROPIC_API_KEY". */
+export const PROVIDER_CLOUD = 'cloud';
+
+// ── APPROVED (2026-11-06) ──
+// Chat UX v2, PR 4 (design section 6, the rail). Approved by the user on
+// 2026-11-06: the design's copy-table strings for the rail row, the hover card's
+// field labels exactly as in the mockup (R2) with "1 turn" for one, and the
+// wording for ending a chat.
+
+/** The expander under the five most recent chats. */
+export const railMore = (n: number): string => `${n} more`;
+/** The state in words, in a row's tooltip. The design gives no words for idle,
+ *  so the tooltip shows none for it. */
+export const RAIL_STATE_RUNNING = 'Running';
+export const RAIL_STATE_ATTENTION = 'Waiting for your approval';
+export const RAIL_STATE_NEW_ANSWER = 'New answer';
+export const RAIL_STATE_FAILED = 'Failed';
+/** The tooltip's field labels. */
+export const RAIL_TIP_MODEL = 'Model';
+export const RAIL_TIP_STARTED = 'Started';
+export const RAIL_TIP_COST = 'Cost';
+export const railTurns = (n: number): string => `${n} ${n === 1 ? 'turn' : 'turns'}`;
+/** The hover x, and its confirmation when a turn is still running. */
+export const RAIL_END_CHAT = 'End chat';
+export const RAIL_END_CONFIRM = 'End this chat? A turn is still running and will be stopped.';
+export const RAIL_END_KEEP = 'Keep chat';

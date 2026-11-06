@@ -110,3 +110,16 @@ export function uninstallFakeEventSource() {
   FakeEventSource.emitReadyOnConnect = true;
   (globalThis as unknown as { EventSource: unknown }).EventSource = FakeEventSource;
 }
+
+/** The URL of the page's one chat events stream. */
+export const CHAT_EVENTS_STREAM = '/api/v1/chats/events';
+
+/**
+ * The page's chat events stream, seen as one chat's: `emit` tags the payload
+ * with `chat` the way the server does (a page-level `ready` carries none).
+ */
+export function chatStream(chatId = 'chat-a'): { emit: (type: string, data?: object) => void; raw: FakeEventSource } | undefined {
+  const raw = latestStream(CHAT_EVENTS_STREAM);
+  if (!raw) return undefined;
+  return { raw, emit: (type, data) => raw.emit(type, type === 'ready' ? data : { chat: chatId, ...(data ?? {}) }) };
+}

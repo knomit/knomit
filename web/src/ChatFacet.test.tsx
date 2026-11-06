@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, fireEvent, cleanup, within } from '@testing-library/react';
 import { ChatFacet } from './ChatFacet';
-import { installFakeEventSource, uninstallFakeEventSource, streamsMatching, latestStream } from './testEventSource';
+import { installFakeEventSource, uninstallFakeEventSource, streamsMatching, chatStream } from './testEventSource';
 import { stubFleetFetch } from './fleetTestFetch';
 import { SEND_TIMEOUT_MS } from './chatApi';
 import type { ChatSnapshot } from './chatApi';
@@ -38,6 +38,14 @@ const callsTo = (fx: ReturnType<typeof stubFleetFetch>, part: string) => fx.call
 beforeEach(() => { installFakeEventSource(); });
 afterEach(() => { cleanup(); uninstallFakeEventSource(); vi.unstubAllGlobals(); });
 
+
+/** The turn footer's parts, as the page shows them. */
+const footerOf = (scope: HTMLElement = document.body) => ({
+  cost: within(scope).getByTestId('chat-cost').textContent,
+  tokens: within(scope).getByTestId('chat-tokens').textContent,
+  cached: within(scope).getByTestId('chat-cached').textContent,
+});
+
 describe('ChatFacet', () => {
   it('puts the chat panel in the left slot and the result panel in the right slot', async () => {
     mount();
@@ -53,38 +61,35 @@ describe('ChatFacet', () => {
     const columns = screen.getByTestId('chat-columns');
     expect(columns).toContainElement(panel);
     expect(columns).toContainElement(result);
-    // Browse's order: the list, then the fact.
+    // The chat first, then the result beside it.
     expect(panel.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // And in FacetColumns' own slots: the left (index) column holds the chat.
-    expect(within(screen.getByTestId('facet-index-column')).getByTestId('chat-panel')).toBe(panel);
     expect(within(screen.getByTestId('settings-scroll')).getByTestId('chat-result-panel')).toBe(result);
   });
 
-  it('stacks below FACET_NARROW_PX, as Browse\'s columns do', async () => {
-    const desc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
-    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 375 });
-    try {
-      mount();
-      await screen.findByTestId('chat-turn-0');
-      expect(screen.getByTestId('chat-columns')).toHaveAttribute('data-layout', 'stacked');
-    } finally {
-      if (desc) Object.defineProperty(HTMLElement.prototype, 'clientWidth', desc);
-      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
-    }
+  it('the transcript and the composer share one centered 740px column', async () => {
+    mount();
+    await screen.findByTestId('chat-turn-0');
+    const col = screen.getByTestId('chat-transcript').firstElementChild as HTMLElement;
+    expect(col.style.width).toBe('740px');
+    expect(col.style.maxWidth).toBe('calc(100% - 48px)');
+    expect(screen.getByTestId('chat-composer-row').closest('[style*="740px"]')).not.toBeNull();
   });
 
   it('a group is collapsed by default and fetches a result only on select', async () => {
     const { fx } = mount();
     await screen.findByTestId('chat-turn-0');
     const toggle = screen.getByTestId('chat-tool-group-toggle');
-    expect(toggle).toHaveTextContent('Used Knomit');
+    // The activity line: the summary worded from the one knomit_repos call (no
+    // wording for it, so "used N tools"), and the step count.
+    expect(screen.getByTestId('chat-activity-summary').textContent).toBe('Used 1 tool');
+    expect(screen.getByTestId('chat-activity-steps').textContent).toBe('1 step');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByTestId('chat-tool-row-tu_1')).toBeNull();
     expect(callsTo(fx, '/calls/')).toHaveLength(0);
 
     fireEvent.click(toggle);
     const row = screen.getByTestId('chat-tool-row-tu_1');
-    expect(row).toHaveTextContent('knomit: Knomit repos ▸');
+    expect(row).toHaveTextContent('knomit: Knomit repos');
     // Opening the group is not selecting a row.
     expect(callsTo(fx, '/calls/')).toHaveLength(0);
 
@@ -126,13 +131,13 @@ describe('ChatFacet', () => {
   it('streams a turn: the message, the events, and the turn\'s usage with its cost', async () => {
     const { fx } = mount(snapshot({ items: [] }), { [`POST ${BASE}/turns`]: { status: 202, body: { turn: 0 } } });
     await waitFor(() => expect(callsTo(fx, `GET ${BASE}`).length).toBeGreaterThan(0));
-    const es = latestStream('/chats/chat-a/events')!;
+    const es = chatStream('chat-a')!;
     await waitFor(() => expect(screen.getByTestId('chat-input')).toBeInTheDocument());
 
     fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'hello' } });
     fireEvent.click(screen.getByTestId('chat-send'));
     await waitFor(() => expect(callsTo(fx, '/turns')).toHaveLength(1));
-    expect(callsTo(fx, '/turns')[0].body).toEqual({ text: 'hello' });
+    expect(callsTo(fx, '/turns')[0].body).toEqual({ text: 'hello', send_id: expect.any(String) });
     expect(screen.getByTestId('chat-user')).toHaveTextContent('hello');
     expect(screen.getByTestId('chat-stop')).toBeInTheDocument();
 
@@ -143,7 +148,7 @@ describe('ChatFacet', () => {
       es.emit('turn_done', { turn: 0 });
     });
     expect(screen.getByTestId('chat-text')).toHaveTextContent('hi there');
-    expect(screen.getByTestId('chat-usage').textContent).toBe('input 11 · cache read 22 · cache write 33 · output 44 · $0.0123');
+    expect(footerOf()).toEqual({ cost: '$0.0123', tokens: '11 in · 44 out', cached: '33% cached' });
     expect(screen.getByTestId('chat-send')).toBeInTheDocument();
   });
 
@@ -155,49 +160,55 @@ describe('ChatFacet', () => {
     expect(screen.getByTestId('chat-tools-line').textContent).toBe('Tools in context: 3 of 13 (about 4.1K tokens)');
 
     // A live change before the turn ends updates it at once.
-    act(() => { latestStream('/chats/chat-a/events')!.emit('tools', { turn: 0, reason: 'pressure', loaded: [], evicted: ['knomit_query'], loaded_now: ['a', 'b'], total: 13, tokens: 950 }); });
+    act(() => { chatStream('chat-a')!.emit('tools', { turn: 0, reason: 'pressure', loaded: [], evicted: ['knomit_query'], loaded_now: ['a', 'b'], total: 13, tokens: 950 }); });
     expect(screen.getByTestId('chat-tools-line').textContent).toBe('Tools in context: 2 of 13 (about 950 tokens)');
   });
 
   it('a chat that keeps every tool shows no tools line', async () => {
     mount(snapshot({ items: [{ kind: 'user', text: 'q' }] }));
     await screen.findByTestId('chat-turn-0');
-    act(() => { latestStream('/chats/chat-a/events')!.emit('usage', { usage: { input: 1, cache_read: 0, cache_write: 0, output: 1 }, turn: 0 }); });
-    expect(screen.getByTestId('chat-usage')).toBeInTheDocument();
+    act(() => { chatStream('chat-a')!.emit('usage', { usage: { input: 1, cache_read: 0, cache_write: 0, output: 1 }, turn: 0 }); });
+    expect(footerOf().tokens).toBe('1 in · 1 out');
     expect(screen.queryByTestId('chat-tools-line')).toBeNull();
   });
 
   it('a model without a price card shows "cost unknown"', async () => {
     mount(snapshot({ items: [{ kind: 'user', text: 'q' }] }));
     await screen.findByTestId('chat-turn-0');
-    act(() => { latestStream('/chats/chat-a/events')!.emit('usage', { usage: { input: 11, cache_read: 22, cache_write: 33, output: 44 }, turn: 0 }); });
-    expect(screen.getByTestId('chat-usage').textContent).toBe('input 11 · cache read 22 · cache write 33 · output 44 · cost unknown');
+    act(() => { chatStream('chat-a')!.emit('usage', { usage: { input: 11, cache_read: 22, cache_write: 33, output: 44 }, turn: 0 }); });
+    expect(footerOf().cost).toBe('–');
   });
 
   it('shows the server\'s warning and a refusal as sent, keeps the partial text and offers no retry', async () => {
     mount(snapshot({ items: [{ kind: 'user', text: 'q' }] }));
     await screen.findByTestId('chat-turn-0');
-    const es = latestStream('/chats/chat-a/events')!;
+    const es = chatStream('chat-a')!;
     act(() => {
       es.emit('text_delta', { text: 'partial answer', turn: 0 });
-      es.emit('warning', { message: 'This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save.', threshold: 95000, turn: 0 });
+      es.emit('warning', {
+        message: 'This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save.',
+        kind: 'price_tier', threshold: 95000, prompt_tokens: 95400, tier_tokens: 100000, mult: 5, model: 'm', turn: 0,
+      });
       es.emit('turn_error', { message: 'The model declined to answer.', turn: 0 });
     });
-    expect(screen.getByTestId('chat-warning').textContent).toBe('This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save.');
+    // One footnote line, with the server's numbers; the server's sentence is its title.
+    const notice = screen.getByTestId('chat-notice-price');
+    expect(notice.textContent).toBe("95.4K of 100K·claude-test-x's higher price tier is next (5×)");
+    expect(notice.getAttribute('title')).toBe('This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save.');
     expect(screen.getByTestId('chat-turn-error').textContent).toBe('The model declined to answer.');
     expect(screen.getByTestId('chat-text')).toHaveTextContent('partial answer');
     // The only buttons are the group-less panel's: Send. No retry.
-    expect(screen.getAllByRole('button').map(b => b.textContent)).toEqual(['Send']);
+    expect(screen.getAllByRole('button').map(b => b.getAttribute('aria-label') ?? b.textContent)).toEqual(['Send']);
   });
 
   it('every SSE connection goes through openEventStream, and is closed on unmount', async () => {
     const { unmount } = mount();
     await screen.findByTestId('chat-turn-0');
-    const streams = streamsMatching('/chats/chat-a/events');
+    const streams = streamsMatching('/chats/events');
     expect(streams).toHaveLength(1);
-    expect(streams[0].url).toBe(`${BASE}/events`);
+    expect(streams[0].url).toBe('/api/v1/chats/events');
     unmount();
-    expect(streams[0].closedByClient).toBe(true);
+    await waitFor(() => expect(streams[0].closedByClient).toBe(true));
   });
 
   it('ready refetches the transcript, and a reconnect resets to the server\'s view', async () => {
@@ -205,7 +216,7 @@ describe('ChatFacet', () => {
     await screen.findByTestId('chat-turn-0');
     expect(callsTo(fx, `GET ${BASE}`).filter(c => c.route === `GET ${BASE}`)).toHaveLength(1);
     fx.set(`GET ${BASE}`, { body: snapshot({ items: [{ kind: 'user', text: 'after reconnect' }] }) });
-    act(() => { latestStream('/chats/chat-a/events')!.emit('ready', {}); });
+    act(() => { chatStream('chat-a')!.emit('ready', {}); });
     await waitFor(() => expect(screen.getByTestId('chat-user')).toHaveTextContent('after reconnect'));
     expect(screen.getAllByTestId(/^chat-turn-/)).toHaveLength(1);
   });
@@ -213,7 +224,7 @@ describe('ChatFacet', () => {
   it('chat_end hands the chat back as gone', async () => {
     const { onGone } = mount();
     await screen.findByTestId('chat-turn-0');
-    act(() => { latestStream('/chats/chat-a/events')!.emit('chat_end', { reason: 'deleted' }); });
+    act(() => { chatStream('chat-a')!.emit('chat_end', { reason: 'deleted' }); });
     expect(onGone).toHaveBeenCalledTimes(1);
     expect(onGone).toHaveBeenCalledWith('chat-a');
   });
@@ -223,18 +234,11 @@ describe('ChatFacet', () => {
     await waitFor(() => expect(onGone).toHaveBeenCalledWith('chat-a'));
   });
 
-  it('pagehide ends the chat', async () => {
+  it('pagehide does not end the chat: another tab may be showing it, and the server ends it after the last page stream closes', async () => {
     const { fx } = mount();
     await screen.findByTestId('chat-turn-0');
-    const fetchMock = vi.mocked(globalThis.fetch);
-    fetchMock.mockClear();
     act(() => { window.dispatchEvent(new Event('pagehide')); });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe(BASE);
-    expect(init?.method).toBe('DELETE');
-    expect(init?.keepalive).toBe(true);
-    expect(fx.calls.some(c => c.route === `DELETE ${BASE}`)).toBe(true);
+    expect(fx.calls.some(c => c.route === `DELETE ${BASE}`)).toBe(false);
   });
 
   it('Settings shows the grants and keeps the chat mounted underneath', async () => {
@@ -264,11 +268,11 @@ describe('ChatFacet: turn ends and repeats', () => {
     const st = scriptedReads([live, live, settled], 1);
     render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} />);
     await screen.findByTestId('chat-stop');
-    act(() => { latestStream('/chats/chat-a/events')!.emit('ready', {}); });
+    act(() => { chatStream('chat-a')!.emit('ready', {}); });
     await waitFor(() => expect(st.held).toBe(true));
     expect(st.n).toBe(2);
 
-    act(() => { latestStream('/chats/chat-a/events')!.emit('turn_done', { turn: 0 }); });
+    act(() => { chatStream('chat-a')!.emit('turn_done', { turn: 0 }); });
     await act(async () => { st.release(); });
     await waitFor(() => expect(screen.getByTestId('chat-text')).toHaveTextContent('part and the rest'));
     expect(screen.queryByTestId('chat-stop')).toBeNull();
@@ -298,7 +302,7 @@ describe('ChatFacet: turn ends and repeats', () => {
     mount(snapshot({ running: true, items: [{ kind: 'user', text: 'q' }] }));
     await screen.findByTestId('chat-turn-0');
     act(() => {
-      const es = latestStream('/chats/chat-a/events')!;
+      const es = chatStream('chat-a')!;
       es.emit('text_delta', { text: 'partial', turn: 0 });
       es.emit('turn_error', { message: 'llm: the turn was cancelled', cancelled: true, turn: 0 });
     });
@@ -311,14 +315,17 @@ describe('ChatFacet: turn ends and repeats', () => {
   it('N4: a repeated usage frame is counted once, and a repeated running frame leaves a done call done', async () => {
     mount(snapshot({ running: true, items: [{ kind: 'user', text: 'q' }, { kind: 'tool_call', id: 'tu_1', name: 'knomit_repos', state: 'done' }] }));
     await screen.findByTestId('chat-turn-0');
-    const es = latestStream('/chats/chat-a/events')!;
+    const es = chatStream('chat-a')!;
     const u = { usage: { input: 11, cache_read: 22, cache_write: 33, output: 44 }, cost_usd: 0.5, seq: 3 };
     act(() => {
       es.emit('usage', { ...u, turn: 0 });
       es.emit('usage', { ...u, turn: 0 });
       es.emit('tool_call', { id: 'tu_1', name: 'knomit_repos', state: 'running', turn: 0 });
     });
-    expect(screen.getByTestId('chat-usage').textContent).toBe('input 11 · cache read 22 · cache write 33 · output 44 · $0.5000');
+    // The turn is still running: its footer waits for its end.
+    expect(screen.queryByTestId('chat-usage')).toBeNull();
+    act(() => { es.emit('turn_done', { turn: 0 }); });
+    expect(footerOf()).toEqual({ cost: '$0.5000', tokens: '11 in · 44 out', cached: '33% cached' });
     fireEvent.click(screen.getByTestId('chat-tool-group-toggle'));
     expect(screen.getByTestId('chat-tool-row-tu_1')).toHaveAttribute('data-state', 'done');
     expect(screen.getByTestId('chat-tool-select-tu_1')).toBeEnabled();
@@ -333,10 +340,10 @@ describe('ChatFacet: turn_error races and fast follow-ups', () => {
     const st = scriptedReads([live, live, settled], 1);
     render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} />);
     await screen.findByTestId('chat-stop');
-    act(() => { latestStream('/chats/chat-a/events')!.emit('ready', {}); });
+    act(() => { chatStream('chat-a')!.emit('ready', {}); });
     await waitFor(() => expect(st.held).toBe(true));
 
-    act(() => { latestStream('/chats/chat-a/events')!.emit('turn_error', { message: 'The model declined to answer.', turn: 0 }); });
+    act(() => { chatStream('chat-a')!.emit('turn_error', { message: 'The model declined to answer.', turn: 0 }); });
     await act(async () => { st.release(); }); // the stale read answers last
     await waitFor(() => expect(screen.getByTestId('chat-text')).toHaveTextContent('part and more'));
     expect(screen.queryByTestId('chat-stop')).toBeNull();
@@ -369,7 +376,7 @@ describe('ChatFacet: turn_error races and fast follow-ups', () => {
     // server has not answered the POST, so that read cannot list the follow-up.
     const reads = () => fx.calls.filter(c => c.route === `GET ${BASE}`).length;
     const before = reads();
-    act(() => { latestStream('/chats/chat-a/events')!.emit('turn_done', { turn: 0 }); });
+    act(() => { chatStream('chat-a')!.emit('turn_done', { turn: 0 }); });
     await waitFor(() => expect(reads()).toBe(before + 1));
     await act(async () => { await new Promise(r => setTimeout(r, 20)); });
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'second']);
@@ -379,7 +386,7 @@ describe('ChatFacet: turn_error races and fast follow-ups', () => {
     fx.set(`GET ${BASE}`, { body: snapshot({ running: true, items: [
       { kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }, { kind: 'user', text: 'second' },
     ] }) });
-    act(() => { latestStream('/chats/chat-a/events')!.emit('ready', {}); });
+    act(() => { chatStream('chat-a')!.emit('ready', {}); });
     await waitFor(() => expect(reads()).toBe(before + 2));
     await act(async () => { await new Promise(r => setTimeout(r, 20)); });
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'second']);
@@ -387,7 +394,7 @@ describe('ChatFacet: turn_error races and fast follow-ups', () => {
   });
 
   it('N2: a send that is never answered counts as failed after the bound: the turn is taken back out and the error shown', async () => {
-    mount(snapshot({ running: false, items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] }));
+    mount(snapshot({ running: false, items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] }), { [`POST ${BASE}/cancel`]: { status: 204 } });
     await screen.findByTestId('chat-turn-0');
     const inner = globalThis.fetch;
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
@@ -413,7 +420,8 @@ describe('ChatFacet: turn_error races and fast follow-ups', () => {
       vi.useRealTimers();
     }
     await waitFor(() => expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first']));
-    expect(screen.getByTestId('chat-action-error').textContent).toBe(`${BASE}/turns → ${CHAT_SEND_TIMEOUT}`);
+    expect(screen.getByTestId('chat-not-sent').textContent).toBe(`Not sent: ${CHAT_SEND_TIMEOUT}Retry`);
+    await waitFor(() => expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).value).toBe('second'));
     expect(screen.getByTestId('chat-send')).toBeInTheDocument();
   });
 
@@ -423,8 +431,10 @@ describe('ChatFacet: turn_error races and fast follow-ups', () => {
     await screen.findByTestId('chat-turn-0');
     fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'second' } });
     fireEvent.click(screen.getByTestId('chat-send'));
-    await waitFor(() => expect(screen.getByTestId('chat-action-error')).toHaveTextContent(detail));
-    expect(screen.getByTestId('chat-action-error')).toHaveTextContent(String(status));
+    await waitFor(() => expect(screen.getByTestId('chat-not-sent')).toHaveTextContent(detail));
+    expect(screen.getByTestId('chat-not-sent').textContent).toBe(`Not sent: ${detail} (${status})Retry`);
+    // A refused send never loses its text: it is back in the composer, unchanged.
+    await waitFor(() => expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).value).toBe('second'));
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first']);
     expect(screen.queryByTestId('chat-stop')).toBeNull();
     expect(screen.getByTestId('chat-send')).toBeInTheDocument();
@@ -441,19 +451,18 @@ describe('ChatFacet: the snapshot is the whole truth', () => {
     ];
     mount(snapshot({ items }));
     await screen.findByTestId('chat-turn-1');
-    const lines = () => screen.getAllByTestId('chat-usage').map(e => e.textContent);
-    const expected = [
-      'input 1 · cache read 2 · cache write 3 · output 4 · $0.2500',
-      'input 5 · cache read 6 · cache write 7 · output 8 · cost unknown',
-    ];
+    const lines = () => screen.getAllByTestId('chat-usage').map(e => [
+      within(e).getByTestId('chat-cost').textContent, within(e).getByTestId('chat-tokens').textContent,
+    ]);
+    const expected = [['$0.2500', '1 in · 4 out'], ['–', '5 in · 8 out']];
     expect(lines()).toEqual(expected);
-    expect(screen.getByTestId('chat-warning').textContent).toBe('The server warns here.');
+    expect(screen.getByTestId('chat-notice-price').textContent).toBe('The server warns here.');
 
     // The stream reconnects: `ready` again, the transcript read again.
-    act(() => { latestStream('/chats/chat-a/events')!.emit('ready', {}); });
+    act(() => { chatStream('chat-a')!.emit('ready', {}); });
     await act(async () => { await new Promise(r => setTimeout(r, 20)); });
     expect(lines()).toEqual(expected);
-    expect(screen.getAllByTestId('chat-warning')).toHaveLength(1);
+    expect(screen.getAllByTestId('chat-notice-price')).toHaveLength(1);
   });
 });
 
@@ -493,7 +502,7 @@ describe('ChatFacet: events are routed by turn index', () => {
     await waitFor(() => expect(post.posts).toBe(1));
 
     // The server accepted the POST (turn index 2) and is already working.
-    const es = latestStream('/chats/chat-a/events')!;
+    const es = chatStream('chat-a')!;
     act(() => {
       es.emit('text_delta', { text: 'new words', turn: 2 });
       es.emit('tool_call', { id: 'tu_9', name: 'knomit_learn', state: 'running', turn: 2 });
@@ -501,7 +510,7 @@ describe('ChatFacet: events are routed by turn index', () => {
       es.emit('usage', { usage: { input: 5, cache_read: 0, cache_write: 0, output: 1 }, seq: 1, turn: 2 });
     });
     expect(within(screen.getByTestId('chat-turn-1')).getByTestId('chat-approval-tu_9')).toBeInTheDocument();
-    expect(within(screen.getByTestId('chat-turn-1')).getByTestId('chat-usage')).toHaveTextContent('input 5');
+    expect(within(screen.getByTestId('chat-turn-1')).queryByTestId('chat-usage')).toBeNull(); // still running: the footer waits
     // The previous turn is untouched: its text and (absent) usage.
     expect(within(screen.getByTestId('chat-turn-0')).queryByTestId('chat-usage')).toBeNull();
     expect(within(screen.getByTestId('chat-turn-0')).queryByTestId('chat-approval-tu_9')).toBeNull();
@@ -522,7 +531,7 @@ describe('ChatFacet: events are routed by turn index', () => {
     sendText('hello');
     await waitFor(() => expect(post.posts).toBe(1));
 
-    const es = latestStream('/chats/chat-a/events')!;
+    const es = chatStream('chat-a')!;
     act(() => {
       es.emit('tool_call', { id: 'tu_9', name: 'knomit_learn', state: 'running', turn: 0 });
       es.emit('approval', learnApproval(0));
@@ -543,7 +552,7 @@ describe('ChatFacet: events are routed by turn index', () => {
     sendText('again');
     await waitFor(() => expect(post.posts).toBe(1));
 
-    act(() => { latestStream('/chats/chat-a/events')!.emit('text_delta', { text: ' and a late tail', turn: 0 }); });
+    act(() => { chatStream('chat-a')!.emit('text_delta', { text: ' and a late tail', turn: 0 }); });
     expect(screen.getByTestId('chat-turn-0')).toHaveTextContent('partial and a late tail');
     expect(screen.getByTestId('chat-turn-1')).not.toHaveTextContent('late tail');
   });
@@ -557,7 +566,7 @@ describe('ChatFacet: events are routed by turn index', () => {
     fx.set(`GET ${BASE}`, { body: snapshot({ running: true, items: [
       { kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }, { kind: 'user', text: 'typed in another tab' },
     ] }) });
-    act(() => { latestStream('/chats/chat-a/events')!.emit('text_delta', { text: 'x', turn: 2 }); });
+    act(() => { chatStream('chat-a')!.emit('text_delta', { text: 'x', turn: 2 }); });
     await waitFor(() => expect(reads()).toBe(before + 1));
     await waitFor(() => expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'typed in another tab']));
   });
@@ -565,11 +574,14 @@ describe('ChatFacet: events are routed by turn index', () => {
   it('N2: after a send times out the page reads the snapshot, so a turn the server did append (and its approval) shows up', async () => {
     const fx = stubFleetFetch({
       [`GET ${BASE}`]: { body: snapshot({ items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] }) },
+      [`POST ${BASE}/cancel`]: { status: 204 },
     });
     const inner = globalThis.fetch;
+    let sentId = '';
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       if (url === `${BASE}/turns`) {
+        sentId = (JSON.parse(String(init?.body)) as { send_id: string }).send_id;
         return new Promise<Response>((_res, rej) => { init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))); });
       }
       return inner(input, init);
@@ -578,26 +590,30 @@ describe('ChatFacet: events are routed by turn index', () => {
     await screen.findByTestId('chat-turn-0');
     const reads = () => fx.calls.filter(c => c.route === `GET ${BASE}`).length;
     const before = reads();
-    // The server did take the turn, and it is waiting for approval.
-    fx.set(`GET ${BASE}`, { body: snapshot({
-      running: true,
-      items: [
-        { kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' },
-        { kind: 'user', text: 'second' }, { kind: 'tool_call', id: 'tu_9', name: 'knomit_learn', state: 'running' },
-      ],
-      pending_approvals: [learnApproval(2)],
-    }) });
     vi.useFakeTimers({ shouldAdvanceTime: false });
     try {
       sendText('second');
+      // The server did take the turn (its user item carries THIS send's id), and it is waiting for approval.
+      fx.set(`GET ${BASE}`, { body: snapshot({
+        running: true,
+        items: [
+          { kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' },
+          { kind: 'user', text: 'second', send_id: sentId }, { kind: 'tool_call', id: 'tu_9', name: 'knomit_learn', state: 'running' },
+        ],
+        pending_approvals: [learnApproval(2)],
+      }) });
       await act(async () => { await vi.advanceTimersByTimeAsync(SEND_TIMEOUT_MS + 1); });
     } finally {
       vi.useRealTimers();
     }
     await waitFor(() => expect(reads()).toBe(before + 1));
+    // The timeout also stopped the send by name, so a late POST cannot start a turn.
+    expect(fx.calls.filter(c => c.route === `POST ${BASE}/cancel`).map(c => c.body)).toEqual([{ send_id: sentId }]);
     expect(await screen.findByTestId('chat-approval-tu_9')).toBeInTheDocument();
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'second']);
-    expect(screen.getByTestId('chat-action-error').textContent).toBe(`${BASE}/turns → ${CHAT_SEND_TIMEOUT}`);
+    // The server has the turn: its text is in the transcript, so it is NOT also kept in the composer (Retry would send it twice).
+    expect(screen.queryByTestId('chat-not-sent')).toBeNull();
+    expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).value).toBe('');
   });
 });
 
@@ -632,7 +648,7 @@ describe('ChatFacet: snapshot reads are coalesced', () => {
 
     // Five events for turns the page does not know, while that read is out.
     act(() => {
-      const es = latestStream('/chats/chat-a/events')!;
+      const es = chatStream('chat-a')!;
       for (let k = 0; k < 5; k++) es.emit('text_delta', { text: 'x', turn: 10 + k });
     });
     await act(async () => { await new Promise(r => setTimeout(r, 20)); });

@@ -584,4 +584,23 @@ describe('Activity sessions: the chat marker', () => {
     expect(agent).toHaveTextContent('claude-code 1.2');
     expect(agent.textContent).not.toContain('Chat ·');
   });
+
+  it('shows the configured model name, and the id when the model is not configured', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: false, policy: POLICY,
+      sessions: [
+        sess({ id: 'chat-0a', client: { name: 'knomit-chat', version: 'anthropic/claude-test-x', initialized: true } }),
+        sess({ id: 'chat-0b', client: { name: 'knomit-chat', version: 'anthropic/retired-1', initialized: true } }),
+      ],
+    });
+    const providers = [{ name: 'anthropic', kind: 'anthropic', models: [
+      { id: 'claude-test-x', name: 'Test X', available: true, tools: true },
+    ] }];
+    render(<ActivityFacet target={CORE} chatProviders={providers} />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(2));
+    const [named, gone] = screen.getAllByTestId('session-row');
+    expect(named).toHaveTextContent('Chat · anthropic · Test X');
+    expect(named.textContent).not.toContain('claude-test-x');
+    expect(gone).toHaveTextContent('Chat · anthropic · retired-1');
+  });
 });
