@@ -43,7 +43,7 @@ function routes() {
 
 /** The panel with its own history, driven through the panel API (the way fact links will). */
 let api: { open: (e: PanelEntry) => void; state: () => PanelState };
-function Harness({ running = false, onBrowse, bound = '', onStop }: { running?: boolean; onBrowse?: (r: string, p: string) => void; bound?: string; onStop?: () => void }) {
+function Harness({ running = false, onBrowse, bound = '' }: { running?: boolean; onBrowse?: (r: string, p: string) => void; bound?: string }) {
   const [panel, dispatch] = useReducer(panelReducer, initialPanelState);
   useEffect(() => { api = { open: entry => dispatch({ type: 'open', entry }), state: () => panel }; });
   const w = usePanelWidth();
