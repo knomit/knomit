@@ -5,7 +5,7 @@ import { cachedPercent, compactCount, formatCost } from './chatState';
 import type { TurnUsage } from './chatState';
 import {
   COST_IN, COST_OUT, cachedLabel, COST_ROW_INPUT, COST_ROW_CACHE_READ, COST_ROW_CACHE_WRITE, COST_ROW_OUTPUT,
-  COST_THIS_TURN, costSession,
+  COST_THIS_TURN, COST_UNPRICED, costSession,
 } from './chatCopy';
 
 /**
@@ -36,7 +36,7 @@ export function ChatTurnFooter({ usage, costUsd, answer, sessionCostUsd, session
         onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
         onFocus={() => setHover(true)} onBlur={() => setHover(false)}
       >
-        <span data-testid="chat-cost" style={{ color: '#8a8a8a' }}>{costUsd === null ? '–' : formatCost(costUsd)}</span>
+        <span data-testid="chat-cost" style={{ color: '#8a8a8a' }}>{costUsd === null ? COST_UNPRICED : formatCost(costUsd)}</span>
         <span data-testid="chat-tokens">{compactCount(usage.input)} {COST_IN} · {compactCount(usage.output)} {COST_OUT}</span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <span aria-hidden="true" style={{ display: 'inline-block', width: 28, height: 3, borderRadius: 2, background: '#262626', overflow: 'hidden' }}>
@@ -73,7 +73,7 @@ function Total({ label, usd, testid, strong }: { label: string; usd: number | nu
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 24, padding: '2px 0', color: strong ? '#e0e0e0' : '#8a8a8a' }}>
       <span>{label}</span>
-      <span data-testid={`chat-cost-${testid}`}>{usd === null ? '–' : formatCost(usd)}</span>
+      <span data-testid={`chat-cost-${testid}`}>{usd === null ? COST_UNPRICED : formatCost(usd)}</span>
     </div>
   );
 }

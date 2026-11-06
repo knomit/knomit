@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import { compactCount, formatCost } from './chatState';
-import { PILL_SESSION, CONTEXT_LABEL } from './chatCopy';
+import { PILL_SESSION, CONTEXT_LABEL, COST_UNPRICED } from './chatCopy';
 import { useChatPill } from './chatPillStore';
 
 /** ContextMeter is the thin bar of how much of the context window is used. */
@@ -23,7 +23,7 @@ export function ChatPill({ chatId }: { chatId: string }) {
     <span data-testid="chat-pill" style={pill}>
       <span data-testid="chat-pill-session">
         <span style={{ color: '#6a6a6a' }}>{PILL_SESSION}</span>
-        {' '}<strong style={val}>{d.cost === null ? '–' : formatCost(d.cost)}</strong>
+        {' '}<strong style={val}>{d.cost === null ? COST_UNPRICED : formatCost(d.cost)}</strong>
       </span>
       <span aria-hidden="true" style={{ width: 1, alignSelf: 'stretch', background: '#262626' }} />
       <span data-testid="chat-pill-context" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>

@@ -119,6 +119,8 @@ export const COST_ROW_CACHE_READ = 'Cache read';
 export const COST_ROW_CACHE_WRITE = 'Cache write (5m)';
 export const COST_ROW_OUTPUT = 'Output';
 export const COST_THIS_TURN = 'This turn';
+/** Shown for a cost when the model has no price card. */
+export const COST_UNPRICED = '–';
 export const costSession = (turns: number): string => `Session (${turns} ${turns === 1 ? 'turn' : 'turns'})`;
 
 /** The verb of a timeline row for the tools that have wording; every other tool
