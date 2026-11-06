@@ -91,7 +91,7 @@ a { color: inherit; }
 .k-prose.k-chat-answer blockquote { margin: 10px 0; }
 .k-prose.k-chat-answer blockquote p { margin: 0; }
 .k-prose.k-chat-answer > :first-child { margin-top: 0; }
-: no ground, italic, a
+/* A quote in an answer must not read as a user message: no ground, italic, a
    thin rule. */
 .k-prose.k-chat-answer blockquote { background: none; font-style: italic; color: #9a9a9a; border-left: 1px solid #2c2c2c; padding: 0 0 0 12px; }
 /* A table: horizontal rules only, in a rounded frame. */
