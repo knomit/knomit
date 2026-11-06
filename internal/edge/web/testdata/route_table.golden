@@ -151,6 +151,7 @@ POST /chats | requestID > recoverer > reportPanic > authMiddleware > metricsMidd
 POST /chats/{id}/approvals/{callId} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
 POST /chats/{id}/cancel | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
 POST /chats/{id}/turns | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
+POST /facts/resolve | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleFactsResolve
 POST /fleet/create | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia | handleCreateFleet
 POST /fleet/decommission | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia | handleDecommissionFleet
 POST /fleet/drop-commit | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > requireLocalVia | handleDropFleetCommit

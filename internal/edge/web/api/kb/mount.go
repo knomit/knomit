@@ -37,8 +37,14 @@ import (
 // mgr is the server's repo registry: the facts/*/materialize sub-resource
 // follows cross-KB refs into any repo registered in it. The search/factset
 // routes are registered on both subtrees: a lens is a virtual repo.
-func Mount(branch, lens chi.Router, ontologyRoot string, emb model.Embedder, mgr *repos.Manager) {
+//
+// top is the API root: POST /facts/resolve (FactsResolvePath) sits there,
+// because a chat answer cites facts from any repo the caller may read, not
+// from one branch.
+func Mount(top, branch, lens chi.Router, ontologyRoot string, emb model.Embedder, mgr *repos.Manager) {
 	b := hal.URLBuilder{Base: httpx.APIBase}
+
+	top.Post(FactsResolvePath, handleFactsResolve(mgr, ontologyRoot))
 
 	branch.Get("/facts", handleHALFactsCollection(b))
 	branch.Post("/facts", handleFactCreate(b, ontologyRoot))

@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"knomit/internal/edge/web/api/kb"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/foundation/auth"
 )
@@ -53,14 +54,24 @@ var chatRoutePattern = regexp.MustCompile("^" + regexp.QuoteMeta(httpx.APIBase) 
 var factsetClosePattern = regexp.MustCompile("^" + regexp.QuoteMeta(httpx.APIBase) +
 	`(?:/repos/[^/]+/branches/[^/]+|/lenses/[^/]+)/search/factset$`)
 
+// factsResolvePath is POST /facts/resolve (api/kb): a POST only because a
+// turn's handles are a list. It looks facts up, filtered by the caller's repo
+// reach, and writes nothing, so it is a read for both gates: a read-only
+// principal and a read-only (demo) server resolve fact links too. Exact
+// match only.
+var factsResolvePath = httpx.APIBase + kb.FactsResolvePath
+
 // isMutatingRequest reports whether a request would mutate state and therefore
 // must be rejected in read-only mode. Mutating HTTP methods are gated unless
-// the path is the MCP dispatch route, or the request closes a factset.
+// the path is the MCP dispatch route, the request closes a factset, or it
+// POSTs to the fact resolver.
 func isMutatingRequest(method, path string) bool {
 	switch method {
 	case http.MethodDelete:
 		return !mcpRoutePattern.MatchString(path) && !factsetClosePattern.MatchString(path) && !chatRoutePattern.MatchString(path)
-	case http.MethodPost, http.MethodPut, http.MethodPatch:
+	case http.MethodPost:
+		return !mcpRoutePattern.MatchString(path) && !chatRoutePattern.MatchString(path) && path != factsResolvePath
+	case http.MethodPut, http.MethodPatch:
 		return !mcpRoutePattern.MatchString(path) && !chatRoutePattern.MatchString(path)
 	default:
 		return false

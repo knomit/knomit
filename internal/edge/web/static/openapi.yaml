@@ -130,6 +130,47 @@ paths:
             application/yaml:
               schema: { type: string }
 
+  /facts/resolve:
+    post:
+      tags: [facts]
+      summary: Resolve fact handles to facts
+      description: |
+        Looks up the fact handles a chat answer cites, in one call: an 8-hex
+        short id (the fact's file name), a fact path with or without the `kb/`
+        root and the `.md` extension, or `kb://<repo id or name>/<path>`. A
+        handle that names no repo is looked for in every repo the caller may
+        read, in name order, at each repo's read branch; the first match
+        answers. A handle that matches nothing, names a repo the caller cannot
+        read, or is a private (dot) path is OMITTED from the answer, never an
+        error. Results follow the order of the handles, once per distinct
+        handle. It only reads: the read-only gate and the write gate both let
+        it through.
+      operationId: resolveFacts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [handles]
+              properties:
+                handles:
+                  type: array
+                  maxItems: 100
+                  items: { type: string }
+      responses:
+        "200":
+          description: The handles that resolved
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ResolvedFact" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+
   /repos:
     get:
       tags: [repos]
@@ -6267,6 +6308,20 @@ components:
       required: [_links]
       properties:
         _links: { $ref: "#/components/schemas/LinkMap" }
+
+    ResolvedFact:
+      type: object
+      required: [handle, id, title, type, repo, branch, path, excerpt, confidence]
+      properties:
+        handle: { type: string, description: "The handle as it was asked." }
+        id: { type: string, description: "The fact's short id: its file name without .md." }
+        title: { type: string }
+        type: { type: string, description: "The fact type (observation, policy, …)." }
+        repo: { type: string, description: "The repo name the fact was found in." }
+        branch: { type: string, description: "The branch it was read at: the repo's read branch." }
+        path: { type: string, description: "The full fact path, e.g. kb/invariants/web/gate/3fc77970.md." }
+        excerpt: { type: string, description: "The start of the body as one line, at most 300 characters. Empty when the fact could not be parsed." }
+        confidence: { type: number, description: "0 when the fact could not be parsed." }
 
     Version:
       type: object
