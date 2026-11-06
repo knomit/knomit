@@ -55,7 +55,7 @@ describe('the per-row dollars', () => {
   });
 });
 
-describe('rows and tier reach the page from the server', () => {
+describe('rows reach the page from the server', () => {
   const u = { input: 1, cache_read: 2, cache_write: 3, output: 4 };
   const r1 = { input: 0.001, cache_read: 0.0002, cache_write: 0.00375, output: 0.002 };
   const r2 = { input: 0.05, cache_read: 0.0025, cache_write: 0.00625, output: 0.005 };
