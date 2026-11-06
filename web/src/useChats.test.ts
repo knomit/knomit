@@ -72,37 +72,61 @@ describe('useChats', () => {
 
     act(() => { result.current.add(B); });
     expect(result.current.chats.map(c => c.id)).toEqual(['chat-a', 'chat-b']);
-    // The one further read only fills in the new row's state; it never replaces the list.
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(result.current.chats.map(c => c.id)).toEqual(['chat-a', 'chat-b']);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
 
     act(() => { result.current.remove('chat-a'); });
     expect(result.current.chats.map(c => c.id)).toEqual(['chat-b']);
   });
 
-  it('a chat created in this page shows the server\'s state and first-message title: its first events predate the subscription, so add() reads the row', async () => {
-    const server = (id: string, title: string, state: string, turns: number) => ({ id, provider: 'local', model: 'o1', title, state, turns, last_activity: '2026-11-06T10:00:00Z' });
-    // The create (with its first message) answers with identity only; by the time
-    // the page subscribes, the server's chat is already running with its title.
-    const fetchMock = vi.fn<(url: string) => Promise<Response>>()
-      .mockResolvedValueOnce(listBody(server('chat-a', 'older chat', 'idle', 1)))
-      .mockResolvedValue(listBody(server('chat-a', 'older chat', 'idle', 1), server('chat-b', 'what is a fact?', 'running', 1)));
-    vi.stubGlobal('fetch', fetchMock);
-    const { result } = renderHook(() => useChats());
-    await waitFor(() => expect(result.current.loaded).toBe(true));
-    await waitFor(() => expect(latestStream(CHAT_EVENTS_STREAM)).toBeTruthy());
-    const es = latestStream(CHAT_EVENTS_STREAM)!;
-    const byId = (id: string) => result.current.chats.find(c => c.id === id)!;
+  describe('a chat created in this page (the create starts its first turn before the page knows the id)', () => {
+    const ev = (state: string, title: string, at: string) => ({ chat: 'chat-b', state, turns: 1, title, last_activity: at, started_at: 's' });
+    const rowOf = (c: { current: { chats: { id: string }[] } }) => c.current.chats.find(x => x.id === 'chat-b') as ReturnType<typeof useChats>['chats'][number];
+    const setup = async (list: unknown[]) => {
+      vi.stubGlobal('fetch', vi.fn(async () => listBody(...list)));
+      const hook = renderHook(() => useChats());
+      await waitFor(() => expect(hook.result.current.loaded).toBe(true));
+      await waitFor(() => expect(latestStream(CHAT_EVENTS_STREAM)).toBeTruthy());
+      return { ...hook, es: latestStream(CHAT_EVENTS_STREAM)! };
+    };
 
-    act(() => { result.current.add(B); });
-    expect(byId('chat-b').state).toBeUndefined();
-    await waitFor(() => expect(byId('chat-b')).toMatchObject({ state: 'running', title: 'what is a fact?' }));
-    expect(railState(byId('chat-b'), undefined, false)).toBe('running');
+    it('keeps the stream open with no chat listed, and a running chat_state that arrived BEFORE add() is the row\'s state and first-message title', async () => {
+      const { result, es } = await setup([]);
+      expect(result.current.chats).toEqual([]);
+      act(() => { es.emit('chat_state', ev('running', 'Say hi.', '2026-11-06T10:00:01Z')); });
+      act(() => { result.current.add(B); });
+      expect(rowOf(result)).toMatchObject({ state: 'running', title: 'Say hi.' });
+      expect(railState(rowOf(result), undefined, false)).toBe('running');
+    });
 
-    // Then the turn fails: the live event moves the row to failed.
-    act(() => { es.emit('chat_state', { chat: 'chat-b', state: 'error', turns: 1, title: 'what is a fact?', last_activity: '2026-11-06T10:01:00Z', started_at: 's' }); });
-    expect(byId('chat-b')).toMatchObject({ state: 'error', title: 'what is a fact?' });
-    expect(railState(byId('chat-b'), undefined, false)).toBe('failed');
+    it('running then idle between the create and add(): the row ends idle, not running', async () => {
+      const { result, es } = await setup([A]);
+      act(() => { es.emit('chat_state', ev('running', 'Say hi.', '2026-11-06T10:00:01Z')); });
+      act(() => { es.emit('chat_state', ev('idle', 'Say hi.', '2026-11-06T10:00:02Z')); });
+      act(() => { result.current.add(B); });
+      expect(rowOf(result)).toMatchObject({ state: 'idle', title: 'Say hi.' });
+      expect(railState(rowOf(result), 1, false)).toBe('idle');
+    });
+
+    it('an event after add() applies: running, then failed', async () => {
+      const { result, es } = await setup([A]);
+      act(() => { es.emit('chat_state', ev('running', 'Say hi.', '2026-11-06T10:00:01Z')); });
+      act(() => { result.current.add(B); });
+      act(() => { es.emit('chat_state', ev('error', 'Say hi.', '2026-11-06T10:00:03Z')); });
+      expect(railState(rowOf(result), undefined, false)).toBe('failed');
+    });
+
+    it('an older GET /chats row does not overwrite a newer event, nor the add() it was cut before', async () => {
+      const { result, es } = await setup([A]);
+      const older = { id: 'chat-b', provider: 'local', model: 'o1', title: 'o1', state: 'running', turns: 1, last_activity: '2026-11-06T10:00:00Z' };
+      let release!: () => void;
+      vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(res => { release = () => res(listBody({ id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' }, older)); })));
+      act(() => { window.dispatchEvent(new Event('focus')); }); // a list read starts, cut while chat-b ran
+      act(() => { es.emit('chat_state', ev('running', 'Say hi.', '2026-11-06T10:00:01Z')); });
+      act(() => { result.current.add(B); }); // added during the read
+      act(() => { es.emit('chat_state', ev('idle', 'Say hi.', '2026-11-06T10:00:02Z')); });
+      await act(async () => { release(); });
+      expect(rowOf(result)).toMatchObject({ state: 'idle', title: 'Say hi.' });
+    });
   });
 
   it('an add() made while the first GET is in flight survives that GET\'s answer', async () => {
