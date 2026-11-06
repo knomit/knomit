@@ -4,10 +4,10 @@ import ReactMarkdown from 'react-markdown';
 import { markdownPlugins, markdownComponents } from './markdown';
 import type { ChatApproval, ApprovalDecision } from './chatApi';
 import type { ToolCall } from './chatState';
-import { toolRowLabel, toolKind, callTarget, boundAfter, keyArg, queryText } from './chatState';
+import { toolRowLabel, toolKind, callTarget, boundAfter, keyArg, queryText, formatDuration, totalDurationMs } from './chatState';
 import {
   APPROVAL_ALLOW, APPROVAL_DECLINE, APPROVAL_ALLOW_SESSION, APPROVAL_TARGET_UNRESOLVED, CHAT_STOP,
-  activitySummary, activitySteps, liveStep, toolVerb,
+  activitySummary, activitySteps, liveStep, toolVerb, resultCount,
 } from './chatCopy';
 import type { SummarySeg } from './chatCopy';
 
@@ -91,7 +91,9 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
                 ))}
               </span>
             )}
-          <span data-testid="chat-activity-steps" style={steps}>{activitySteps(calls.length)}</span>
+          <span data-testid="chat-activity-steps" style={steps}>
+            {activitySteps(calls.length)}{totalDurationMs(calls) > 0 && ` · ${formatDuration(totalDurationMs(calls))}`}
+          </span>
           <span aria-hidden="true" style={{ color: '#666', fontSize: 11, transform: open ? 'rotate(90deg)' : 'none', display: 'inline-block' }}>›</span>
         </button>
         {live && onStop && (
@@ -120,6 +122,12 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
                   aria-pressed={selected} onClick={() => onSelect(c)} style={rowBtn(selected, c.isError)}>
                   <span style={{ color: c.state === 'running' ? AMBER : undefined }}>{toolVerb(toolKind(c.name), c.state === 'running') ?? toolRowLabel(c.name)}</span>
                   {arg && <span data-testid={`chat-tool-arg-${c.id}`} style={argMono}>{arg}</span>}
+                  {(c.summary || c.durationMs) && (
+                    <span data-testid={`chat-tool-meta-${c.id}`} style={metaMono}>
+                      {c.summary && toolKind(c.name) === 'query' && <span data-testid={`chat-tool-size-${c.id}`}>{resultCount(c.summary.count)}</span>}
+                      {c.durationMs ? <span data-testid={`chat-tool-time-${c.id}`}>{formatDuration(c.durationMs)}</span> : null}
+                    </span>
+                  )}
                 </button>
                 {ap && <ApprovalCard approval={ap} onAnswer={d => onAnswer(c.id, d)} />}
               </div>
@@ -185,6 +193,9 @@ const rowBtn = (selected: boolean, isError: boolean): CSSProperties => ({
 });
 const argMono: CSSProperties = {
   fontFamily: 'var(--k-font-mono)', fontSize: 12, color: '#9aa4b2', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+};
+const metaMono: CSSProperties = {
+  marginLeft: 'auto', display: 'inline-flex', gap: 10, flexShrink: 0, fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#666',
 };
 const card = (destructive: boolean): CSSProperties => ({
   margin: '2px 8px 6px', padding: '8px 10px', borderRadius: 4,

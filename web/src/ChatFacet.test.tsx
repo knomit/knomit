@@ -137,7 +137,7 @@ describe('ChatFacet', () => {
     fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'hello' } });
     fireEvent.click(screen.getByTestId('chat-send'));
     await waitFor(() => expect(callsTo(fx, '/turns')).toHaveLength(1));
-    expect(callsTo(fx, '/turns')[0].body).toEqual({ text: 'hello' });
+    expect(callsTo(fx, '/turns')[0].body).toEqual({ text: 'hello', send_id: expect.any(String) });
     expect(screen.getByTestId('chat-user')).toHaveTextContent('hello');
     expect(screen.getByTestId('chat-stop')).toBeInTheDocument();
 
@@ -165,10 +165,16 @@ describe('ChatFacet', () => {
     const es = latestStream('/chats/chat-a/events')!;
     act(() => {
       es.emit('text_delta', { text: 'partial answer', turn: 0 });
-      es.emit('warning', { message: 'This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save.', threshold: 95000, turn: 0 });
+      es.emit('warning', {
+        message: 'This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save.',
+        kind: 'price_tier', threshold: 95000, prompt_tokens: 95400, tier_tokens: 100000, mult: 5, model: 'm', turn: 0,
+      });
       es.emit('turn_error', { message: 'The model declined to answer.', turn: 0 });
     });
-    expect(screen.getByTestId('chat-warning').textContent).toBe('This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save.');
+    // One footnote line, with the server's numbers; the server's sentence is its title.
+    const notice = screen.getByTestId('chat-notice-price');
+    expect(notice.textContent).toBe("95.4K of 100K·claude-test-x's higher price tier is next (5×)");
+    expect(notice.getAttribute('title')).toBe('This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save.');
     expect(screen.getByTestId('chat-turn-error').textContent).toBe('The model declined to answer.');
     expect(screen.getByTestId('chat-text')).toHaveTextContent('partial answer');
     // The only buttons are the group-less panel's: Send. No retry.
@@ -375,7 +381,7 @@ describe('ChatFacet: turn_error races and fast follow-ups', () => {
   });
 
   it('N2: a send that is never answered counts as failed after the bound: the turn is taken back out and the error shown', async () => {
-    mount(snapshot({ running: false, items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] }));
+    mount(snapshot({ running: false, items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] }), { [`POST ${BASE}/cancel`]: { status: 204 } });
     await screen.findByTestId('chat-turn-0');
     const inner = globalThis.fetch;
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
@@ -401,7 +407,8 @@ describe('ChatFacet: turn_error races and fast follow-ups', () => {
       vi.useRealTimers();
     }
     await waitFor(() => expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first']));
-    expect(screen.getByTestId('chat-action-error').textContent).toBe(`${BASE}/turns → ${CHAT_SEND_TIMEOUT}`);
+    expect(screen.getByTestId('chat-not-sent').textContent).toBe(`Not sent: ${CHAT_SEND_TIMEOUT}Retry`);
+    await waitFor(() => expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).value).toBe('second'));
     expect(screen.getByTestId('chat-send')).toBeInTheDocument();
   });
 
@@ -411,8 +418,10 @@ describe('ChatFacet: turn_error races and fast follow-ups', () => {
     await screen.findByTestId('chat-turn-0');
     fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'second' } });
     fireEvent.click(screen.getByTestId('chat-send'));
-    await waitFor(() => expect(screen.getByTestId('chat-action-error')).toHaveTextContent(detail));
-    expect(screen.getByTestId('chat-action-error')).toHaveTextContent(String(status));
+    await waitFor(() => expect(screen.getByTestId('chat-not-sent')).toHaveTextContent(detail));
+    expect(screen.getByTestId('chat-not-sent').textContent).toBe(`Not sent: ${detail} (${status})Retry`);
+    // A refused send never loses its text: it is back in the composer, unchanged.
+    await waitFor(() => expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).value).toBe('second'));
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first']);
     expect(screen.queryByTestId('chat-stop')).toBeNull();
     expect(screen.getByTestId('chat-send')).toBeInTheDocument();
@@ -434,13 +443,13 @@ describe('ChatFacet: the snapshot is the whole truth', () => {
     ]);
     const expected = [['$0.2500', '1 in · 4 out'], ['–', '5 in · 8 out']];
     expect(lines()).toEqual(expected);
-    expect(screen.getByTestId('chat-warning').textContent).toBe('The server warns here.');
+    expect(screen.getByTestId('chat-notice-price').textContent).toBe('The server warns here.');
 
     // The stream reconnects: `ready` again, the transcript read again.
     act(() => { latestStream('/chats/chat-a/events')!.emit('ready', {}); });
     await act(async () => { await new Promise(r => setTimeout(r, 20)); });
     expect(lines()).toEqual(expected);
-    expect(screen.getAllByTestId('chat-warning')).toHaveLength(1);
+    expect(screen.getAllByTestId('chat-notice-price')).toHaveLength(1);
   });
 });
 
@@ -552,11 +561,14 @@ describe('ChatFacet: events are routed by turn index', () => {
   it('N2: after a send times out the page reads the snapshot, so a turn the server did append (and its approval) shows up', async () => {
     const fx = stubFleetFetch({
       [`GET ${BASE}`]: { body: snapshot({ items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] }) },
+      [`POST ${BASE}/cancel`]: { status: 204 },
     });
     const inner = globalThis.fetch;
+    let sentId = '';
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       if (url === `${BASE}/turns`) {
+        sentId = (JSON.parse(String(init?.body)) as { send_id: string }).send_id;
         return new Promise<Response>((_res, rej) => { init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))); });
       }
       return inner(input, init);
@@ -565,26 +577,30 @@ describe('ChatFacet: events are routed by turn index', () => {
     await screen.findByTestId('chat-turn-0');
     const reads = () => fx.calls.filter(c => c.route === `GET ${BASE}`).length;
     const before = reads();
-    // The server did take the turn, and it is waiting for approval.
-    fx.set(`GET ${BASE}`, { body: snapshot({
-      running: true,
-      items: [
-        { kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' },
-        { kind: 'user', text: 'second' }, { kind: 'tool_call', id: 'tu_9', name: 'knomit_learn', state: 'running' },
-      ],
-      pending_approvals: [learnApproval(2)],
-    }) });
     vi.useFakeTimers({ shouldAdvanceTime: false });
     try {
       sendText('second');
+      // The server did take the turn (its user item carries THIS send's id), and it is waiting for approval.
+      fx.set(`GET ${BASE}`, { body: snapshot({
+        running: true,
+        items: [
+          { kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' },
+          { kind: 'user', text: 'second', send_id: sentId }, { kind: 'tool_call', id: 'tu_9', name: 'knomit_learn', state: 'running' },
+        ],
+        pending_approvals: [learnApproval(2)],
+      }) });
       await act(async () => { await vi.advanceTimersByTimeAsync(SEND_TIMEOUT_MS + 1); });
     } finally {
       vi.useRealTimers();
     }
     await waitFor(() => expect(reads()).toBe(before + 1));
+    // The timeout also stopped the send by name, so a late POST cannot start a turn.
+    expect(fx.calls.filter(c => c.route === `POST ${BASE}/cancel`).map(c => c.body)).toEqual([{ send_id: sentId }]);
     expect(await screen.findByTestId('chat-approval-tu_9')).toBeInTheDocument();
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'second']);
-    expect(screen.getByTestId('chat-action-error').textContent).toBe(`${BASE}/turns → ${CHAT_SEND_TIMEOUT}`);
+    // The server has the turn: its text is in the transcript, so it is NOT also kept in the composer (Retry would send it twice).
+    expect(screen.queryByTestId('chat-not-sent')).toBeNull();
+    expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).value).toBe('');
   });
 });
 

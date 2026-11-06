@@ -25,6 +25,8 @@ import { BrowseFacet } from './BrowseFacet';
 import { ChatFacet } from './ChatFacet';
 import { ChatStartForm } from './ChatStartForm';
 import { useChats, useChatProviders } from './useChats';
+import { createChat } from './chatApi';
+import { NEW_CHAT_ERROR } from './chatCopy';
 import type { ChatInfo } from './chatApi';
 import { ActivityFacet } from './ActivityFacet';
 import { SettingsFacet } from './SettingsFacet';
@@ -1442,6 +1444,13 @@ export default function App() {
   // A chat ended (the server said so, or it is gone): it leaves the list, and
   // the auto-unpin effect leaves it.
   const onChatGone = useCallback((id: string) => removeChat(id), [removeChat]);
+  // A notice's "New chat": an EMPTY chat with the same model, shown at once.
+  // The chat joins its list and is pinned in the same batched update.
+  // A failure is not swallowed: the promise rejects and the chat shows it.
+  const onNewChatLike = useCallback((from: ChatInfo): Promise<void> => createChat(from.provider, from.model).then(chat => {
+    addChat(chat);
+    dispatchView({ type: 'SELECT_PINNED', target: { kind: 'chat', id: chat.id }, available: facetsFor({ kind: 'chat', id: chat.id }, repos, lenses, creates) });
+  }), [addChat, dispatchView, repos, lenses, creates]);
   // The fleet row: the fleet target, pinned over the context with its own
   // tabs (Members, Activity, Settings).
   const onPickFleet = useCallback(() => {
@@ -1887,7 +1896,7 @@ export default function App() {
             )}
             {drafts.chat && (
               <div data-testid="draft-chat" style={draftBody(!serverOpen && draftShownKind === 'chat')}>
-                <ErrorBoundary variant="inline" label="New chat hit an error">
+                <ErrorBoundary variant="inline" label={NEW_CHAT_ERROR}>
                   <ChatStartForm providers={chatProviders ?? []} repoNames={repos.map(r => r.name)} onCreated={onChatCreated} onCancel={onCancelDraft} />
                 </ErrorBoundary>
               </div>
@@ -1921,7 +1930,7 @@ export default function App() {
               <div key={c.id} data-testid={`chat-body-${c.id}`}
                 style={draftBody(!serverOpen && displayed.kind === 'chat' && displayed.id === c.id)}>
                 <ErrorBoundary variant="inline" label="The chat hit an error">
-                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} />
+                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} />
                 </ErrorBoundary>
               </div>
             ))}

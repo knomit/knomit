@@ -70,6 +70,36 @@ type manager struct {
 	runMu   sync.Mutex
 	run     string
 	release func()
+
+	// firstToken is the slowest time to a model's first sign of life seen by
+	// this server run, per provider and model.
+	ftMu       sync.Mutex
+	firstToken map[string]time.Duration
+}
+
+// noteFirstToken keeps d when it is the slowest first-token time seen for the model.
+func (m *manager) noteFirstToken(provider, model string, d time.Duration) {
+	m.ftMu.Lock()
+	defer m.ftMu.Unlock()
+	if m.firstToken == nil {
+		m.firstToken = map[string]time.Duration{}
+	}
+	k := provider + "\x00" + model
+	if d > m.firstToken[k] {
+		m.firstToken[k] = d
+	}
+}
+
+// expectedFirstTokenMS is the slowest first-token time observed for the model
+// in this server run, in milliseconds; 0 when none has been observed.
+func (m *manager) expectedFirstTokenMS(provider, model string) int64 {
+	m.ftMu.Lock()
+	defer m.ftMu.Unlock()
+	d := m.firstToken[provider+"\x00"+model]
+	if d > 0 && d < time.Millisecond {
+		return 1
+	}
+	return d.Milliseconds()
 }
 
 func newManager(ctx context.Context, srv *mcpserver.MCPServer, rm *repos.Manager, reg *llm.Registry, sessionsDir, logDir string, released *sync.WaitGroup) *manager {

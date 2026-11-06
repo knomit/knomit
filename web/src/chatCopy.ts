@@ -140,6 +140,55 @@ export const CONTEXT_LABEL = 'context';
 export const COMPOSER_HINT = 'Enter to send';
 export const CHAT_REPLY_PLACEHOLDER = 'Reply…';
 
+// ── APPROVED (2026-11-06, PR 2) ──
+// Chat UX v2, PR 2 (design sections 2 and 5). Approved by the user on
+// 2026-11-06: the design's copy-table strings for Waiting, Stop and Notices,
+// the counter "4s", the Esc keycap, "1 result" / "N results", "Not sent:
+// <reason> (<status>)", the bare "nothing sent", the duration formats ("840ms",
+// "1.9s", "22s", "1m 12s"), and the fixed Continue message.
+// The server's own sentences ("Send withdrawn", "the send was stopped before
+// the server accepted it") are in the Go handler, verbatim.
+
+/** The fixed follow-up the Continue button sends after a stop. */
+export const CHAT_CONTINUE_MESSAGE = 'Continue.';
+
+/** Waiting for the reply: the unaccepted send, the placeholder, and the stall. */
+export const CHAT_SENDING = 'Sending…';
+export const CHAT_THINKING = 'Thinking…';
+export const CHAT_NO_RESPONSE = 'No response yet';
+/** The placeholder's seconds counter (the mockup words it "4s"; not in the copy table). */
+export const waitCounter = (seconds: number): string => `${seconds}s`;
+
+/** Stop. The keycap is the key's own name; the design draws it, the table does not list it. */
+export const CHAT_STOP_KEY = 'Esc';
+export const CHAT_STOPPED = 'Stopped by you';
+export const CHAT_EDIT_RESEND = 'Edit and resend';
+export const CHAT_CONTINUE = 'Continue';
+
+/** Timeline rows: a query's result count (the mockup's "24 results"; the
+ *  singular is not in the table). */
+export const resultCount = (n: number): string => `${n} ${n === 1 ? 'result' : 'results'}`;
+
+/** Notices. The price-tier line is `<n> of <m>` then the rest; the model is its display name. */
+export const noticeOf = (n: string, m: string): string => `${n} of ${m}`;
+export const noticeTierNext = (model: string, mult: number): string =>
+  `${model}'s higher price tier is next${mult > 0 ? ` (${parseFloat(mult.toFixed(2))}×)` : ''}`;
+export const NOTICE_NEW_CHAT = 'New chat';
+export const NOTICE_FULL = 'Chat is full';
+/** `<needed> > <window>, nothing sent`; with no known size, just `nothing sent`. */
+export const noticeFullRest = (needed: string, window: string): string =>
+  `${needed && window ? `${needed} > ${window}, ` : ''}nothing sent`;
+export const NOT_SENT = 'Not sent';
+export const NOT_SENT_RETRY = 'Retry';
+/** Existing approved wording (App's boundary label for the new-chat draft), reused when starting a chat from a notice fails. */
+export const NEW_CHAT_ERROR = 'New chat hit an error';
+
+/** A tool's run time on a timeline row and in "N steps · T": 840ms, 1.9s, 22s, 1m 12s. */
+export const durationMs = (ms: number): string => `${ms}ms`;
+export const durationSeconds = (s: number): string => `${s}s`;
+export const durationMinutes = (m: number, s: number): string => `${m}m ${s}s`;
+
+
 // ── APPROVED (2026-11-06) ──
 // Chat UX v2, PR 5 (design section 1, the start screen). Approved by the user
 // on 2026-11-06: every section 1 string of the design's copy table, "free" on

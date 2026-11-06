@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 // ErrWindowWithStablePrefix is returned by RunTurn when Loop.Window is set for a
@@ -119,6 +120,8 @@ var (
 type turnError struct {
 	msg string
 	err error
+	// needed and window are set on a context-full error whose sizes are known.
+	needed, window int
 }
 
 func (e *turnError) Error() string { return e.msg }
@@ -176,8 +179,10 @@ func promptTokens(u Usage) int64 { return u.Input + u.CacheRead + u.CacheWrite }
 type LoopEventKind string
 
 const (
-	LoopText       LoopEventKind = "text_delta"
-	LoopReasoning  LoopEventKind = "reasoning"
+	LoopText      LoopEventKind = "text_delta"
+	LoopReasoning LoopEventKind = "reasoning"
+	// LoopThinking is a piece of the model's reasoning as it streams (Text).
+	LoopThinking   LoopEventKind = "thinking_delta"
 	LoopToolUse    LoopEventKind = "tool_use"    // the model's call is complete; ToolUse is set
 	LoopToolResult LoopEventKind = "tool_result" // Result is set; the call ran, was declined, or was refused
 	LoopUsage      LoopEventKind = "usage"       // one request's Usage and Cost
@@ -197,6 +202,21 @@ type LoopEvent struct {
 	Cost    *Cost // nil when the loop has no price card
 	Warning *PriceWarning
 	Tools   *ToolsChange
+	// Took is how long the tool itself ran (LoopToolResult only): not the wait
+	// for an approval. Zero for a call that did not run (declined, skipped,
+	// cancelled, refused).
+	Took time.Duration
+}
+
+// ContextFullInfo reports the sizes behind a context-full turn error: the
+// tokens the request needed (prompt plus the reply reserve; 0 when only the
+// provider knew it was too big) and the model's window (0 when unknown).
+func ContextFullInfo(err error) (needed, window int, ok bool) {
+	var te *turnError
+	if errors.As(err, &te) && errors.Is(te.err, ErrContextFull) {
+		return te.needed, te.window, true
+	}
+	return 0, 0, false
 }
 
 // PriceWarning is the structured near-the-price-cliff warning: the prompt
@@ -358,7 +378,9 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 		}
 		l.maybeWarn(int64(est), true)
 		var streamed strings.Builder
-		resp, err := l.Model.Stream(ctx, snap, l.Options, func(ev Event) {
+		opts := l.Options
+		opts.Thinking = func(text string) { l.emit(LoopEvent{Kind: LoopThinking, Text: text}) }
+		resp, err := l.Model.Stream(ctx, snap, opts, func(ev Event) {
 			switch ev.Kind {
 			case EventTextDelta:
 				streamed.WriteString(ev.Text)
@@ -381,7 +403,7 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 				if caps := l.Model.Caps(); isOpening(snap) && caps.ContextWindow > 0 {
 					runErr = l.openingRefused(est, caps.ContextWindow, err)
 				} else {
-					runErr = &turnError{msg: contextFullMessage, err: err}
+					runErr = &turnError{msg: contextFullMessage, err: err, window: l.Model.Caps().ContextWindow}
 				}
 			} else {
 				runErr = err
@@ -476,17 +498,21 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 	}
 	var results []Block
 	var approvals []Approval
+	// took is how long the call being answered ran; 0 until a tool really ran.
+	var took time.Duration
 	answer := func(c ToolUse, content string, isErr bool) {
 		tr := &ToolResult{ToolUseID: c.ID, Content: content, IsError: isErr}
 		results = append(results, Block{Kind: BlockToolResult, ToolResult: tr})
-		l.emit(LoopEvent{Kind: LoopToolResult, Result: tr})
+		l.emit(LoopEvent{Kind: LoopToolResult, Result: tr, Took: took})
 	}
 	abort := func(from int, content string) {
+		took = 0
 		for _, c := range calls[from:] {
 			answer(c, content, true)
 		}
 	}
 	for i, c := range calls {
+		took = 0
 		if ctx.Err() != nil {
 			abort(i, CancelledResult)
 			return results, approvals, &turnError{msg: "The turn was cancelled.", err: ErrCancelled}
@@ -567,7 +593,9 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 		if l.ArgsHook != nil {
 			args = l.ArgsHook(c)
 		}
+		began := time.Now()
 		out, err := l.Tools.CallTool(ctx, c.Name, args)
+		took = max(time.Since(began), time.Nanosecond)
 		if err != nil {
 			if ctx.Err() != nil {
 				abort(i, CancelledResult)
@@ -777,7 +805,7 @@ func (l *Loop) checkBudget(snap Snapshot, est int) error {
 		return &turnError{
 			msg: fmt.Sprintf("%s (about %d prompt tokens plus %d reserved for the reply, window %d)",
 				contextFullMessage, est, reserve, window),
-			err: ErrContextFull,
+			err: ErrContextFull, needed: est + reserve, window: window,
 		}
 	}
 	return nil
@@ -940,7 +968,7 @@ func (l *Loop) openingTooBig(est, reserve, window int) error {
 	left := max(window-reserve, 0)
 	return &turnError{
 		msg: fmt.Sprintf(OpeningTooBigMessage, est, l.Model.Model(), window, reserve, left, hint),
-		err: ErrContextFull,
+		err: ErrContextFull, needed: est + reserve, window: window,
 	}
 }
 
@@ -963,7 +991,7 @@ func (l *Loop) openingRefused(est, window int, cause error) error {
 	}
 	return &turnError{
 		msg: fmt.Sprintf(OpeningRefusedByServerMessage, est, l.Model.Model(), window, hint),
-		err: cause,
+		err: cause, needed: est, window: window,
 	}
 }
 

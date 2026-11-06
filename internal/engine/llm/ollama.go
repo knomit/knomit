@@ -526,6 +526,9 @@ func (c *OllamaChat) Stream(ctx context.Context, s Snapshot, o StreamOptions, si
 		if ln.Message.Thinking != "" {
 			closeText()
 			thinking.WriteString(ln.Message.Thinking)
+			// Display only (StreamOptions.Thinking): the run is still closed
+			// into ONE BlockReasoning and ONE EventReasoning (closeThinking).
+			o.thinking(ln.Message.Thinking)
 		}
 		if ln.Message.Content != "" {
 			closeThinking()

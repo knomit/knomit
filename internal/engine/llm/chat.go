@@ -59,6 +59,18 @@ type StreamOptions struct {
 	// a model that thinks for minutes before its first text is not taken for
 	// a stalled stream. It carries no data and must not block.
 	Progress func()
+	// Thinking, when set, is called with each piece of the model's reasoning
+	// as it streams (Anthropic: only with thinking display "summarized";
+	// Ollama: the thinking it streams). It is DISPLAY ONLY and deliberately not
+	// a sink Event: the complete reasoning still arrives once, as EventReasoning
+	// and BlockReasoning, and a delta never reaches the history or the trace.
+	Thinking func(text string)
+}
+
+func (o StreamOptions) thinking(text string) {
+	if o.Thinking != nil && text != "" {
+		o.Thinking(text)
+	}
 }
 
 func (o StreamOptions) progress() {
