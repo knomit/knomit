@@ -110,6 +110,84 @@ func singular(t string) string {
 	return t
 }
 
+// RRFConstant is k in reciprocal rank fusion: a tool's fused score is the sum,
+// over the rankers, of 1/(k + its rank there). 60 is the value of the method's
+// authors (Cormack, Clarke and Buettcher, SIGIR 2009), who found it robust
+// across collections without tuning; it is kept because nothing here is better
+// measured. It is a policy constant, not a measurement: with k that large a
+// ranker's first place is worth only a little more than its tenth, so no single
+// ranker's top pick can outvote a tool that both rankers place well, which is
+// the point of blending a weak embedding of short descriptions (invariant
+// 1d564e96) with word overlap.
+const RRFConstant = 60
+
+type blendedRanker struct{ rankers []ToolRanker }
+
+// NewBlendedRanker fuses the rankings of rankers by reciprocal rank fusion
+// (RRFConstant). Only ranks are combined, never scores: scores of different
+// rankers are on different scales, and none may be thresholded (invariant
+// 9f110192). Tools a ranker scores alike share its best rank among them
+// (competition ranking), so a ranker with no opinion (every score equal) adds
+// the same to every tool and the others' order stands; ties in the fused score
+// go by name, so the result is deterministic. A ranker that fails is left out
+// and the rest still guess; when every ranker fails the error is the last
+// one's. Nil rankers are ignored, and a single ranker is returned as it is.
+func NewBlendedRanker(rankers ...ToolRanker) ToolRanker {
+	var rs []ToolRanker
+	for _, r := range rankers {
+		if r != nil {
+			rs = append(rs, r)
+		}
+	}
+	switch len(rs) {
+	case 0:
+		return nil
+	case 1:
+		return rs[0]
+	}
+	return blendedRanker{rs}
+}
+
+func (b blendedRanker) Rank(ctx context.Context, message string) ([]ScoredTool, error) {
+	fused := map[string]float64{}
+	var lastErr error
+	answered := 0
+	for _, r := range b.rankers {
+		got, err := r.Rank(ctx, message)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		answered++
+		for name, rank := range ranksOf(got) {
+			fused[name] += 1 / float64(RRFConstant+rank)
+		}
+	}
+	if answered == 0 {
+		return nil, lastErr
+	}
+	out := make([]ScoredTool, 0, len(fused))
+	for name, s := range fused {
+		out = append(out, ScoredTool{Name: name, Score: s})
+	}
+	SortScored(out)
+	return out, nil
+}
+
+// ranksOf maps each tool to its 1-based rank in ranking (best first); tools
+// with equal scores share the best rank of their group.
+func ranksOf(ranking []ScoredTool) map[string]int {
+	ranks := make(map[string]int, len(ranking))
+	for i, s := range ranking {
+		if i > 0 && s.Score == ranking[i-1].Score {
+			ranks[s.Name] = ranks[ranking[i-1].Name]
+			continue
+		}
+		ranks[s.Name] = i + 1
+	}
+	return ranks
+}
+
 type fallbackRanker struct{ primary, fallback ToolRanker }
 
 // NewFallbackRanker asks primary and, when it errors (a slow or failed

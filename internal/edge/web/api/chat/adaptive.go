@@ -23,6 +23,10 @@ import (
 const (
 	rankerEmbedding = "embedding"
 	rankerLexical   = "lexical"
+	// rankerBlended is the embedding and lexical rankings fused by rank. A turn
+	// whose embedding ranker failed is logged as lexical: the guess was the
+	// lexical ranker's alone.
+	rankerBlended = "blended"
 )
 
 // turnTools is a turn's view of the loaded tools, on its user item and on
@@ -65,6 +69,38 @@ func (t *rankTap) wrap(kind string, r llm.ToolRanker) llm.ToolRanker {
 			t.rec.EmbeddingErr = rankErrorClass(err.Error())
 		case err == nil:
 			t.rec.Kind, t.rec.Ranked = kind, out
+		}
+		return out, err
+	})
+}
+
+// watchEmbedding is r, noting only its failure (as the class of the error): the
+// blended ranker around it records what the turn's guess was.
+func (t *rankTap) watchEmbedding(r llm.ToolRanker) llm.ToolRanker {
+	return rankFunc(func(ctx context.Context, msg string) ([]llm.ScoredTool, error) {
+		out, err := r.Rank(ctx, msg)
+		if err != nil {
+			t.mu.Lock()
+			t.rec.EmbeddingErr = rankErrorClass(err.Error())
+			t.mu.Unlock()
+		}
+		return out, err
+	})
+}
+
+// wrapBlend is the blended ranker, noting each answer: blended, or lexical when
+// the embedding ranker inside it failed and the guess is the lexical one alone.
+func (t *rankTap) wrapBlend(blend llm.ToolRanker) llm.ToolRanker {
+	return rankFunc(func(ctx context.Context, msg string) ([]llm.ScoredTool, error) {
+		out, err := blend.Rank(ctx, msg)
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		t.ran = true
+		if err == nil {
+			t.rec.Kind, t.rec.Ranked = rankerBlended, out
+			if t.rec.EmbeddingErr != "" {
+				t.rec.Kind = rankerLexical
+			}
 		}
 		return out, err
 	})
@@ -249,16 +285,16 @@ func (m *manager) warmRanker(c *chat, tools []llm.ToolDef) {
 	}()
 }
 
-// newRanker builds the chat's ranker over the toolset: the embedding ranker
-// when the process has an embedder, falling back to the lexical one when it
-// errors at call time, and the lexical one alone when there is no embedder.
-// primary names the ranker the chat starts with.
+// newRanker builds the chat's ranker over the toolset: the embedding and the
+// lexical rankings fused by rank (llm.NewBlendedRanker) when the process has an
+// embedder, and the lexical ranker alone when it has none. A call-time failure
+// of the embedder leaves the lexical ranking to guess alone. primary names the
+// ranker the chat starts with.
 func newRanker(emb model.Embedder, tools []llm.ToolDef) (r llm.ToolRanker, tap *rankTap, primary string) {
 	tap = &rankTap{}
-	lex := tap.wrap(rankerLexical, llm.NewLexicalRanker(tools))
 	if emb == nil {
-		return lex, tap, rankerLexical
+		return tap.wrap(rankerLexical, llm.NewLexicalRanker(tools)), tap, rankerLexical
 	}
-	emR := tap.wrap(rankerEmbedding, mcp.NewEmbeddingRanker(emb, tools))
-	return llm.NewFallbackRanker(emR, lex), tap, rankerEmbedding
+	em := tap.watchEmbedding(mcp.NewEmbeddingRanker(emb, tools))
+	return tap.wrapBlend(llm.NewBlendedRanker(em, llm.NewLexicalRanker(tools))), tap, rankerBlended
 }

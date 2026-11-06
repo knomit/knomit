@@ -223,13 +223,14 @@ func TestMount_AdaptiveForOllamaNotForAnthropic(t *testing.T) {
 	require.Equal(t, staticReq.Hooks[llm.HookRepo], adaptiveReq.Hooks[llm.HookRepo], "the instructions are untouched")
 }
 
-// With no embedder the guess is lexical only; with one it is the embedding
-// ranker; an embedder that fails at call time falls back to lexical and the log
-// says so. The ranker kind is read off the session log's preload record.
+// With no embedder the guess is lexical only; with one it is the embedding and
+// lexical rankings fused by rank; an embedder that fails at call time leaves the
+// lexical ranking to guess alone and the log says so. The ranker kind is read
+// off the session log's preload record.
 //
-// SABOTAGE: mount.go, build the embedding ranker even when emb is nil -> a nil
-// pointer or no "lexical" record; or drop the fallback -> the third case has no
-// preload.
+// SABOTAGE: adaptive.go newRanker, build the embedding ranker even when emb is
+// nil -> a nil pointer or no "lexical" record; or drop the lexical ranker from
+// the blend -> the third case has no preload.
 func TestLexicalFallbackWhenNoEmbedder(t *testing.T) {
 	names := func(h *harness) []string { return h.toolNames(writer, "chat-00000000000000000000000000000a02") }
 
@@ -258,14 +259,14 @@ func TestLexicalFallbackWhenNoEmbedder(t *testing.T) {
 	t.Run("embedder", func(t *testing.T) {
 		h := newHarness(t)
 		emb := newFakeEmb(t, names(h), "knomit_explain")
-		h2, rec := run(t, emb, "something unrelated to any name")
+		h2, rec := run(t, emb, blankMessage)
 		_ = h2
-		require.Equal(t, "embedding", rec["ranker"])
-		require.Equal(t, []any{"knomit_explain"}, rec["loaded"], "only the tool the query vector points at scored above the rest")
+		require.Equal(t, "blended", rec["ranker"])
+		require.Equal(t, []any{"knomit_explain"}, rec["loaded"], "the message names nothing lexically, so only the tool the query vector points at stands out")
 		picks := rec["picks"].([]any)
 		require.Len(t, picks, 1)
 		require.Equal(t, "knomit_explain", picks[0].(map[string]any)["name"])
-		require.InDelta(t, 1.0, picks[0].(map[string]any)["score"], 1e-9)
+		require.InDelta(t, 2.0/(llm.RRFConstant+1), picks[0].(map[string]any)["score"], 1e-9, "first in the embedding ranking, and tied for first in the lexical one")
 		_, queries := emb.counts()
 		require.Equal(t, 1, queries, "one EmbedQuery for the turn's message")
 	})
@@ -672,13 +673,13 @@ func TestSessionLog_PreloadHitAtTurnEnd(t *testing.T) {
 	)
 	id := h.createAdaptive("uid:501")
 	s := h.attach("uid:501", id)
-	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "one"))
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, blankMessage))
 	s.until("turn_done")
 	// Turn two's message points at another tool, which the model then ignores.
 	emb.mu.Lock()
 	emb.query = e1hot(names, "knomit_repos")
 	emb.mu.Unlock()
-	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "two"))
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, blankMessage))
 	s.until("turn_done")
 
 	pre := recordsOf(readLog(t, h.logDir, id), "preload")
