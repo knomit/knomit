@@ -584,8 +584,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 				if stubSeen[skey] {
 					// A call that took the not-loaded path is not a failure of
 					// the model's: the tool is loaded and the call is to be
-					// made again. It breaks a streak and never extends one.
-					guard.reset()
+					// made again. It neither extends a streak nor breaks one.
 					continue
 				}
 				if n := guard.observe(c, out); n >= RepeatFailureLimit {

@@ -280,3 +280,27 @@ func TestLoop_SameStubCallInThreeResponsesIsNotARepeatedFailure(t *testing.T) {
 		require.Equal(t, fmt.Sprintf(NotLoadedCallResult, "knomit_learn"), resultText(m.snaps[i+1], id).Content, id)
 	}
 }
+
+// A stub call is neutral to the failure streak: it neither extends it nor
+// breaks it. [real A fails, stub B, real A fails, real A fails] is three
+// identical failures of A and ends the turn at the third.
+//
+// SABOTAGE: agent.go runCalls, window branch, add `guard.reset()` before the
+// `continue` that follows `if stubSeen[skey] {` -> the count restarts at the
+// stub, A fails only twice, and this fails.
+func TestLoop_StubCallDoesNotBreakAFailureStreak(t *testing.T) {
+	a := func(id string) ToolUse {
+		return ToolUse{ID: id, Name: "knomit_query", Args: json.RawMessage(`{"text":"x"}`)}
+	}
+	m := &fakeModel{steps: []fakeStep{
+		{resp: multiResp(Usage{}, a("a1"), ToolUse{ID: "b", Name: "knomit_learn", Args: json.RawMessage(`{}`)}, a("a2"), a("a3"))},
+		{resp: textResp("never", Usage{})},
+	}}
+	r := newRig(t, m, winTool("knomit_query", 100), winTool("knomit_learn", 100))
+	r.out, r.fail = "bad query", true
+	r.loadAhead(t, "knomit_query")
+	_, err := r.l.RunTurn(context.Background(), "go")
+	require.ErrorIs(t, err, ErrRepeatedFailure)
+	require.Len(t, r.calls, 3, "A ran three times")
+	require.Len(t, m.snaps, 1, "the turn ended in the first response")
+}
