@@ -19,7 +19,7 @@ func TestOllamaChat_CapsFromShow(t *testing.T) {
 		c := newTestOllama(t, newOllamaServer(t, []string{"completion", "tools"}), OllamaOptions{NumCtx: 8192, MaxOutput: 512})
 		require.True(t, c.Caps().Tools)
 		require.Equal(t, "", c.UnusableReason())
-		require.Equal(t, Caps{Tools: true, MaxBreakpoints: 0, ContextWindow: 8192, MaxOutput: 512}, c.Caps())
+		require.Equal(t, Caps{Tools: true, MaxBreakpoints: 0, ContextWindow: 8192, MaxOutput: 512, StreamStoppable: true}, c.Caps())
 	})
 	t.Run("window is capped at the trained context", func(t *testing.T) {
 		srv := newOllamaServer(t, []string{"tools"})

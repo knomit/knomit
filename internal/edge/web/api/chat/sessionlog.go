@@ -120,6 +120,9 @@ func (l *sessionLog) Request(r llm.RequestLog) {
 		// items and tokens above are what was sent, and this is how much less.
 		rec["projection"] = map[string]any{"stubbed_results": p.StubbedResults, "saved_tokens_est": p.SavedTokensEst}
 	}
+	if r.RepeatStopped {
+		rec["repeat_stopped"] = true
+	}
 	l.write("request", rec)
 }
 

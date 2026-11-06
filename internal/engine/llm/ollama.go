@@ -189,7 +189,7 @@ func (c *OllamaChat) Caps() Caps {
 	if c.trained > 0 {
 		window = min(window, c.trained)
 	}
-	return Caps{Tools: c.tools, MaxBreakpoints: 0, ContextWindow: window, MaxOutput: c.o.MaxOutput}
+	return Caps{Tools: c.tools, MaxBreakpoints: 0, ContextWindow: window, MaxOutput: c.o.MaxOutput, StreamStoppable: true}
 }
 
 // UnusableReason is "" for a usable model, and otherwise says why the model

@@ -238,6 +238,10 @@ type RequestLog struct {
 	// Projection is set for an adaptive chat only: what the projection did to
 	// this request.
 	Projection *ProjectionLog
+	// RepeatStopped is set when the generation was cancelled because the
+	// response repeated a call it already held (see repeatStop); Usage is then
+	// an estimate.
+	RepeatStopped bool
 }
 
 // ProjectionLog is what the projection of an adaptive chat did to one request:
@@ -288,8 +292,9 @@ type Loop struct {
 	// ArgsHook returns the arguments to SEND for a call (trace injection,
 	// plan P17). The history keeps the arguments the model emitted. Nil sends
 	// the model's own.
-	ArgsHook func(ToolUse) json.RawMessage
-	Log      SessionLog
+	ArgsHook       func(ToolUse) json.RawMessage
+	Log            SessionLog
+	repeatsDropped bool // the last response was cut at a repeated call (read once by account)
 	// Options are the per-request knobs, passed to the model untouched
 	// (Progress feeds WrapChat's stall timer).
 	Options StreamOptions
@@ -395,17 +400,35 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 		}
 		l.maybeWarn(int64(est), true)
 		var streamed strings.Builder
-		resp, err := l.Model.Stream(ctx, snap, l.Options, func(ev Event) {
+		rs := newRepeatStop(ctx, l.Model.Caps().StreamStoppable)
+		resp, err := l.Model.Stream(rs.ctx, snap, l.Options, func(ev Event) {
+			if rs.stopped {
+				return // the request is being cancelled: nothing after the repeat counts
+			}
 			switch ev.Kind {
 			case EventTextDelta:
 				streamed.WriteString(ev.Text)
 				l.emit(LoopEvent{Kind: LoopText, Text: ev.Text})
 			case EventReasoning:
+				if ev.Reasoning != nil {
+					rs.reasoning = append(rs.reasoning, Block{Kind: BlockReasoning, Reasoning: ev.Reasoning})
+				}
 				l.emit(LoopEvent{Kind: LoopReasoning})
 			case EventToolUse:
+				if rs.repeat(ev.ToolUse) {
+					return
+				}
 				l.emit(LoopEvent{Kind: LoopToolUse, ToolUse: ev.ToolUse})
 			}
 		})
+		if rs.stopped && ctx.Err() == nil {
+			// The generation was cancelled at a repeated call. Whatever the
+			// provider then returned (the cancellation, or a response that was
+			// already complete) is replaced by what streamed before the repeat.
+			resp, err = rs.response(streamed.String(), resp, est), nil
+			l.repeatsDropped = true
+		}
+		rs.release()
 		var stop *StopError
 		switch {
 		case errors.As(err, &stop):
@@ -792,6 +815,7 @@ func (l *Loop) account(res *TurnResult, snap Snapshot, resp *Response) {
 	res.Usage.PromptEval += u.PromptEval
 	res.Usage.Estimated = res.Usage.Estimated || u.Estimated
 
+	defer func() { l.repeatsDropped = false }()
 	ev := LoopEvent{Kind: LoopUsage, Usage: &u}
 	res.Usage.CacheWrite5m += u.CacheWrite5m
 	res.Usage.CacheWrite1h += u.CacheWrite1h
@@ -801,7 +825,7 @@ func (l *Loop) account(res *TurnResult, snap Snapshot, resp *Response) {
 		ev.Cost = &c
 	}
 	if l.Log != nil {
-		rl := RequestLog{Provider: l.Model.Provider(), Model: l.Model.Model(), RequestRecord: snap.Record(), Usage: u}
+		rl := RequestLog{Provider: l.Model.Provider(), Model: l.Model.Model(), RequestRecord: snap.Record(), Usage: u, RepeatStopped: l.repeatsDropped}
 		if l.Window != nil {
 			rl.Projection = projectionOf(l.Builder.Snapshot(), snap)
 		}
@@ -1240,4 +1264,89 @@ func toolUses(bs []Block) []ToolUse {
 		}
 	}
 	return out
+}
+
+// repeatStop watches one streaming response for a tool call identical (same
+// name, same canonical arguments) to one it already holds. An identical call in
+// the same response is never useful, and a model that starts repeating one does
+// not stop until the context window is full, so the first repeat cancels the
+// generation. The calls received before it are kept; the repeat and anything
+// after it are dropped, so no tool_use is left unanswered. It is armed only for
+// a provider whose cancelled stream leaves a coherent partial (Caps.StreamStoppable).
+type repeatStop struct {
+	ctx       context.Context
+	cancel    context.CancelFunc
+	armed     bool
+	stopped   bool
+	seen      map[string]bool
+	kept      []Block
+	reasoning []Block
+}
+
+func newRepeatStop(parent context.Context, armed bool) *repeatStop {
+	r := &repeatStop{ctx: parent, armed: armed}
+	if armed {
+		r.ctx, r.cancel = context.WithCancel(parent)
+		r.seen = map[string]bool{}
+	}
+	return r
+}
+
+// repeat records tu and reports whether it repeats an earlier call of the
+// response, in which case the generation is cancelled.
+func (r *repeatStop) repeat(tu *ToolUse) bool {
+	if !r.armed || tu == nil {
+		return false
+	}
+	key := tu.Name + "\x00" + canonicalArgs(tu.Args)
+	if r.seen[key] {
+		r.stopped = true
+		r.cancel()
+		return true
+	}
+	r.seen[key] = true
+	r.kept = append(r.kept, Block{Kind: BlockToolUse, ToolUse: tu})
+	return false
+}
+
+func (r *repeatStop) release() {
+	if r.cancel != nil {
+		r.cancel()
+	}
+}
+
+// response is the response up to the repeat: the reasoning and text that
+// streamed and the distinct calls. Its usage is the provider's when it
+// returned a complete one, otherwise an estimate: the prompt as the loop
+// estimated it and the bytes that streamed as output (bytes/4).
+func (r *repeatStop) response(text string, got *Response, est int) *Response {
+	blocks := append([]Block(nil), r.reasoning...)
+	if text != "" {
+		blocks = append(blocks, Block{Kind: BlockText, Text: text})
+	}
+	out := len(text)
+	for _, b := range r.kept {
+		blocks = append(blocks, b)
+		out += len(b.ToolUse.Name) + len(b.ToolUse.Args)
+	}
+	u := Usage{Input: int64(est), Output: int64(out / 4), Estimated: true}
+	if got != nil && (got.Usage.Input != 0 || got.Usage.Output != 0) {
+		u = got.Usage
+	}
+	return &Response{Blocks: blocks, StopReason: StopToolUse, Usage: u}
+}
+
+// canonicalArgs is args with object keys in sorted order and no insignificant
+// space, so two spellings of the same arguments compare equal. Arguments that
+// are not JSON compare by their bytes.
+func canonicalArgs(args json.RawMessage) string {
+	var v any
+	if err := json.Unmarshal(args, &v); err != nil {
+		return string(args)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return string(args)
+	}
+	return string(b)
 }

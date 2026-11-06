@@ -42,6 +42,12 @@ type Caps struct {
 	// history in every request; one that does not (Ollama: no cache to protect)
 	// is adaptive and may send a loaded subset of the tools (ToolWindow).
 	StablePrefix bool
+	// StreamStoppable says the loop may cancel a response while it streams and
+	// assemble the partial itself: what was received is coherent and nothing
+	// that must be returned unmodified is lost. Ollama sets it. Anthropic does
+	// not: a cancelled stream loses its thinking-block signatures and the usage
+	// its final event reports.
+	StreamStoppable bool
 }
 
 // StreamOptions are per-request knobs that are not part of the context.
