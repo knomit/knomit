@@ -39,7 +39,7 @@ func TestCore_IsLoadedFromTheOpening(t *testing.T) {
 //
 // SABOTAGE: toolwindow.go evictOrder, drop the `w.core[n]` test -> fails.
 func TestCore_IsNeverEvicted(t *testing.T) {
-	w, snap := newCoreWin(t, []string{"core_a"}, nil, winTool("core_a", 10), winTool("b", 10), winTool("c", 10))
+	w, snap := newCoreWin(t, []string{"core_a"}, nil, winTool("core_a", 10), winTool("b", 10), winTool("c", 60))
 	w.Run(loadCall("b"), snap, plenty, nil)
 	w.BeginTurn()
 	name, ok := w.EvictOne(nil)
@@ -50,7 +50,7 @@ func TestCore_IsNeverEvicted(t *testing.T) {
 	require.Equal(t, []string{"core_a"}, w.Loaded())
 
 	// Room for one more tool only: loading c may not evict the core tool.
-	out := w.Run(loadCall("c"), snap, func() int { return 5 }, nil)
+	out := w.Run(loadCall("c"), snap, func() int { return 5 }, nil) // c's growth is 10 tokens less its stub: more than 5
 	require.True(t, out.IsError, out.Content)
 	require.Contains(t, out.Content, "no room")
 	require.Equal(t, []string{"core_a"}, w.Loaded())

@@ -240,10 +240,12 @@ func (c *chat) logPreload(turn int, res *llm.TurnResult) {
 	c.log.Preload(fields)
 }
 
-// openWindow builds the ToolWindow of an adaptive chat. The catalogue must fit
-// the preload budget P (window less reserve, over PreloadDivisor); if even the
-// tool names do not, the chat does not open, with the adaptive sentence of the
-// opening-too-big refusal.
+// openWindow builds the ToolWindow of an adaptive chat. The catalogue (the tool
+// names) must fit the preload budget P (window less reserve, over
+// PreloadDivisor), and the opening (loader, core in full, a stub per other
+// tool, system prompt and instructions) must leave P free; if either does not,
+// the chat does not open, with the adaptive sentence of the opening-too-big
+// refusal.
 func (m *manager) openWindow(c *chat, cm llm.ChatModel, tools []llm.ToolDef, b *llm.Builder) (*llm.ToolWindow, error) {
 	caps := cm.Caps()
 	st := &adaptiveState{total: len(tools)}
@@ -265,9 +267,29 @@ func (m *manager) openWindow(c *chat, cm llm.ChatModel, tools []llm.ToolDef, b *
 	// The core tools are loaded from the opening: the first turn shows them.
 	loaded, tokens := win.Observe(b.Snapshot())
 	st.loaded, st.tokens = len(loaded), tokens
+	// The opening counts what is really sent: the loader, the core in full,
+	// the stub of every other tool, the system prompt and the repo
+	// instructions. It must leave P free for the first guess and the message,
+	// or the chat is refused here and not on its first turn.
+	if st.usable > 0 {
+		if open := openingTokens(win, b); open > st.usable-st.budget {
+			return nil, llm.OpeningTooBigError(true, cm.Provider(), cm.Model(), open+st.budget, llm.ReplyReserve(caps), caps.ContextWindow)
+		}
+	}
 	c.adapt = st
 	c.log.Adaptive(primary, st.total, st.budget)
 	return win, nil
+}
+
+// openingTokens is the estimate (bytes/4) of the request a new chat opens with,
+// before any message: the window's projection of b.
+func openingTokens(win *llm.ToolWindow, b *llm.Builder) int {
+	rec := win.Project(b.Snapshot()).Record()
+	n := 0
+	for h := llm.HookTools; h <= llm.HookTurn; h++ {
+		n += rec.Tokens[h]
+	}
+	return n
 }
 
 // warmRanker embeds the toolset in the background so the chat's first turn pays

@@ -32,10 +32,13 @@ var ErrWindowWithStablePrefix = errors.New("llm: Loop.Window is set for a model 
 // cache to protect). The loop still edits nothing: the Builder keeps every
 // tool and the whole history. What changes is the SENT view. The loop sends
 // Window.Project(Builder.Snapshot()), a copy whose tools block is the loader
-// (load_tools) plus the tools loaded so far, and estimates, budgets and logs
+// (load_tools), the tools loaded so far in full and a stub for every other
+// catalogue tool, and estimates, budgets and logs
 // that same copy. The loader and a call to a tool that is not loaded are
 // answered in the loop before the approval gate (they run nothing); every call
-// to a loaded tool still goes through CallGate.Decide. Loaded tools are evicted
+// to a loaded tool that is run still goes through CallGate.Decide (an identical
+// repeat of a call that just succeeded is answered from the earlier result and
+// is not run: see NoProgressNote). Loaded tools are evicted
 // only between requests and only when the request would not fit, never a tool
 // called or loaded in the current turn, so a pending call never meets an
 // eviction. With Window nil the snapshot sent is Builder.Snapshot(), byte for

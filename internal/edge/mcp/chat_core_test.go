@@ -46,18 +46,13 @@ func TestChatToolWindow_OpensWithTheCoreSet(t *testing.T) {
 	b := llm.NewBuilder()
 	require.NoError(t, AddPrefix(b, "instructions", defs))
 	sent := w.Project(b.Snapshot())
-	var names []string
-	for _, it := range sent.Hooks[llm.HookTools] {
-		names = append(names, it.Tool.Name)
-	}
-	require.Equal(t, []string{llm.LoadToolsName, "knomit_bind", "knomit_query"}, names)
+	full, stubs := splitTools(sent, defs)
+	require.Equal(t, []string{llm.LoadToolsName, "knomit_bind", "knomit_query"}, full, "full definitions: the loader and the core")
+	require.Len(t, stubs, len(defs)-len(ChatCoreTools), "every other tool is a stub")
 
-	cat, err := BuildCatalogue(defs, 0)
-	require.NoError(t, err)
 	for _, d := range defs {
 		require.Contains(t, sent.Hooks[llm.HookTools][0].Tool.Description, "- "+d.Name, "the catalogue lists every tool, core included")
 	}
-	require.Contains(t, cat, "- knomit_bind")
 }
 
 // A read-only principal is not shown every tool; a core tool it does not have
@@ -121,4 +116,21 @@ func TestChatToolWindow_OpeningWithTheCoreSetFitsA32KModel(t *testing.T) {
 		rec.Tokens[llm.HookSystem], rec.Tokens[llm.HookRepo], p)
 	require.Less(t, total, usable/2, "the opening, core set included, uses under half of U: the rest is for the conversation")
 	require.Less(t, coreTokens, p, "the core set is cheaper than the preload budget it replaces for these two tools")
+}
+
+// splitTools sorts a projection's hook-1 tools into those sent whole (the
+// loader, and the tools whose definition is the builder's own) and the stubs.
+func splitTools(s llm.Snapshot, defs []llm.ToolDef) (full, stubs []string) {
+	whole := map[string]string{}
+	for _, d := range defs {
+		whole[d.Name] = string(d.Schema)
+	}
+	for _, it := range s.Hooks[llm.HookTools] {
+		if sch, ok := whole[it.Tool.Name]; ok && sch != string(it.Tool.Schema) {
+			stubs = append(stubs, it.Tool.Name)
+			continue
+		}
+		full = append(full, it.Tool.Name)
+	}
+	return full, stubs
 }

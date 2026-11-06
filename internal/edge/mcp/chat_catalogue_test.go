@@ -223,10 +223,12 @@ func TestChatToolWindow_CarriesCatalogueNamesReplayAndRanker(t *testing.T) {
 	b := llm.NewBuilder()
 	require.NoError(t, AddPrefix(b, "instructions", defs))
 	sent := w.Project(b.Snapshot())
-	require.Len(t, sent.Hooks[llm.HookTools], 1+len(ChatCoreTools), "the loader, then the core tools")
+	full, stubs := splitTools(sent, defs)
+	require.Len(t, full, 1+len(ChatCoreTools), "the loader, then the core tools, whole")
+	require.Len(t, stubs, len(defs)-len(ChatCoreTools))
 	loader := sent.Hooks[llm.HookTools][0].Tool
 	require.Equal(t, llm.LoadToolsName, loader.Name)
-	cat, err := BuildCatalogue(defs, 0)
+	cat, err := BuildNameCatalogue(defs, 0)
 	require.NoError(t, err)
 	require.Equal(t, llm.LoaderDescription+"\n"+cat, loader.Description)
 

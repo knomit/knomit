@@ -48,10 +48,28 @@ func loadCall(names ...string) ToolUse {
 	return ToolUse{ID: "tu", Name: LoadToolsName, Args: raw}
 }
 
+// isStub reports whether a hook-1 tool is a stub (not a full definition).
+func isStub(d *ToolDef) bool { return string(d.Schema) == stubSchema }
+
+// hook1Names are the full definitions in hook 1 (the loader and the loaded
+// tools); stubs are not in it, see hook1Stubs.
 func hook1Names(s Snapshot) []string {
 	var out []string
 	for _, it := range s.Hooks[HookTools] {
-		out = append(out, it.Tool.Name)
+		if !isStub(it.Tool) {
+			out = append(out, it.Tool.Name)
+		}
+	}
+	return out
+}
+
+// hook1Stubs are the names of the stubs in hook 1.
+func hook1Stubs(s Snapshot) []string {
+	var out []string
+	for _, it := range s.Hooks[HookTools] {
+		if isStub(it.Tool) {
+			out = append(out, it.Tool.Name)
+		}
 	}
 	return out
 }
@@ -140,8 +158,11 @@ func TestWindow_LoadRefusedWhenNoRoom(t *testing.T) {
 	out := w.Run(loadCall("a", "b"), snap, func() int { return free }, nil)
 	require.False(t, out.IsError, "a was loaded")
 	require.Equal(t, []string{"a"}, w.Loaded())
-	need := itemBytes(Item{Tool: winTool("b", 300)}) / 4
-	require.Contains(t, out.Content, fmt.Sprintf(NoRoomResult, "b", need, 50), "b needs its bytes/4 and 150-100 are left")
+	// Free room is measured with every stub in the request, so a load costs
+	// its growth: the full definition less the stub it replaces.
+	require.Equal(t, 100-w.stubBytes["a"]/4, w.growth("a"))
+	left := 150 - w.growth("a")
+	require.Contains(t, out.Content, fmt.Sprintf(NoRoomResult, "b", w.growth("b"), left), "b needs its growth over the stub; what a left of 150 is free")
 }
 
 func TestWindow_EvictOneIsLRUAndSkipsPinned(t *testing.T) {

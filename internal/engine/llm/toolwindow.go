@@ -12,15 +12,21 @@ import (
 // ToolWindow is the adaptive tool list of a provider with no prompt cache to
 // protect (Caps.StablePrefix false). The Builder keeps the complete tool list
 // and the whole history; the loop sends Window.Project(Builder.Snapshot()), a
-// copy in which hook 1 is the loader tool plus the tools loaded so far. The
-// model loads more by calling the loader (load_tools); loaded tools fall out
-// again, least recently used first, only when a request would not fit.
+// copy in which hook 1 is the loader tool, the tools loaded so far in full and
+// a STUB for every other catalogue tool (its name, its one-line purpose and a
+// permissive schema). The model loads a tool by calling the loader
+// (load_tools) or by calling its stub, which is not run but loads the tool;
+// loaded tools fall out again (back to a stub), least recently used first, only
+// when a request would not fit.
 //
 // The window is state; Project is a pure view. Nothing here edits the Builder,
 // so ErrHistoryAppendOnly stays enforced (invariant 9351d681 / 80e22727).
 // Loading never approves anything: the loader runs in the loop before the
-// approval gate because it calls no tool and writes nothing, and every call to
-// a loaded tool still goes through CallGate.Decide (invariant 9b26dd4b).
+// approval gate because it calls no tool and writes nothing, as is a call to a
+// stub (never run); every call to a loaded tool that is run goes through
+// CallGate.Decide, except an identical repeat of a call that just succeeded,
+// which the no-progress guard answers from the earlier result without running
+// it (invariant 9b26dd4b).
 //
 // Not safe for concurrent use, like Loop.
 
@@ -99,6 +105,10 @@ type ToolWindowSpec struct {
 	// the opening, never evicted, and not preload picks. A name that is not in
 	// Names is ignored (the principal was not shown that tool).
 	Core []string
+	// Purposes are the one-line purposes the stubs carry as their descriptions,
+	// by tool name (the approved catalogue lines). A tool with none gets a stub
+	// with an empty description.
+	Purposes map[string]string
 }
 
 // ToolWindow: see the file comment.
@@ -119,6 +129,8 @@ type ToolWindow struct {
 	ranker      ToolRanker
 	picks       []string // tools preloaded this turn, in rank order
 	core        map[string]bool
+	purposes    map[string]string
+	stubBytes   map[string]int // a catalogue tool's stub definition, bytes
 }
 
 // LoaderDef builds the loader tool's definition: the approved description with
@@ -156,6 +168,7 @@ func NewToolWindow(spec ToolWindowSpec) (*ToolWindow, error) {
 		loaded: map[string]bool{}, last: map[string]int{},
 		turnLoaded: Pinned{}, batchLoaded: Pinned{}, sizes: map[string]int{}, bytes: map[string]int{},
 		replayable: spec.Replayable, ranker: spec.Ranker,
+		purposes: spec.Purposes, stubBytes: map[string]int{},
 	}
 	for _, n := range spec.Names {
 		if n == LoadToolsName {
@@ -254,12 +267,52 @@ func (w *ToolWindow) observe(snap Snapshot) {
 		if it.Tool != nil {
 			w.sizes[it.Tool.Name] = itemBytes(it) / 4
 			w.bytes[it.Tool.Name] = itemBytes(it)
+			w.stubBytes[it.Tool.Name] = itemBytes(w.toolStub(it.Tool.Name))
 		}
 	}
 }
 
-// Project returns snap with hook 1 replaced by the loader and the loaded tools
-// (in snapshot order, which is by name). Every other hook is equal to snap's.
+// stubSchema is the parameters schema of a stub: an object with no required
+// field that allows any argument. It is the narrowest shape every provider
+// takes (Ollama parses parameters into type/required/properties and ignores
+// the rest; llama.cpp compiles any JSON schema), and it constrains nothing
+// because a stub's call is never run.
+const stubSchema = `{"additionalProperties":true,"properties":{},"type":"object"}`
+
+// toolStub is the hook-1 item of a catalogue tool that is not loaded: its real
+// name, the approved one-line purpose as the description, and stubSchema. A
+// model that calls it gets NotLoadedCallResult and the tool is loaded.
+func (w *ToolWindow) toolStub(name string) Item {
+	d := ToolDef{Name: name, Description: w.purposes[name], Schema: json.RawMessage(stubSchema)}
+	return Item{ID: "tool." + name, Hook: HookTools, Tool: &d}
+}
+
+// growth is what loading name adds to a request that already carries its stub,
+// in tokens (bytes/4).
+func (w *ToolWindow) growth(name string) int {
+	return max(w.sizes[name]-w.stubBytes[name]/4, 0)
+}
+
+// growthBytes is growth in bytes, for preload's rounding.
+func (w *ToolWindow) growthBytes(name string) int {
+	return max(w.bytes[name]-w.stubBytes[name], 0)
+}
+
+// StubTokens is what the stubs of the tools that are not loaded cost in
+// tokens (bytes/4), as of the last snapshot observed.
+func (w *ToolWindow) StubTokens() int {
+	n := 0
+	for name := range w.inCat {
+		if !w.loaded[name] {
+			n += w.stubBytes[name]
+		}
+	}
+	return n / 4
+}
+
+// Project returns snap with hook 1 replaced by the loader, the loaded tools
+// with their full definitions and a stub for every other catalogue tool (all
+// in snapshot order, which is by name). Every other hook is equal to snap's.
 // It copies; snap and the Builder behind it are not touched.
 func (w *ToolWindow) Project(snap Snapshot) Snapshot {
 	w.observe(snap)
@@ -272,8 +325,12 @@ func (w *ToolWindow) Project(snap Snapshot) Snapshot {
 	loader := w.loader
 	tools := []Item{{ID: "tool." + LoadToolsName, Hook: HookTools, Tool: &loader}}
 	for _, it := range snap.Hooks[HookTools] {
-		if it.Tool != nil && w.loaded[it.Tool.Name] {
+		switch {
+		case it.Tool == nil || !w.inCat[it.Tool.Name]:
+		case w.loaded[it.Tool.Name]:
 			tools = append(tools, it)
+		default:
+			tools = append(tools, w.toolStub(it.Tool.Name))
 		}
 	}
 	out.Hooks[HookTools] = tools
@@ -344,7 +401,9 @@ func (w *ToolWindow) record(loaded, evicted []string, reason string) {
 // tools as it takes. avail is the free room in tokens and is updated. It
 // reports the evicted names, or ok=false and the tokens the tool needs.
 func (w *ToolWindow) admit(name string, avail *int, pinned Pinned, tick int) (evicted []string, needs int, ok bool) {
-	needs = w.sizes[name]
+	// *avail is measured with this tool's stub in the request; only the
+	// growth from stub to full definition is new.
+	needs = w.growth(name)
 	if *avail < needs {
 		freed := 0
 		var victims []string
@@ -353,7 +412,7 @@ func (w *ToolWindow) admit(name string, avail *int, pinned Pinned, tick int) (ev
 				break
 			}
 			victims = append(victims, v)
-			freed += w.sizes[v]
+			freed += w.growth(v) // evicted, it is a stub again, not gone
 		}
 		if *avail+freed < needs {
 			return nil, needs, false
@@ -546,7 +605,7 @@ func (w *ToolWindow) Preload(ctx context.Context, message string, snap Snapshot,
 		}
 		// Round up per tool: Snapshot.Record() floors the whole hook, so the
 		// real growth of the estimate is at most the sum of the ceilings.
-		size := (w.bytes[name] + 3) / 4
+		size := (w.growthBytes(name) + 3) / 4
 		if size > budget {
 			break
 		}

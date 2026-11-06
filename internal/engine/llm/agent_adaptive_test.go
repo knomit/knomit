@@ -480,7 +480,9 @@ func TestLoop_EstimateAfterEvictionDoesNotRefuseWrongly(t *testing.T) {
 	_, ok := r.w.EvictOne(nil)
 	require.True(t, ok)
 	require.NoError(t, r.b.Add(Item{ID: "new", Hook: HookTurn, Entry: &entry}))
-	require.Equal(t, 910+(40-100), r.l.estimate(r.l.view()), "signed delta: 40 tokens added, 100 evicted")
+	stub := r.w.stubBytes["knomit_query"]
+	require.Positive(t, stub)
+	require.Equal(t, 910+(40-(400-stub)/4), r.l.estimate(r.l.view()), "signed delta: 40 tokens added, the evicted tool shrinks to its stub")
 
 	// Control: the same additions in a loop with no window keep the old
 	// expression (the entry's tokens, nothing subtracted).
@@ -556,5 +558,5 @@ func TestLoop_DroppedTurnRestoresLastBytes(t *testing.T) {
 	require.Equal(t, afterOne, r.l.lastBytes, "bytes are restored with the tokens")
 
 	require.Equal(t, 400, itemBytes(Item{Tool: tool}))
-	require.Equal(t, 510+400/4, r.l.estimate(r.l.view()))
+	require.Equal(t, 510+(400-r.w.stubBytes["knomit_query"])/4, r.l.estimate(r.l.view()), "loading grows the request by the full definition less the stub it replaces")
 }

@@ -215,8 +215,21 @@ func TestMount_AdaptiveForOllamaNotForAnthropic(t *testing.T) {
 		s.until("turn_done")
 	}
 	adaptiveReq := co.loop.Model.(*scripted).requests()[0]
-	require.Equal(t, append([]string{llm.LoadToolsName}, mcp.ChatCoreTools...), toolNamesIn(adaptiveReq, llm.HookTools), "the loader and the core tools, no other schemas")
 	staticReq := ca.loop.Model.(*scripted).requests()[0]
+	whole := map[string]string{}
+	for _, it := range staticReq.Hooks[llm.HookTools] {
+		whole[it.Tool.Name] = string(it.Tool.Schema)
+	}
+	var full, stubs []string
+	for _, it := range adaptiveReq.Hooks[llm.HookTools] {
+		if sch, ok := whole[it.Tool.Name]; ok && sch != string(it.Tool.Schema) {
+			stubs = append(stubs, it.Tool.Name)
+		} else {
+			full = append(full, it.Tool.Name)
+		}
+	}
+	require.Equal(t, append([]string{llm.LoadToolsName}, mcp.ChatCoreTools...), full, "the loader and the core tools in full")
+	require.Len(t, stubs, len(all)-len(mcp.ChatCoreTools), "every other tool is a stub, no other schemas")
 	require.Equal(t, all, toolNamesIn(staticReq, llm.HookTools), "every tool the principal is shown")
 	require.Equal(t, mcp.ChatSystemPrompt, staticReq.Hooks[llm.HookSystem][0].Text)
 	require.Equal(t, mcp.ChatSystemPrompt, adaptiveReq.Hooks[llm.HookSystem][0].Text, "hook 2 is the same bytes in both modes")

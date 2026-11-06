@@ -97,14 +97,16 @@ func toolDef(t mcpgo.Tool) (llm.ToolDef, error) {
 // the principal was shown (the same tools AddPrefix puts in hook 1, which stay
 // in the Builder: the loop sends only the window's projection of them).
 //
-// The loader's description carries the catalogue, not the system prompt, so
+// Every tool that is not loaded goes out as a stub (name, approved purpose,
+// permissive schema; StubPurposes), so the loader's catalogue is the names
+// only (BuildNameCatalogue). The loader's description carries it, not the system prompt, so
 // hook 2 is byte-identical for every provider and for static and adaptive
 // chats alike. budget is the catalogue's allowance in tokens (the preload
 // budget P; 0 or less: no limit); a *CatalogueTooBigError means even the tool
 // names do not fit it. mcp.Replayable tells the window which results a stub may
 // offer back; ranker may be nil (no preload).
 func NewChatToolWindow(tools []llm.ToolDef, ranker llm.ToolRanker, budget int) (*llm.ToolWindow, error) {
-	cat, err := BuildCatalogue(tools, budget)
+	cat, err := BuildNameCatalogue(tools, budget)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +116,7 @@ func NewChatToolWindow(tools []llm.ToolDef, ranker llm.ToolRanker, budget int) (
 	}
 	return llm.NewToolWindow(llm.ToolWindowSpec{
 		Loader: llm.LoaderDef(cat), Names: names, Replayable: Replayable, Ranker: ranker,
-		Core: ChatCoreTools,
+		Core: ChatCoreTools, Purposes: StubPurposes(tools),
 	})
 }
 

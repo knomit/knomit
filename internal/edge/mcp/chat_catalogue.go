@@ -100,3 +100,44 @@ func derivedPurpose(desc string, limit int) string {
 	}
 	return s
 }
+
+// BuildNameCatalogue is the catalogue the loader's description carries in an
+// adaptive chat: "- name" per tool, sorted. The purposes are not repeated
+// there, because every tool that is not loaded is in the tools block as a stub
+// that carries its purpose (StubPurposes); the loader keeps the list of valid
+// names it takes. budget is as for BuildCatalogue; if the names do not fit the
+// error is a *CatalogueTooBigError.
+func BuildNameCatalogue(tools []llm.ToolDef, budget int) (string, error) {
+	names := make([]string, len(tools))
+	for i, t := range tools {
+		names[i] = t.Name
+	}
+	sort.Strings(names)
+	for i, n := range names {
+		names[i] = "- " + n
+	}
+	only := strings.Join(names, "\n")
+	if budget > 0 && len(only)/4 > budget {
+		return "", &CatalogueTooBigError{Need: len(only) / 4, Budget: budget}
+	}
+	return only, nil
+}
+
+// stubPurposeLimit caps the derived purpose of a tool with no row in
+// toolPurposes (a script tool), in bytes: a stub is meant to be small.
+const stubPurposeLimit = 160
+
+// StubPurposes are the one-line purposes the stubs carry, by tool name: the
+// approved line of toolPurposes, or for a tool with no row the first sentence
+// of its own description, so no new copy is written for a stub.
+func StubPurposes(tools []llm.ToolDef) map[string]string {
+	out := make(map[string]string, len(tools))
+	for _, t := range tools {
+		if p, ok := toolPurposes[t.Name]; ok {
+			out[t.Name] = p
+			continue
+		}
+		out[t.Name] = derivedPurpose(t.Description, stubPurposeLimit)
+	}
+	return out
+}
