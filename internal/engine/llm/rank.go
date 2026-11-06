@@ -70,14 +70,23 @@ func NewLexicalRanker(tools []ToolDef) ToolRanker {
 }
 
 func (r *lexicalRanker) Rank(_ context.Context, message string) ([]ScoredTool, error) {
-	query := map[string]bool{}
+	// The distinct query tokens, sorted: the sum below is taken in this order
+	// for every tool and every call. Float addition is not associative, so a
+	// sum in map order gave tied tools scores an ulp apart and let noise decide
+	// the order of tools that should tie.
+	seen := map[string]bool{}
+	var query []string
 	for _, tok := range tokenize(message) {
-		query[tok] = true
+		if !seen[tok] {
+			seen[tok] = true
+			query = append(query, tok)
+		}
 	}
+	sort.Strings(query)
 	out := make([]ScoredTool, len(r.names))
 	for i, name := range r.names {
 		s := 0.0
-		for tok := range query {
+		for _, tok := range query {
 			if r.docs[i][tok] {
 				s += r.idf[tok]
 			}
