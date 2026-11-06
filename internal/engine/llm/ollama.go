@@ -364,7 +364,7 @@ type ollamaCallRef struct{ name, id string }
 // name and wire id under its knomit id for the results that follow.
 func ollamaAssistant(e Entry, names map[string]ollamaCallRef) ollamaMsg {
 	m := ollamaMsg{Role: "assistant"}
-	var text []string
+	var text, thinking []string
 	for _, b := range e.Blocks {
 		switch b.Kind {
 		case BlockText:
@@ -375,8 +375,8 @@ func ollamaAssistant(e Entry, names map[string]ollamaCallRef) ollamaMsg {
 			var n struct {
 				Thinking string `json:"thinking"`
 			}
-			if b.Reasoning != nil && json.Unmarshal(b.Reasoning.Native, &n) == nil {
-				m.Thinking += n.Thinking
+			if b.Reasoning != nil && json.Unmarshal(b.Reasoning.Native, &n) == nil && n.Thinking != "" {
+				thinking = append(thinking, n.Thinking)
 			}
 		case BlockToolUse:
 			id := b.ToolUse.ID
@@ -389,6 +389,9 @@ func ollamaAssistant(e Entry, names map[string]ollamaCallRef) ollamaMsg {
 		}
 	}
 	m.Content = strings.Join(text, "")
+	// Runs are separated by a newline so a boundary between two runs does not
+	// glue their words together. A single run is sent unchanged.
+	m.Thinking = strings.Join(thinking, "\n")
 	return m
 }
 
@@ -479,22 +482,32 @@ func (c *OllamaChat) Stream(ctx context.Context, s Snapshot, o StreamOptions, si
 		return nil, ollamaHTTPError(resp.StatusCode, string(bytes.TrimSpace(b)))
 	}
 
+	// Blocks are built in stream order. A run of content and a run of
+	// thinking each become one block; a run ends when the stream switches to
+	// the other kind or to a tool call, so thinking that arrives after content
+	// keeps its place between the content around it.
 	var (
 		text, thinking strings.Builder
 		blocks         []Block
-		reasoned       bool // the reasoning block has been emitted
-		toolBlocks     []Block
+		calls          bool
 		final          *ollamaStreamLine
 	)
-	flushReasoning := func() {
-		if reasoned || thinking.Len() == 0 {
+	closeText := func() {
+		if text.Len() == 0 {
 			return
 		}
-		reasoned = true
+		blocks = append(blocks, Block{Kind: BlockText, Text: text.String()})
+		text.Reset()
+	}
+	closeThinking := func() {
+		if thinking.Len() == 0 {
+			return
+		}
 		raw, _ := json.Marshal(map[string]string{"thinking": thinking.String()})
 		r := &Reasoning{Provider: ollamaProvider, Model: c.model, Native: raw}
 		blocks = append(blocks, Block{Kind: BlockReasoning, Reasoning: r})
 		sink(Event{Kind: EventReasoning, Reasoning: r})
+		thinking.Reset()
 	}
 
 	dec := json.NewDecoder(resp.Body)
@@ -510,15 +523,24 @@ func (c *OllamaChat) Stream(ctx context.Context, s Snapshot, o StreamOptions, si
 		if ln.Error != "" {
 			return nil, ollamaLineError(ln.Error)
 		}
-		thinking.WriteString(ln.Message.Thinking)
-		if ln.Message.Content != "" || len(ln.Message.ToolCalls) > 0 {
-			flushReasoning()
+		if ln.Message.Thinking != "" {
+			closeText()
+			thinking.WriteString(ln.Message.Thinking)
+			// Display only (StreamOptions.Thinking): the run is still closed
+			// into ONE BlockReasoning and ONE EventReasoning (closeThinking).
+			o.thinking(ln.Message.Thinking)
 		}
 		if ln.Message.Content != "" {
+			closeThinking()
 			text.WriteString(ln.Message.Content)
 			sink(Event{Kind: EventTextDelta, Text: ln.Message.Content})
 		}
+		if len(ln.Message.ToolCalls) > 0 {
+			closeThinking()
+			closeText()
+		}
 		for _, tc := range ln.Message.ToolCalls {
+			calls = true
 			tu := &ToolUse{ID: o.newID(), Name: tc.Function.Name, Args: json.RawMessage(`{}`)}
 			// Ollama always sends arguments as a JSON object: a model whose
 			// arguments are not valid JSON makes the SERVER fail the request
@@ -529,20 +551,17 @@ func (c *OllamaChat) Stream(ctx context.Context, s Snapshot, o StreamOptions, si
 				_ = json.Compact(&buf, raw) // raw came out of a JSON decode: valid
 				tu.Args = json.RawMessage(buf.Bytes())
 			}
-			toolBlocks = append(toolBlocks, Block{Kind: BlockToolUse, ToolUse: tu})
+			blocks = append(blocks, Block{Kind: BlockToolUse, ToolUse: tu})
 			sink(Event{Kind: EventToolUse, ToolUse: tu})
 		}
 		if ln.Done {
 			final = &ln
 		}
 	}
-	flushReasoning()
-	if text.Len() > 0 {
-		blocks = append(blocks, Block{Kind: BlockText, Text: text.String()})
-	}
-	blocks = append(blocks, toolBlocks...)
+	closeThinking()
+	closeText()
 
-	out := &Response{Blocks: blocks, StopReason: ollamaStopReason(final.DoneReason, len(toolBlocks) > 0), Usage: usageFromFinal(s, final)}
+	out := &Response{Blocks: blocks, StopReason: ollamaStopReason(final.DoneReason, calls), Usage: usageFromFinal(s, final)}
 	if final.DoneReason == "length" {
 		return nil, &StopError{Reason: StopMaxTokens, Response: out}
 	}

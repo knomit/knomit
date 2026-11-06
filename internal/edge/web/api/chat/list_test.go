@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -119,4 +120,35 @@ func TestChat_ListRowCostIsTheSumOfPricedTurns(t *testing.T) {
 	require.Equal(t, 2, r.Turns)
 	require.NotNil(t, r.CostUSD)
 	require.InDelta(t, 0.75, *r.CostUSD, 1e-9)
+}
+
+// The chat_state event and the GET /chats row are one rowState: after the turn
+// they agree on title, state, turns and started_at, and the title is the cut
+// first message.
+func TestChat_ChatStateEventMatchesTheListRow(t *testing.T) {
+	h := newHarness(t)
+	h.queue("a1", textStep("hi", usage))
+	id := h.create("uid:501", "a1")
+	s := h.attach("uid:501", id)
+	first := "tell me about the rail " + strings.Repeat("and its marks ", 10)
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, first))
+	var ev rowState
+	for {
+		e := s.next("state", 10*time.Second)
+		if e.Name != "chat_state" {
+			continue
+		}
+		require.NoError(t, json.Unmarshal(e.Data, &ev))
+		if ev.State == "idle" {
+			break
+		}
+	}
+	r := h.row("uid:501", id)
+	require.Equal(t, titleOf(first), ev.Title)
+	require.Equal(t, ev.Title, r.Title)
+	require.Equal(t, ev.State, r.State)
+	require.Equal(t, ev.Turns, r.Turns)
+	require.Equal(t, ev.StartedAt, r.StartedAt)
+	require.NotEmpty(t, ev.LastActivity)
+	require.NotEmpty(t, r.LastActivity)
 }

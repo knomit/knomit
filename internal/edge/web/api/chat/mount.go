@@ -67,9 +67,44 @@ type manager struct {
 	chats  map[string]*chat
 	closed bool
 
+	// pageMu guards pages: the page events streams attached per owner. It is
+	// taken after a chat's mu, never before.
+	pageMu sync.Mutex
+	pages  map[string]map[*pageSub]struct{}
+
 	runMu   sync.Mutex
 	run     string
 	release func()
+
+	// firstToken is the slowest time to a model's first sign of life seen by
+	// this server run, per provider and model.
+	ftMu       sync.Mutex
+	firstToken map[string]time.Duration
+}
+
+// noteFirstToken keeps d when it is the slowest first-token time seen for the model.
+func (m *manager) noteFirstToken(provider, model string, d time.Duration) {
+	m.ftMu.Lock()
+	defer m.ftMu.Unlock()
+	if m.firstToken == nil {
+		m.firstToken = map[string]time.Duration{}
+	}
+	k := provider + "\x00" + model
+	if d > m.firstToken[k] {
+		m.firstToken[k] = d
+	}
+}
+
+// expectedFirstTokenMS is the slowest first-token time observed for the model
+// in this server run, in milliseconds; 0 when none has been observed.
+func (m *manager) expectedFirstTokenMS(provider, model string) int64 {
+	m.ftMu.Lock()
+	defer m.ftMu.Unlock()
+	d := m.firstToken[provider+"\x00"+model]
+	if d > 0 && d < time.Millisecond {
+		return 1
+	}
+	return d.Milliseconds()
 }
 
 func newManager(ctx context.Context, srv *mcpserver.MCPServer, rm *repos.Manager, reg *llm.Registry, sessionsDir, logDir string, released *sync.WaitGroup) *manager {
@@ -169,6 +204,91 @@ func (m *manager) forget(id string) {
 	m.mu.Unlock()
 }
 
+// pageCount is how many page streams owner has attached.
+func (m *manager) pageCount(owner string) int {
+	m.pageMu.Lock()
+	defer m.pageMu.Unlock()
+	return len(m.pages[owner])
+}
+
+// broadcast offers frame to every page stream of owner and reports whether any
+// took it. A stream whose buffer is full is dropped (closed); its handler then
+// returns and detaches, and the client reconnects.
+func (m *manager) broadcast(owner string, frame []byte) bool {
+	m.pageMu.Lock()
+	defer m.pageMu.Unlock()
+	delivered := false
+	for s := range m.pages[owner] {
+		select {
+		case s.ch <- frame:
+			delivered = true
+		default:
+			delete(m.pages[owner], s)
+			close(s.ch)
+		}
+	}
+	return delivered
+}
+
+// deliverTo offers frame to s, only while s is still attached: broadcast
+// closes the channel of a stream it drops, and sending on it would panic. It
+// reports whether s took the frame. Called with a chat's mu held (lock order:
+// chat.mu, then pageMu).
+func (m *manager) deliverTo(s *pageSub, frame []byte) bool {
+	m.pageMu.Lock()
+	defer m.pageMu.Unlock()
+	if _, ok := m.pages[s.owner][s]; !ok {
+		return false
+	}
+	select {
+	case s.ch <- frame:
+		return true
+	default:
+		return false
+	}
+}
+
+// attachPage registers owner's page stream. Every chat of the owner stops its
+// grace clock, and takes the terminal event no stream received into the stream.
+func (m *manager) attachPage(owner string) *pageSub {
+	s := &pageSub{owner: owner, ch: make(chan []byte, 1024)}
+	m.pageMu.Lock()
+	if m.pages == nil {
+		m.pages = map[string]map[*pageSub]struct{}{}
+	}
+	if m.pages[owner] == nil {
+		m.pages[owner] = map[*pageSub]struct{}{}
+	}
+	m.pages[owner][s] = struct{}{}
+	m.pageMu.Unlock()
+	for _, c := range m.listFor(owner) {
+		c.adoptPage(s)
+	}
+	return s
+}
+
+// detachPage removes a page stream; the last one out of an owner starts the
+// grace clock of every chat the owner has.
+func (m *manager) detachPage(s *pageSub) {
+	m.pageMu.Lock()
+	if set := m.pages[s.owner]; set != nil {
+		if _, ok := set[s]; ok {
+			delete(set, s)
+			close(s.ch)
+		}
+		if len(set) == 0 {
+			delete(m.pages, s.owner)
+		}
+	}
+	empty := len(m.pages[s.owner]) == 0
+	m.pageMu.Unlock()
+	if empty {
+		for _, c := range m.listFor(s.owner) {
+			c.startGrace()
+		}
+	}
+}
+
 // find returns the chat id if principal owns it.
 func (m *manager) find(id, owner string) *chat {
 	m.mu.Lock()
@@ -258,7 +378,7 @@ func (m *manager) create(ctx context.Context, p auth.Principal, provider, model 
 		id: id, provider: provider, model: model, owner: p.String(), m: m,
 		store: st, ctx: cctx, cancel: cancel,
 		calls: map[string]llm.ToolUse{}, pending: map[string]*pendingApproval{},
-		grants: map[grantKey]grantInfo{}, meta: map[string]callMeta{}, subs: map[*subscriber]struct{}{},
+		grants: map[grantKey]grantInfo{}, meta: map[string]callMeta{},
 		done: make(chan struct{}), startedAt: time.Now(), lastActive: time.Now(),
 	}
 	fail := func(err error) (*chat, error) {
@@ -320,10 +440,14 @@ func (m *manager) create(ctx context.Context, p auth.Principal, provider, model 
 	m.chats[id] = c
 	m.mu.Unlock()
 
-	// A chat nobody attaches to is ended after the grace.
-	c.mu.Lock()
-	c.grace = time.AfterFunc(chatStreamGrace, func() { c.end("stream_grace") })
-	c.mu.Unlock()
+	// A chat created while its owner's page stream is attached is covered by
+	// it at once. With none attached, the grace clock starts now. The check
+	// follows the registration above, so a stream that closes meanwhile finds
+	// this chat when it starts the clocks, and one that attaches meanwhile is
+	// caught by graceFired.
+	if m.pageCount(c.owner) == 0 {
+		c.startGrace()
+	}
 	return c, nil
 }
 

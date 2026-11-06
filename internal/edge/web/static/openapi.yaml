@@ -77,7 +77,8 @@ tags:
     description: |
       The web chat: an in-process model that reaches knomit only through its
       own MCP tools. Chats are owned by the principal that started them, live
-      while an events stream is attached (60 s grace), and ask before any
+      while a page events stream of their owner is attached (60 s grace after
+      the owner's last one closes), and ask before any
       tool call that writes.
   - name: secrets
     description: |
@@ -4072,7 +4073,14 @@ paths:
         The configured providers (`[llm.providers]`) with each allowlisted
         model's availability: `available` (the provider offers it), `tools`
         (it can run the chat's tool calls) and a `reason` when it cannot be
-        used. Cached for 60 seconds. Not served by a read-only (demo) server.
+        used. Each provider also carries `reachable` and where it runs: `host`
+        (Ollama) or `key_source` (the NAME of the environment variable an
+        Anthropic key is read from, never the key, and only when that variable
+        is set). Each model carries what the
+        start screen shows, all from config or the provider: `best_for`,
+        `context_window`, `effort`, `price` and, for Ollama, `num_ctx`,
+        `parameter_size`, `quantization` and `keep_alive`. Cached for 60
+        seconds. Not served by a read-only (demo) server.
       operationId: listChatProviders
       responses:
         "200":
@@ -4094,6 +4102,9 @@ paths:
                           properties:
                             name: { type: string }
                             kind: { type: string, enum: [anthropic, ollama] }
+                            host: { type: string, description: "Where an Ollama provider runs; credentials stripped" }
+                            key_source: { type: string, description: "Name of the env var the key is read from, when it is set; never the key" }
+                            reachable: { type: boolean }
                             models:
                               type: array
                               items:
@@ -4104,6 +4115,27 @@ paths:
                                   available: { type: boolean }
                                   tools: { type: boolean }
                                   reason: { type: string }
+                                  best_for: { type: string }
+                                  context_window: { type: integer }
+                                  effort: { type: string }
+                                  num_ctx: { type: integer, description: "Ollama: the value requests are sent with" }
+                                  parameter_size: { type: string }
+                                  quantization: { type: string }
+                                  keep_alive: { type: string }
+                                  price:
+                                    type: object
+                                    properties:
+                                      tiers:
+                                        type: array
+                                        items:
+                                          type: object
+                                          properties:
+                                            up_to_prompt_tokens: { type: integer, description: "0: no upper bound" }
+                                            input_per_mtok: { type: number }
+                                            output_per_mtok: { type: number }
+                                      cache_read_mult: { type: number }
+                                      cache_write_5m_mult: { type: number }
+                                      warn_prompt_tokens: { type: integer }
         "401": { $ref: "#/components/responses/Problem" }
 
   /chats:
@@ -4153,12 +4185,23 @@ paths:
               properties:
                 provider: { type: string }
                 model: { type: string }
+                message:
+                  type: string
+                  description: |
+                    Optional first message. When present the first turn starts
+                    exactly as `POST /chats/{id}/turns` would start it, and the
+                    response carries `turn`.
       responses:
         "201":
-          description: The chat; Location is the chat
+          description: The chat; Location is the chat. `turn` is the view index of the first turn, present only when a message was sent.
           content:
             application/hal+json:
-              schema: { $ref: "#/components/schemas/ChatItem" }
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ChatItem"
+                  - type: object
+                    properties:
+                      turn: { type: integer }
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
@@ -4193,28 +4236,31 @@ paths:
         Ends the chat: a blocked approval and a running turn unwind, the MCP
         session records `ended_at`, and the temp files are removed. The
         persistent session log stays. A chat also ends 60 seconds after its
-        last events stream detaches, or when the server stops.
+        last page events stream closes, or when the server stops.
       operationId: deleteChat
       responses:
         "204": { description: Ended }
         "404": { $ref: "#/components/responses/Problem" }
 
-  /chats/{id}/events:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema: { type: string }
+  /chats/events:
     get:
       tags: [chat]
-      summary: Stream a chat's events (SSE)
+      summary: Stream the caller's chat events (SSE), one stream per page
       description: |
-        Server-sent events. Every connect starts with `event: ready`; the
-        client then refetches `GET /chats/{id}`. There is no `id:` and no
-        Last-Event-ID replay. A `: keepalive` comment goes out every 30
-        seconds. Events: `text_delta`, `reasoning`, `tool_call` (state
-        `running` then `done`), `approval`, `usage`, `warning`, `turn_done`,
-        `turn_error` and `chat_end`.
+        Server-sent events for ALL the caller's chats on one connection (a
+        browser allows few HTTP/1.1 connections per origin, so a stream per
+        chat starves the page). Every event's data is an object that carries
+        `chat`, the chat id, next to its other fields. Every connect starts
+        with a page-level `event: ready` (no `chat`); the client then
+        reloads what it shows with `GET /chats/{id}`. A turn end no stream
+        received is sent to the next stream right after `ready`, once. There
+        is no `id:` and no Last-Event-ID replay. A `: keepalive` comment
+        goes out every 30 seconds. Events: `text_delta`, `thinking_delta`,
+        `reasoning`, `tool_call` (state `running` then `done`), `approval`,
+        `usage`, `warning`, `turn_done`, `turn_error`, `chat_state` (the
+        chat's rail row changed: `state` idle, running, awaiting_approval or
+        error, `turns`, `cost_usd`) and `chat_end`. A chat ends 60 seconds
+        after the last page stream of its owner closes.
       operationId: streamChatEvents
       responses:
         "200":
@@ -4222,7 +4268,6 @@ paths:
           content:
             text/event-stream:
               schema: { type: string }
-        "404": { $ref: "#/components/responses/Problem" }
 
   /chats/{id}/turns:
     parameters:

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, fireEvent, cleanup, within } from '@testing-library/react';
 import { ChatFacet } from './ChatFacet';
 import { ChatPill } from './ChatPill';
-import { installFakeEventSource, uninstallFakeEventSource, latestStream } from './testEventSource';
+import { installFakeEventSource, uninstallFakeEventSource, chatStream } from './testEventSource';
 import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatSnapshot, ChatViewItem } from './chatApi';
 import { activitySummary, liveStep, activitySteps, costSession, toolVerb } from './chatCopy';
@@ -154,7 +154,7 @@ describe('the activity line on the page', () => {
   it('a live call without arguments shows no key argument, and falls back to the summary', async () => {
     mount(snap([{ kind: 'user', text: 'q' }], { running: true }));
     await screen.findByTestId('chat-turn-0');
-    act(() => { latestStream('/chats/chat-a/events')!.emit('tool_call', { id: 'tu_9', name: 'knomit_query', state: 'running', turn: 0 }); });
+    act(() => { chatStream('chat-a')!.emit('tool_call', { id: 'tu_9', name: 'knomit_query', state: 'running', turn: 0 }); });
     expect(screen.queryByTestId('chat-activity-live')).toBeNull();
     expect(summaryText()).toBe('Searched 1×');
     fireEvent.click(screen.getByTestId('chat-tool-group-toggle'));
@@ -224,26 +224,26 @@ describe('the top-bar pill and the composer meter', () => {
       { kind: 'assistant', text: 'A' },
       { kind: 'user', text: 'two', usage: { input: 2000, cache_read: 60000, cache_write: 6000, output: 9 }, cost_usd: 0.02 },
       { kind: 'assistant', text: 'B' },
-    ]), { [`GET ${BASE}/context`]: { body: { window: 1_000_000, how: 'config', spill: false } } });
+    ], { usage_seq: 2, prompt_tokens: 68000 }), { [`GET ${BASE}/context`]: { body: { window: 1_000_000, how: 'config', spill: false } } });
     await screen.findByTestId('chat-turn-1');
     await screen.findByText('68K / 1M');
     expect(screen.getByTestId('chat-pill-session').textContent).toBe('session $0.0212');
-    // The latest turn's prompt: 2000 + 60000 + 6000.
+    // The server's own figure for the last request's prompt (2000 + 60000 + 6000), not a sum or an estimate.
     expect(screen.getByTestId('chat-pill-context').textContent).toBe('context68K');
     expect(screen.getByTestId('chat-context-text').textContent).toBe('68K / 1M');
     expect(screen.getAllByTestId('context-meter').map(m => m.getAttribute('data-pct'))).toEqual(['7', '7']);
   });
 
-  it('the context used is the latest request\'s prompt, kept across the snapshot read at the turn\'s end; a snapshot alone averages the summed turn over its requests', async () => {
-    // Joined mid-way: no live event yet. The turn's summed prompt (3 requests: 2 tool calls + 1) is averaged.
+  it('the context used is the server\'s last-request prompt, and a newer live request survives the snapshot read at the turn\'s end', async () => {
+    // Joined mid-way: no live event yet. The snapshot's prompt_tokens is shown as it is (never averaged from the summed usage).
     mount(snap([
       { kind: 'user', text: 'q', usage: { input: 3000, cache_read: 15000, cache_write: 0, output: 9 } },
       call('tu_1', 'knomit_repos', {}), call('tu_2', 'knomit_repos', {}), { kind: 'assistant', text: 'A' },
-    ], { usage_seq: 1 }), { [`GET ${BASE}/context`]: { body: { window: 32768, spill: false } } });
+    ], { usage_seq: 1, prompt_tokens: 7300 }), { [`GET ${BASE}/context`]: { body: { window: 32768, spill: false } } });
     await screen.findByTestId('chat-turn-0');
-    expect(screen.getByTestId('chat-context-text').textContent).toBe('6K / 32.8K');
+    expect(screen.getByTestId('chat-context-text').textContent).toBe('7.3K / 32.8K');
     // A live request lands (seq 2): its exact prompt is shown, and survives the read at the turn's end.
-    const es = latestStream('/chats/chat-a/events')!;
+    const es = chatStream('chat-a')!;
     act(() => { es.emit('usage', { usage: { input: 700, cache_read: 8000, cache_write: 300, output: 5 }, seq: 2, turn: 0 }); });
     expect(screen.getByTestId('chat-context-text').textContent).toBe('9K / 32.8K');
     await act(async () => { es.emit('turn_done', { turn: 0 }); });
@@ -309,7 +309,7 @@ describe('the streaming caret', () => {
   it('ends the streamed text until the turn ends', async () => {
     mount(snap([{ kind: 'user', text: 'q' }], { running: true }));
     await screen.findByTestId('chat-turn-0');
-    const es = latestStream('/chats/chat-a/events')!;
+    const es = chatStream('chat-a')!;
     act(() => { es.emit('text_delta', { text: 'Short answer', turn: 0 }); });
     const text = screen.getByTestId('chat-text');
     expect(within(text).getByTestId('chat-caret')).toBeInTheDocument();

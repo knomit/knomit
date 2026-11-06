@@ -413,6 +413,11 @@ export function fleetChip(fleet: Pick<FleetStatus, 'master' | 'record_state' | '
 }
 
 /** What a draft is called in the rail, the crumb and its index heading. */
+/** The chat's amber (its rail row, its crumb and the start screen's selection)
+ *  and the fleet's teal (also the local-model tag). */
+export const CHAT_ACCENT = '#e8c27a';
+export const FLEET_ACCENT = '#8ad6c8';
+
 export const DRAFT_NAME: Record<DraftKind, string> = { repo: 'New repository', lens: 'New lens', fleet: 'New fleet', chat: 'New chat' };
 
 /** The chip word for a repo with no store: "store missing" for the common

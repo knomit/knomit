@@ -7,7 +7,7 @@ const run = (events: ChatEvent[], from: ChatState = initialChatState): ChatState
 const call = (id: string, name: string, turn: number, state: 'running' | 'done' = 'running'): ChatEvent => ({ kind: 'tool_call', id, name, state, turn });
 const text = (t: string, turn: number): ChatEvent => ({ kind: 'text_delta', text: t, turn });
 /** A message sent from here whose POST the server accepted: turn `turn` in its view. */
-const sent = (msg: string, sendId: number, turn: number): ChatEvent[] => [{ kind: 'user', text: msg, sendId }, { kind: 'send_accepted', sendId, turn }];
+const sent = (msg: string, sendId: number, turn: number): ChatEvent[] => [{ kind: 'user', text: msg, sendId }, { kind: 'send_accepted', sendId, turn, at: 1000 }];
 const snap = (items: ChatViewItem[], over: Partial<ChatSnapshot> = {}): ChatSnapshot => ({
   id: 'c', provider: 'p', model: 'm', running: false, grants: [], pending_approvals: [], items, ...over,
 });
@@ -91,7 +91,7 @@ describe('chatReducer: live events are routed by the turn index they name', () =
     expect(Object.keys(s.approvals)).toEqual(['tu_1']);
     expect(s.staleSeq).toBe(0);
     // The 202 arrives afterwards, naming the same index: nothing changes.
-    expect(chatReducer(s, { kind: 'send_accepted', sendId: 2, turn: 2 }).turns[1].at).toBe(2);
+    expect(chatReducer(s, { kind: 'send_accepted', sendId: 2, turn: 2, at: 1000 }).turns[1].at).toBe(2);
   });
 
   it('the first message of a chat: its events before the 202 land on the local turn, the approval included', () => {

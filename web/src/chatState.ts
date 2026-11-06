@@ -26,14 +26,17 @@
 // POST, so a snapshot started after the POST was answered 2xx lists it; until
 // then the local turn is kept after the snapshot's turns. A POST that fails
 // takes its local turn out outright.
-import type { ChatApproval, ChatSnapshot, ChatViewItem } from './chatApi';
+import { durationMinutes, durationMs, durationSeconds } from './chatCopy';
+import type { ChatApproval, ChatCallSummary, ChatNotice, ChatSnapshot, ChatViewItem } from './chatApi';
 
 export interface ToolCall {
   id: string; name: string; state: 'running' | 'done'; isError: boolean;
-  /** The call's arguments: in the snapshot always, and on a live event when the
-   *  server sends them (today it does not, so a live row has none until the
-   *  next snapshot). */
+  /** The call's arguments: in the snapshot always, and on a live `running` event. */
   args?: unknown;
+  /** How long the tool ran, in ms, and its result in one number: on a finished
+   *  call (the done event and the snapshot); absent for a call that did not run. */
+  durationMs?: number;
+  summary?: ChatCallSummary;
 }
 export type ChatPart = { kind: 'text'; text: string } | { kind: 'group'; calls: ToolCall[] };
 export interface TurnUsage { input: number; cacheRead: number; cacheWrite: number; output: number }
@@ -53,6 +56,18 @@ export interface ChatTurn {
   error: string | null;
   /** The server's price-tier warning for this turn, verbatim. */
   warning: string | null;
+  /** The same warning's numbers, for the page's own line. */
+  warningInfo: ChatNotice | null;
+  /** The numbers behind `error` when it is a context-full end. */
+  errorInfo: ChatNotice | null;
+  /** The person stopped this turn (the server marks it cancelled). */
+  stopped: boolean;
+  /** The reasoning summary streamed so far, shown under the placeholder until
+   *  the first tool call or text arrives. Not in the snapshot. */
+  thinking: string;
+  /** When the server accepted the send (ms, the page's clock), for the wait
+   *  counter. Unknown (undefined) for a turn the page joined mid-way. */
+  acceptedAt?: number;
   /** The person sent this message from here and no snapshot started after the
    *  server accepted it has listed it yet. `accepted` is true once the server
    *  is known to have the turn (the POST answered 2xx, or an event named it). */
@@ -77,6 +92,10 @@ export interface ChatState {
   /** The size in tokens of the latest request's prompt (input + cache read +
    *  cache write): what the context meter shows as used. */
   ctxTokens: number;
+  /** The slowest first-reply time the server has seen for this chat's model in
+   *  its run, in ms; 0 when none has been observed (the page then never says
+   *  "No response yet"). */
+  expectedFirstTokenMs: number;
 }
 
 /** The `usage` event's payload, as the server names the fields. */
@@ -89,25 +108,26 @@ export type ChatEvent =
   /** The person sent a message (the server's events do not echo it). */
   | { kind: 'user'; text: string; sendId: number }
   /** The POST answered 2xx: the server has the turn, at view index `turn`. */
-  | { kind: 'send_accepted'; sendId: number; turn: number }
+  | { kind: 'send_accepted'; sendId: number; turn: number; at: number }
   /** The POST failed (non-2xx, a network error, no answer in time): the turn
    *  never started, so it is taken back out whatever it holds. */
   | { kind: 'send_failed'; sendId: number }
   | { kind: 'text_delta'; text: string; turn: number }
-  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; arguments?: unknown; turn: number }
+  | { kind: 'thinking_delta'; text: string; turn: number }
+  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; arguments?: unknown; duration_ms?: number; summary?: ChatCallSummary; turn: number }
   | { kind: 'approval'; approval: ChatApproval }
   | { kind: 'approval_answered'; callId: string }
   | { kind: 'usage'; usage: UsagePayload; cost_usd?: number; seq?: number; turn: number }
-  | { kind: 'warning'; message: string; turn: number }
+  | { kind: 'warning'; message: string; notice?: ChatNotice; turn: number }
   | { kind: 'turn_done'; turn: number }
   /** The person pressed Stop: the turn is over here whatever the stream says. */
   | { kind: 'stopped' }
-  | { kind: 'turn_error'; message: string; cancelled?: boolean; turn: number }
+  | { kind: 'turn_error'; message: string; cancelled?: boolean; error_info?: ChatNotice; turn: number }
   | { kind: 'chat_end' };
 
-export const initialChatState: ChatState = { turns: [], running: false, approvals: {}, ended: false, lastUsageSeq: 0, staleSeq: 0, loaded: false, ctxTokens: 0 };
+export const initialChatState: ChatState = { turns: [], running: false, approvals: {}, ended: false, lastUsageSeq: 0, staleSeq: 0, loaded: false, ctxTokens: 0, expectedFirstTokenMs: 0 };
 
-const newTurn = (user = ''): ChatTurn => ({ user, parts: [], usage: null, costUsd: null, error: null, warning: null });
+const newTurn = (user = ''): ChatTurn => ({ user, parts: [], usage: null, costUsd: null, error: null, warning: null, warningInfo: null, errorInfo: null, stopped: false, thinking: '' });
 
 /** route finds the turn a live event names. A turn index the page has no turn
  *  for is the local unconfirmed turn's (the server's next turn), which learns
@@ -120,7 +140,7 @@ function route(s: ChatState, turn: number): { state: ChatState; index: number } 
   const beyond = s.turns.every(t => t.at === undefined || t.at < turn);
   if (local >= 0 && beyond) {
     const turns = s.turns.slice();
-    turns[local] = { ...turns[local], at: turn, local: { sendId: turns[local].local!.sendId, accepted: true } };
+    turns[local] = { ...turns[local], at: turn, acceptedAt: turns[local].acceptedAt ?? Date.now(), local: { sendId: turns[local].local!.sendId, accepted: true } };
     return { state: { ...s, turns }, index: local };
   }
   return { state: { ...s, staleSeq: s.staleSeq + 1 }, index: -1 };
@@ -146,15 +166,19 @@ function addItem(turns: ChatTurn[], item: ChatViewItem, at: number): void {
     if (item.usage) t.usage = { input: item.usage.input, cacheRead: item.usage.cache_read, cacheWrite: item.usage.cache_write, output: item.usage.output };
     t.costUsd = item.cost_usd ?? null;
     t.warning = item.warning || null;
-    // A cancelled turn is the person's own Stop: it ends quietly.
+    t.warningInfo = item.warning_info ?? null;
+    // A cancelled turn is the person's own Stop: no error, the page shows it as stopped.
     t.error = item.error && !item.cancelled ? item.error : null;
+    t.errorInfo = t.error ? item.error_info ?? null : null;
+    t.stopped = !!item.cancelled;
     turns.push(t);
     return;
   }
   if (!turns.length) turns.push(newTurn());
   const t = turns[turns.length - 1];
   if (item.kind === 'assistant') { t.parts.push({ kind: 'text', text: item.text ?? '' }); return; }
-  const c: ToolCall = { id: item.id ?? '', name: item.name ?? '', state: item.state ?? 'done', isError: !!item.is_error, ...(item.arguments !== undefined ? { args: item.arguments } : {}) };
+  const c: ToolCall = { id: item.id ?? '', name: item.name ?? '', state: item.state ?? 'done', isError: !!item.is_error, ...(item.arguments !== undefined ? { args: item.arguments } : {}),
+    ...(item.duration_ms ? { durationMs: item.duration_ms } : {}), ...(item.summary ? { summary: item.summary } : {}) };
   const last = t.parts[t.parts.length - 1];
   if (last?.kind === 'group') last.calls.push(c); else t.parts.push({ kind: 'group', calls: [c] });
 }
@@ -165,26 +189,29 @@ function addItem(turns: ChatTurn[], item: ChatViewItem, at: number): void {
 export function snapshotState(snap: ChatSnapshot, prev: ChatState = initialChatState, confirmed: number[] = []): ChatState {
   const turns: ChatTurn[] = [];
   snap.items.forEach((it, at) => addItem(turns, it, at));
+  // What only the page knows about a turn it already had: when it was accepted
+  // (the wait counter) and the reasoning summary streamed so far.
+  turns.forEach((t, i) => {
+    const old = prev.turns.find(p => p.at !== undefined && p.at === t.at);
+    if (!old) return;
+    if (old.acceptedAt !== undefined) turns[i] = { ...turns[i], acceptedAt: old.acceptedAt };
+    if (old.thinking && turns[i].parts.length === 0) turns[i] = { ...turns[i], thinking: old.thinking };
+  });
   for (let i = turns.length; i < prev.turns.length; i++) {
     const t = prev.turns[i];
     if (t.local && !confirmed.includes(t.local.sendId)) turns.push(t);
   }
   const approvals: Record<string, ChatApproval> = {};
   for (const a of snap.pending_approvals ?? []) approvals[a.call_id] = a;
-  // The snapshot carries each turn's usage SUMMED over its requests, not the
-  // last request's prompt size. The live usage event of the latest request the
-  // snapshot includes (its seq at or below the snapshot's usage_seq) is the
-  // exact number, so it is kept. Without one (a chat the page joined mid-way),
-  // the latest turn's sum is averaged over its requests, taken as one more than
-  // its tool calls: an estimate until the server reports the last prompt's size.
-  const lastTurn = [...turns].reverse().find(t => t.usage);
-  const calls = lastTurn ? lastTurn.parts.reduce((n, p) => n + (p.kind === 'group' ? p.calls.length : 0), 0) : 0;
-  const fromSnapshot = lastTurn?.usage ? Math.round(promptTokens(lastTurn.usage) / (calls + 1)) : 0;
-  const keepLive = prev.ctxTokens > 0 && prev.lastUsageSeq >= (snap.usage_seq ?? 0);
+  // The snapshot's `prompt_tokens` is the last request's prompt, exactly. A live
+  // usage event the snapshot does not include yet (its seq is past the
+  // snapshot's usage_seq) is newer, so it is kept.
+  const keepLive = prev.ctxTokens > 0 && prev.lastUsageSeq > (snap.usage_seq ?? 0);
   return {
     turns, running: snap.running, approvals, ended: false,
     lastUsageSeq: snap.usage_seq ?? prev.lastUsageSeq, staleSeq: prev.staleSeq, loaded: true,
-    ctxTokens: keepLive ? prev.ctxTokens : fromSnapshot,
+    ctxTokens: keepLive ? prev.ctxTokens : (snap.prompt_tokens ?? 0),
+    expectedFirstTokenMs: snap.expected_first_token_ms ?? prev.expectedFirstTokenMs,
   };
 }
 
@@ -198,7 +225,7 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
       // The 202 names the turn's index. An early event may have told the page
       // already; then it is known and nothing changes.
       const turns = s.turns.map(t => t.local?.sendId === e.sendId
-        ? { ...t, at: t.at ?? e.turn, local: { sendId: e.sendId, accepted: true } }
+        ? { ...t, at: t.at ?? e.turn, acceptedAt: t.acceptedAt ?? e.at, local: { sendId: e.sendId, accepted: true } }
         : t);
       return { ...s, turns };
     }
@@ -208,6 +235,8 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
       const turns = s.turns.filter(t => t.local?.sendId !== e.sendId);
       return turns.length === s.turns.length ? s : { ...s, turns, running: false };
     }
+    case 'thinking_delta':
+      return onTurn(s, e.turn, t => (t.parts.length ? t : { ...t, thinking: t.thinking + e.text }));
     case 'text_delta':
       return onTurn(s, e.turn, t => {
         const last = t.parts[t.parts.length - 1];
@@ -227,12 +256,19 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
             parts: t.parts.map(p => p.kind === 'group'
               ? {
                 ...p,
-                calls: p.calls.map(c => c.id !== e.id || c.state === 'done' ? c : { ...c, state: e.state, isError: !!e.is_error }),
+                calls: p.calls.map(c => c.id !== e.id || c.state === 'done' ? c : {
+                  ...c, state: e.state, isError: !!e.is_error,
+                  ...(e.arguments !== undefined && c.args === undefined ? { args: e.arguments } : {}),
+                  ...(e.duration_ms ? { durationMs: e.duration_ms } : {}), ...(e.summary ? { summary: e.summary } : {}),
+                }),
               }
               : p),
           };
         }
-        const c: ToolCall = { id: e.id, name: e.name, state: e.state, isError: !!e.is_error, ...(e.arguments !== undefined ? { args: e.arguments } : {}) };
+        const c: ToolCall = {
+          id: e.id, name: e.name, state: e.state, isError: !!e.is_error, ...(e.arguments !== undefined ? { args: e.arguments } : {}),
+          ...(e.duration_ms ? { durationMs: e.duration_ms } : {}), ...(e.summary ? { summary: e.summary } : {}),
+        };
         const last = t.parts[t.parts.length - 1];
         const parts = last?.kind === 'group'
           ? [...t.parts.slice(0, -1), { kind: 'group' as const, calls: [...last.calls, c] }]
@@ -265,18 +301,26 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
       });
     }
     case 'warning':
-      return onTurn(s, e.turn, t => ({ ...t, warning: e.message }));
-    case 'stopped':
-      return { ...s, running: false, approvals: {} };
+      return onTurn(s, e.turn, t => ({ ...t, warning: e.message, warningInfo: e.notice ?? t.warningInfo }));
+    case 'stopped': {
+      // The person pressed Stop: the running (latest) turn is over here, and is
+      // drawn as stopped until the snapshot that follows says how it really ended.
+      const turns = s.running && s.turns.length
+        ? s.turns.map((t, i) => (i === s.turns.length - 1 ? { ...t, stopped: true } : t))
+        : s.turns;
+      return { ...s, turns, running: false, approvals: {} };
+    }
     case 'turn_done':
     case 'turn_error': {
       const r = route(s, e.turn);
       let st = r.state;
       // A turn_error names its turn's failure; a cancelled one is the person's
       // own Stop and ends quietly.
-      if (e.kind === 'turn_error' && !e.cancelled && r.index >= 0) {
+      if (e.kind === 'turn_error' && r.index >= 0) {
         const turns = st.turns.slice();
-        turns[r.index] = { ...turns[r.index], error: e.message };
+        turns[r.index] = e.cancelled
+          ? { ...turns[r.index], stopped: true }
+          : { ...turns[r.index], error: e.message, errorInfo: e.error_info ?? null };
         st = { ...st, turns };
       }
       // Only the latest turn's end ends the run: a late end from an older
@@ -371,6 +415,12 @@ export function compactCount(n: number): string {
   return String(n);
 }
 
+/** The cost mark of a model, from its input price per MTok: `$` under $1, `$$`
+ *  under $3, otherwise `$$$`. */
+export function costTier(inputPerMTok: number): 1 | 2 | 3 {
+  return inputPerMTok < 1 ? 1 : inputPerMTok < 3 ? 2 : 3;
+}
+
 /** sessionCost sums the turns' estimated costs; null when no turn was priced. */
 export function sessionCost(turns: ChatTurn[]): number | null {
   const priced = turns.filter(t => t.costUsd !== null);
@@ -425,4 +475,33 @@ export function boundAfter(calls: ToolCall[], bound: string): string {
   let b = bound;
   for (const c of calls) if (toolKind(c.name) === 'bind') b = bindTarget(c) || b;
   return b;
+}
+
+/** A duration in ms, worded compactly: 840ms, 1.9s, 22s, 1m 12s. */
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return durationMs(Math.max(1, Math.round(ms)));
+  const s = ms / 1000;
+  if (s < 10) return durationSeconds(Math.round(s * 10) / 10);
+  if (s < 60) return durationSeconds(Math.round(s));
+  const m = Math.floor(s / 60);
+  return durationMinutes(m, Math.round(s - m * 60));
+}
+
+/** The time the calls of a group took in all: the sum of the durations the
+ *  server reported; 0 when none reported one. */
+export const totalDurationMs = (calls: ToolCall[]): number => calls.reduce((n, c) => n + (c.durationMs ?? 0), 0);
+
+/** A token count to three significant digits, for a notice: 95K, 100K, 1.02M. */
+export function noticeCount(n: number): string {
+  const f = (v: number, unit: string) => `${parseFloat(v.toPrecision(3))}${unit}`;
+  if (n >= 1_000_000) return f(n / 1_000_000, 'M');
+  if (n >= 1_000) return f(n / 1_000, 'K');
+  return String(n);
+}
+
+/** The reason a request was refused, from the error the api layer threw
+ *  (`<url> → <status> <detail>`): the detail, which is the server's sentence. */
+export function refusalReason(message: string): string {
+  const m = /^\S+ → (?:\d{3} )?(.*)$/s.exec(message);
+  return (m ? m[1] : message).trim();
 }

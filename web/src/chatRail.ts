@@ -66,10 +66,3 @@ export function useSeenTurns(chats: ChatInfo[], shownId: string | null): Record<
   if (next !== seen) setSeen(next);
   return next;
 }
-
-// A change in what a chat is doing (a turn started or ended, an approval asked
-// or answered) asks the list to be read again, so the rail stays live through
-// the chat's own events stream.
-const listeners = new Set<() => void>();
-export function notifyChatActivity(): void { listeners.forEach(l => l()); }
-export function onChatActivity(l: () => void): () => void { listeners.add(l); return () => { listeners.delete(l); }; }

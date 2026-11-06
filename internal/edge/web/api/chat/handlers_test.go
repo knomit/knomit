@@ -335,11 +335,53 @@ func TestChat_ProvidersListsModels(t *testing.T) {
 		} `json:"_embedded"`
 	}
 	require.NoError(t, json.Unmarshal(body, &v))
-	require.Equal(t, []providerView{{Name: "anthropic", Kind: "anthropic", Models: []modelView{
-		{ID: "a1", Name: "Alpha", Available: true, Tools: true},
+	require.Equal(t, []providerView{{Name: "anthropic", Kind: "anthropic", Reachable: true, Models: []modelView{
+		{ID: "a1", Name: "Alpha", Available: true, Tools: true, Price: &priceView{
+			Tiers: []tierView{
+				{UpToPromptTokens: 100_000, InputPerMTok: 0.1, OutputPerMTok: 0.5},
+				{InputPerMTok: 0.5, OutputPerMTok: 2.5},
+			},
+			CacheReadMult: 0.1, CacheWrite5mMult: 1.25, WarnPromptTokens: 95_000,
+		}},
 		{ID: "a2", Name: "a2", Reason: "not offered by the provider"},
 	}}}, v.Embedded.Providers)
 	require.NotContains(t, string(body), plainKey)
+}
+
+// POST /chats with a message starts the first turn as POST /turns would: the
+// 201 carries the turn's view index and the message is turn 0 of the
+// transcript. Without a message there is no turn, and nothing runs.
+//
+// SABOTAGE: handleCreate ignores req.Message -> no "turn" and an empty transcript.
+func TestChat_CreateWithMessageStartsTurn(t *testing.T) {
+	h := newHarness(t)
+	h.queue("a1", textStep("hello back", usage))
+	code, body := h.do("uid:501", http.MethodPost, "/chats", map[string]string{"provider": "anthropic", "model": "a1"})
+	require.Equal(t, http.StatusCreated, code, string(body))
+	require.NotContains(t, string(body), `"turn"`)
+	var bare struct{ ID string }
+	require.NoError(t, json.Unmarshal(body, &bare))
+	_, snap := h.do("uid:501", http.MethodGet, "/chats/"+bare.ID, nil)
+	require.Contains(t, string(snap), `"items":[]`)
+	h.do("uid:501", http.MethodDelete, "/chats/"+bare.ID, nil)
+
+	code, body = h.do("uid:501", http.MethodPost, "/chats", map[string]string{"provider": "anthropic", "model": "a1", "message": "first words"})
+	require.Equal(t, http.StatusCreated, code, string(body))
+	var v struct {
+		ID   string `json:"id"`
+		Turn *int   `json:"turn"`
+	}
+	require.NoError(t, json.Unmarshal(body, &v))
+	require.NotNil(t, v.Turn, string(body))
+	require.Equal(t, 0, *v.Turn)
+	_, snap = h.do("uid:501", http.MethodGet, "/chats/"+v.ID, nil)
+	var chat struct {
+		Items []struct{ Kind, Text string } `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(snap, &chat))
+	require.Equal(t, "user", chat.Items[0].Kind)
+	require.Equal(t, "first words", chat.Items[0].Text)
+	h.do("uid:501", http.MethodDelete, "/chats/"+v.ID, nil)
 }
 
 // A chat's item carries the model's display name, read from the config at
@@ -390,4 +432,52 @@ func TestChat_BusyTurnIs409AndCancelUnwinds(t *testing.T) {
 	running := h.mgr.find(id, writer.String()).running
 	h.mgr.find(id, writer.String()).mu.Unlock()
 	require.False(t, running)
+}
+
+// A message of only whitespace is no message: the chat is created empty, with
+// no turn. A message with whitespace around it starts the turn with the
+// trimmed text.
+//
+// SABOTAGE: handleCreate tests req.Message != "" without trimming -> the
+// whitespace-only message starts a turn.
+func TestChat_CreateTrimsTheMessage(t *testing.T) {
+	h := newHarness(t)
+	h.queue("a1", textStep("ok", usage))
+	code, body := h.do("uid:501", http.MethodPost, "/chats", map[string]string{"provider": "anthropic", "model": "a1", "message": " \n\t "})
+	require.Equal(t, http.StatusCreated, code, string(body))
+	require.NotContains(t, string(body), `"turn"`)
+	var v struct{ ID string }
+	require.NoError(t, json.Unmarshal(body, &v))
+	_, snap := h.do("uid:501", http.MethodGet, "/chats/"+v.ID, nil)
+	require.Contains(t, string(snap), `"items":[]`)
+	h.do("uid:501", http.MethodDelete, "/chats/"+v.ID, nil)
+
+	code, body = h.do("uid:501", http.MethodPost, "/chats", map[string]string{"provider": "anthropic", "model": "a1", "message": "  padded words \n"})
+	require.Equal(t, http.StatusCreated, code, string(body))
+	require.NoError(t, json.Unmarshal(body, &v))
+	_, snap = h.do("uid:501", http.MethodGet, "/chats/"+v.ID, nil)
+	var chat struct {
+		Items []struct{ Kind, Text string } `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(snap, &chat))
+	require.Equal(t, "padded words", chat.Items[0].Text)
+	h.do("uid:501", http.MethodDelete, "/chats/"+v.ID, nil)
+}
+
+// A first turn that is refused leaves no chat behind and answers 503: the
+// caller was told nothing was created.
+//
+// SABOTAGE: handleCreate does not end the chat on a refused first turn -> the
+// chat is still listed.
+func TestChat_CreateWithRefusedFirstTurnLeavesNoChat(t *testing.T) {
+	h := newHarness(t)
+	old := startFirstTurn
+	startFirstTurn = func(*chat, string) (int, error) { return 0, errEnded }
+	t.Cleanup(func() { startFirstTurn = old })
+
+	code, body := h.do("uid:501", http.MethodPost, "/chats", map[string]string{"provider": "anthropic", "model": "a1", "message": "hello"})
+	require.Equal(t, http.StatusServiceUnavailable, code, string(body))
+	require.Contains(t, string(body), "Chat unavailable")
+	_, list := h.do("uid:501", http.MethodGet, "/chats", nil)
+	require.Contains(t, string(list), `"count":0`)
 }

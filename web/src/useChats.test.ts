@@ -1,28 +1,41 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { useChats } from './useChats';
-import { notifyChatActivity } from './chatRail';
+import { installFakeEventSource, uninstallFakeEventSource, latestStream, CHAT_EVENTS_STREAM } from './testEventSource';
 
 const A = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
 const B = { id: 'chat-b', provider: 'local', model: 'o1' };
 const listBody = (...chats: unknown[]) => new Response(JSON.stringify({ count: chats.length, _embedded: { chats } }), { status: 200 });
 
-afterEach(() => { vi.unstubAllGlobals(); });
+beforeEach(() => { installFakeEventSource(); });
+afterEach(() => { uninstallFakeEventSource(); vi.unstubAllGlobals(); });
 
 describe('useChats', () => {
-  it('reads the list again, with the row fields, when a chat reports activity', async () => {
-    const row = (state: string, turns: number) => ({ ...A, title: 'hello', state, turns, last_activity: '2026-11-06T10:00:00Z', cost_usd: 0.5 });
-    const fetchMock = vi.fn<(url: string) => Promise<Response>>()
-      .mockResolvedValueOnce(listBody(row('idle', 0)))
-      .mockResolvedValueOnce(listBody(row('running', 1)));
+  it('applies a chat_state from the page stream to the chat\'s row, for every listed chat, and reads the list again on a reconnect', async () => {
+    const row = (id: string, state: string, turns: number) => ({ id, provider: 'anthropic', model: 'm', title: 'hello', state, turns, last_activity: '2026-11-06T10:00:00Z' });
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => listBody(row('chat-a', 'idle', 0), row('chat-b', 'idle', 1)));
     vi.stubGlobal('fetch', fetchMock);
     const { result } = renderHook(() => useChats());
     await waitFor(() => expect(result.current.loaded).toBe(true));
-    expect(result.current.chats[0].state).toBe('idle');
-    act(() => { notifyChatActivity(); });
-    await waitFor(() => expect(result.current.chats[0].state).toBe('running'));
-    expect(result.current.chats[0]).toMatchObject({ title: 'hello', turns: 1, cost_usd: 0.5, last_activity: '2026-11-06T10:00:00Z' });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Nothing here mounts a ChatFacet: the rail itself is subscribed.
+    await waitFor(() => expect(latestStream(CHAT_EVENTS_STREAM)).toBeTruthy());
+    const es = latestStream(CHAT_EVENTS_STREAM)!;
+    act(() => {
+      es.emit('chat_state', { chat: 'chat-b', state: 'running', turns: 2, title: 'hello', cost_usd: 0.5, last_activity: '2026-11-06T10:05:00Z', started_at: '2026-11-06T09:00:00Z' });
+    });
+    const byId = (id: string) => result.current.chats.find(c => c.id === id)!;
+    expect(byId('chat-b')).toMatchObject({ state: 'running', turns: 2, cost_usd: 0.5, last_activity: '2026-11-06T10:05:00Z', title: 'hello' });
+    expect(byId('chat-a')).toMatchObject({ state: 'idle', turns: 0 });
+    // An event for a chat the list does not hold changes nothing.
+    act(() => { es.emit('chat_state', { chat: 'chat-z', state: 'error', turns: 9 }); });
+    expect(result.current.chats.map(c => c.id).sort()).toEqual(['chat-a', 'chat-b']);
+    // The absent cost is absent again.
+    act(() => { es.emit('chat_state', { chat: 'chat-b', state: 'idle', turns: 2, title: 'hello' }); });
+    expect(byId('chat-b').cost_usd).toBeUndefined();
+    // A reconnect (a page-level ready) reads the list again.
+    const before = fetchMock.mock.calls.length;
+    act(() => { es.emit('ready', {}); });
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(before));
   });
 
   it('loads GET /chats and add() makes a new chat visible in the same render, with no further fetch', async () => {

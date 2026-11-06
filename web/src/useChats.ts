@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listChats, listChatProviders } from './chatApi';
 import type { ChatInfo, ChatProvider } from './chatApi';
-import { onChatActivity } from './chatRail';
+import { subscribeChatEvents } from './chatEvents';
 
 /**
  * useChats is GET /chats: the caller's live chats, which is the BACKING LIST of
@@ -26,6 +26,7 @@ export function useChats(enabled = true): {
   const rev = useRef(0);
   const added = useRef(new Map<string, number>());
   const removed = useRef(new Map<string, number>());
+  const reloadRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     if (!enabled) return;
@@ -49,16 +50,40 @@ export function useChats(enabled = true): {
       });
     };
     load();
+    reloadRef.current = load;
     // Back to this tab: a chat may have ended while it was away (the server
     // ends one nobody is attached to), so the list is read again.
     const onFocus = () => load();
     window.addEventListener('focus', onFocus);
-    // A chat's own events stream says when it started, finished or asked for
-    // an approval (ChatFacet notifies): the rail's state, title and cost
-    // follow it. There is no chats event stream; this is the live path.
-    const off = onChatActivity(load);
-    return () => { cancelled = true; off(); window.removeEventListener('focus', onFocus); };
+    return () => { cancelled = true; window.removeEventListener('focus', onFocus); };
   }, [enabled]);
+
+  // The rail is live from the page's one events stream: each listed chat's
+  // `chat_state` (title, state, turns, cost, last activity) is applied to its
+  // row, mounted or not, and a reconnect of the stream reads the list again.
+  const ids = chats.map(c => c.id).join('\n');
+  useEffect(() => {
+    if (!enabled || ids === '') return;
+    // The connect-time `ready` is not a change (the list was just read); a
+    // later one is a reconnect. `ready` reaches every subscriber, so one of them
+    // (the first) answers it, not one per chat.
+    let connected = false;
+    const offs = ids.split('\n').map((id, i) => subscribeChatEvents(id, (name, data) => {
+      if (name === 'ready') {
+        if (i !== 0) return;
+        if (connected) reloadRef.current(); else connected = true;
+        return;
+      }
+      if (name !== 'chat_state') return;
+      setChats(prev => prev.map(c => c.id !== id ? c : {
+        ...c,
+        title: String(data.title ?? ''), state: data.state as ChatInfo['state'], turns: Number(data.turns ?? 0),
+        last_activity: String(data.last_activity ?? ''), started_at: String(data.started_at ?? ''),
+        cost_usd: typeof data.cost_usd === 'number' ? data.cost_usd : undefined,
+      }));
+    }));
+    return () => offs.forEach(off => off());
+  }, [enabled, ids]);
 
   const add = useCallback((c: ChatInfo) => {
     rev.current += 1;
