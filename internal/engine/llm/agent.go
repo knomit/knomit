@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1329,7 +1330,10 @@ func (r *repeatStop) response(text string, got *Response, est int) *Response {
 		blocks = append(blocks, b)
 		out += len(b.ToolUse.Name) + len(b.ToolUse.Args)
 	}
-	u := Usage{Input: int64(est), Output: int64(out / 4), Estimated: true}
+	for _, b := range r.reasoning {
+		out += len(b.Reasoning.Native)
+	}
+	u := Usage{Input: int64(est), Output: int64(out / 4), Estimated: true, EstimatedFields: []string{"input", "output"}}
 	if got != nil && (got.Usage.Input != 0 || got.Usage.Output != 0) {
 		u = got.Usage
 	}
@@ -1341,7 +1345,9 @@ func (r *repeatStop) response(text string, got *Response, est int) *Response {
 // are not JSON compare by their bytes.
 func canonicalArgs(args json.RawMessage) string {
 	var v any
-	if err := json.Unmarshal(args, &v); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(args))
+	dec.UseNumber() // an integer above 2^53 stays itself
+	if err := dec.Decode(&v); err != nil {
 		return string(args)
 	}
 	b, err := json.Marshal(v)

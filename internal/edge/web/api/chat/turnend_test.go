@@ -36,15 +36,20 @@ func TestChat_EveryTurnEndReachesTheClientOnce(t *testing.T) {
 		t.Run(tc.name+"/stream dropped during the turn", func(t *testing.T) {
 			release := make(chan struct{})
 			h := newHarness(t)
-			h.queue("a1", step{fn: func(llm.Snapshot) step { <-release; return tc.end }})
+			// A first turn, so the turn under test is not turn 0: a payload
+			// with no turn field would read as 0.
+			h.queue("a1", textStep("first", usage), step{fn: func(llm.Snapshot) step { <-release; return tc.end }})
 			id := h.create("uid:501", "a1")
 			s := h.attach("uid:501", id)
+			require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "first"))
+			s.until("turn_done")
 			code, body := h.do("uid:501", http.MethodPost, "/chats/"+id+"/turns", map[string]string{"text": "go"})
 			require.Equal(t, http.StatusAccepted, code)
 			var accepted struct {
 				Turn int `json:"turn"`
 			}
 			require.NoError(t, json.Unmarshal(body, &accepted))
+			require.Greater(t, accepted.Turn, 0)
 			s.close() // the stream is gone while the model runs
 			time.Sleep(50 * time.Millisecond)
 			close(release)

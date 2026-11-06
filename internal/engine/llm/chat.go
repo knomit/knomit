@@ -43,10 +43,10 @@ type Caps struct {
 	// is adaptive and may send a loaded subset of the tools (ToolWindow).
 	StablePrefix bool
 	// StreamStoppable says the loop may cancel a response while it streams and
-	// assemble the partial itself: what was received is coherent and nothing
-	// that must be returned unmodified is lost. Ollama sets it. Anthropic does
-	// not: a cancelled stream loses its thinking-block signatures and the usage
-	// its final event reports.
+	// assemble the partial itself. Ollama sets it. Anthropic does not, because
+	// of usage and billing: its usage arrives in message_start and
+	// message_delta, so a cancelled stream loses the final output and cache
+	// counts and the loop could only estimate what is billed.
 	StreamStoppable bool
 }
 
