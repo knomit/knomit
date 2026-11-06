@@ -7,10 +7,9 @@ import { CHAT_ACCENT, FLEET_ACCENT } from './facets';
 import { ProviderIcon } from './icons';
 import {
   CHAT_NO_MODELS, COST_FREE, COST_NONE, COST_ROW_CACHE_READ, COST_ROW_INPUT, COST_ROW_OUTPUT, PROVIDER_CLOUD,
-  PROVIDER_CONNECTED, PROVIDER_RUNNING, SUGGEST_BIND, SUGGEST_CHANGED, START_BUTTON, START_HEADING, START_HINT,
+  PROVIDER_CONNECTED, PROVIDER_RUNNING, START_BUTTON, START_HEADING, START_HINT,
   START_INTRO, STAT_CONTEXT, STAT_COST, STAT_EFFORT, STAT_KEEP_ALIVE, STAT_SIZE, TAG_DEFAULT, TAG_NO_TOOLS,
-  TAG_OLLAMA, TAG_TOOLS, contextNumCtx, contextTokens, perMTok, startPlaceholder, suggestContradictions,
-  suggestReview, tagPriceTier,
+  TAG_OLLAMA, TAG_TOOLS, contextNumCtx, contextTokens, perMTok, startPlaceholder, tagPriceTier,
 } from './chatCopy';
 
 
@@ -31,10 +30,8 @@ function whereWords(p: ChatProvider): string {
 // only SELECTS it; the chat is created, with its first message, by Enter or
 // Start chat. A model that cannot be started (it cannot call tools, or the
 // provider does not offer it) is shown dimmed with the server's reason.
-export function ChatStartForm({ providers, repoNames = [], onCreated, onCancel }: {
+export function ChatStartForm({ providers, onCreated, onCancel }: {
   providers: ChatProvider[];
-  /** The repos the reader has; two of them word the last suggestions. */
-  repoNames?: string[];
   /** The chat exists. The caller adds it to its list and pins it in one update. */
   onCreated: (chat: ChatInfo) => void;
   onCancel?: () => void;
@@ -73,14 +70,9 @@ export function ChatStartForm({ providers, repoNames = [], onCreated, onCancel }
     }
   };
 
-  const suggestions = [
-    SUGGEST_CHANGED, SUGGEST_BIND,
-    ...(repoNames[0] ? [suggestReview(repoNames[0])] : []),
-    ...(repoNames[1] ? [suggestContradictions(repoNames[1])] : []),
-  ];
-
   return (
     <div data-testid="chat-start-form" style={page}>
+      <div data-testid="chat-start-scroll" style={scroller}>
       <div style={column}>
         <h2 style={heading}>{START_HEADING}</h2>
         <p style={intro}>{START_INTRO}</p>
@@ -112,7 +104,13 @@ export function ChatStartForm({ providers, repoNames = [], onCreated, onCancel }
             </section>
           ))}
         </div>
+      </div>
+      </div>
 
+      {/* The dock: a sibling of the scrolling card grid, never inside it, so
+          Start chat is on screen however many cards there are. */}
+      <div data-testid="chat-start-dock" style={dock}>
+      <div style={column}>
         <div style={composer}>
           <textarea
             data-testid="chat-start-input"
@@ -131,23 +129,18 @@ export function ChatStartForm({ providers, repoNames = [], onCreated, onCancel }
               </span>
             )}
             <span style={{ fontSize: 11.5, color: '#666' }}>{START_HINT}</span>
-            <button type="button" data-testid="chat-start-go" disabled={busy || !sel || !text.trim()} onClick={() => { void start(); }} style={go(busy || !sel || !text.trim())}>
-              {START_BUTTON} <span aria-hidden="true">↑</span>
-            </button>
+            <span style={actions}>
+              {onCancel && (
+                <button type="button" data-testid="chat-cancel" disabled={busy} onClick={onCancel} style={cancelBtn}>Cancel</button>
+              )}
+              <button type="button" data-testid="chat-start-go" disabled={busy || !sel || !text.trim()} onClick={() => { void start(); }} style={go(busy || !sel || !text.trim())}>
+                {START_BUTTON} <span aria-hidden="true">↑</span>
+              </button>
+            </span>
           </div>
         </div>
         {err && <div role="alert" data-testid="chat-start-error" style={{ color: '#e0a0a0', fontSize: 12, marginTop: 8 }}>{err}</div>}
-
-        {suggestions.length > 0 && (
-          <div data-testid="chat-suggestions" style={sugg}>
-            {suggestions.map(s => (
-              <button key={s} type="button" style={suggBtn} onClick={() => setText(s)}>{s}</button>
-            ))}
-          </div>
-        )}
-        {onCancel && (
-          <button type="button" data-testid="chat-cancel" disabled={busy} onClick={onCancel} style={cancelBtn}>Cancel</button>
-        )}
+      </div>
       </div>
     </div>
   );
@@ -223,7 +216,10 @@ function ModelCard({ provider, model: m, isDefault, selected, onPick }: {
   );
 }
 
-const page: CSSProperties = { flex: 1, minHeight: 0, overflowY: 'auto', padding: '30px 24px 24px', display: 'flex', justifyContent: 'center' };
+const page: CSSProperties = { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' };
+// Only the cards scroll; the dock below them does not.
+const scroller: CSSProperties = { flex: 1, minHeight: 0, overflowY: 'auto', padding: '30px 24px 12px', display: 'flex', justifyContent: 'center' };
+const dock: CSSProperties = { flex: 'none', padding: '4px 24px 16px', display: 'flex', justifyContent: 'center', background: '#141414' };
 const column: CSSProperties = { width: 900, maxWidth: '100%' };
 const heading: CSSProperties = { margin: '0 0 4px', fontSize: 22, fontWeight: 600, color: '#eee', letterSpacing: '-0.2px', fontFamily: 'var(--k-font-display, inherit)' };
 const intro: CSSProperties = { margin: '0 0 22px', color: '#888', fontSize: 13 };
@@ -259,13 +255,12 @@ const chip: CSSProperties = {
   border: '1px solid #4a3f22', borderRadius: 12, padding: '2px 9px',
 };
 const go = (disabled: boolean): CSSProperties => ({
-  marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, background: CHAT_ACCENT, color: '#1a1408',
+  display: 'inline-flex', alignItems: 'center', gap: 6, background: CHAT_ACCENT, color: '#1a1408',
   fontWeight: 600, fontSize: 12.5, borderRadius: 6, padding: '6px 13px', border: 'none',
   cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.45 : 1,
 });
-const sugg: CSSProperties = { display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' };
-const suggBtn: CSSProperties = { fontSize: 12, color: '#aaa', border: '1px solid #262626', borderRadius: 14, padding: '4px 11px', background: '#111', cursor: 'pointer', font: 'inherit' };
+const actions: CSSProperties = { marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8 };
 const cancelBtn: CSSProperties = {
-  marginTop: 14, background: 'transparent', color: '#aaa', border: '1px solid #333',
-  borderRadius: 4, padding: '6px 12px', fontSize: 12, cursor: 'pointer',
+  background: 'transparent', color: '#aaa', border: '1px solid #333', borderRadius: 6,
+  padding: '5px 13px', fontSize: 12.5, cursor: 'pointer', fontFamily: 'inherit',
 };

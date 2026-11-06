@@ -88,7 +88,13 @@ export function activitySummary(calls: SummaryCall[]): SummarySeg[][] {
     else if (c.kind === 'read') reads++;
     else other++;
   }
-  for (const t of bound) pieces.push(t ? [{ text: 'Bound to ' }, { text: t, strong: true }] : [{ text: 'Bound' }]);
+  // A bind with no readable target says "Bound" only when no bind named one:
+  // "Bound · Bound to all" would say the same thing twice.
+  const named = bound.some(t => t !== '');
+  for (const t of bound) {
+    if (t) pieces.push([{ text: 'Bound to ' }, { text: t, strong: true }]);
+    else if (!named) pieces.push([{ text: 'Bound' }]);
+  }
   for (const [t, n] of queries) {
     pieces.push([{ text: 'searched ' }, { text: `${n}×`, strong: true }, ...(t ? [{ text: ' in ' + t }] : [])]);
   }
@@ -215,12 +221,6 @@ export const TAG_NO_TOOLS = 'No tools';
 export const tagPriceTier = (at: string): string => `Price tier at ${at}`;
 /** design: the cost mark of a model that costs nothing. */
 export const COST_FREE = 'free';
-/** design, Suggestions. {repo} is a repo the reader has. */
-export const SUGGEST_CHANGED = 'What changed in knomit-kb this week?';
-export const SUGGEST_BIND = 'Bind to the all lens';
-export const suggestReview = (repo: string): string => `Review open items in ${repo}`;
-export const suggestContradictions = (repo: string): string => `Find contradictions in ${repo}`;
-
 /** Reused from approved PR 1 copy: "Input", "Output" and "Cache read" are
  *  COST_ROW_INPUT, COST_ROW_OUTPUT and COST_ROW_CACHE_READ. From the mockup: */
 export const STAT_CONTEXT = 'Context';

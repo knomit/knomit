@@ -229,16 +229,16 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
           </span>
         </div>
 
-        {/* ── Breadcrumb: knomit / target ──
+        {/* ── Crumb: knomit │ target ──
             Labels, not controls: nothing here opens anything, so they stay
             part of the drag region. The target is what the page below shows;
             over the server pages the word mark stands alone. */}
         {!serverOpen && (
           <>
-            <span className="k-bar-sep" data-testid="crumb-sep" aria-hidden="true" style={{ display: 'flex', alignItems: 'center', margin: '0 8px 0 12px', color: '#555', fontSize: 13, flexShrink: 0 }}>/</span>
+            <span className="k-bar-sep" data-testid="crumb-sep" aria-hidden="true" style={{ alignSelf: 'stretch', width: 1, margin: '0 14px 0 16px', background: '#1e1e1e', flexShrink: 0 }} />
             <span className="k-bar-label" data-testid="target-label" title={label.name ? (target.chip ? `${label.name} (${target.chip.text})` : target.sub ? `${label.name} · ${target.sub}` : label.name) : undefined} style={{
-              display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden',
-              fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
+              display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden', marginRight: 14,
+              fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap',
               color: label.color,
             }}>
               {label.icon}
@@ -256,7 +256,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
             </span>
           </>
         )}
-        {(server ? server.pages.length > 0 : facets.length > 0) && (
+        {server && server.pages.length > 0 && (
           <span className="k-bar-divider" data-testid="bar-divider" aria-hidden="true" style={{ alignSelf: 'center', width: 1, height: 18, margin: '0 14px', background: '#1e1e1e', flexShrink: 0 }} />
         )}
 

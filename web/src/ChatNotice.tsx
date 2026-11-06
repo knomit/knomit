@@ -31,11 +31,13 @@ function ToneIcon({ tone }: { tone: NoticeTone }) {
 
 /** One notice line. `lead` is the key phrase (drawn in `leadColor`, the tone
  *  colour by default), `rest` the footer-grey remainder, `action` the link. */
-export function NoticeLine({ tone, lead, leadColor, rest, title, action, testId = 'chat-notice' }: {
+export function NoticeLine({ tone, lead, leadColor, rest, restMono, title, action, testId = 'chat-notice' }: {
   tone: NoticeTone;
   lead: ReactNode;
   leadColor?: string;
   rest?: ReactNode;
+  /** The remainder is figures ("1.02M > 1M, nothing sent"): the mockup sets it in the mono face, 10.5px. */
+  restMono?: boolean;
   /** The full server sentence, shown on hover. */
   title?: string;
   action?: { label: string; onClick: () => void };
@@ -45,7 +47,7 @@ export function NoticeLine({ tone, lead, leadColor, rest, title, action, testId 
     <div data-testid={testId} data-tone={tone} title={title} style={line}>
       <span aria-hidden="true" style={{ color: TONE[tone], display: 'flex' }}><ToneIcon tone={tone} /></span>
       <span data-testid={`${testId}-lead`} style={{ color: leadColor ?? TONE[tone] }}>{lead}</span>
-      {rest && <><span aria-hidden="true" style={{ color: '#3a3a3a' }}>·</span><span style={{ color: FOOT }}>{rest}</span></>}
+      {rest && <><span aria-hidden="true" style={{ color: '#3a3a3a' }}>·</span><span data-testid={`${testId}-rest`} style={restMono ? { color: '#9a9a9a', fontFamily: 'var(--k-font-mono)', fontSize: 10.5 } : { color: FOOT }}>{rest}</span></>}
       {action && (
         <>
           <span aria-hidden="true" style={{ color: '#3a3a3a' }}>·</span>
@@ -79,7 +81,7 @@ export function TurnNotices({ turn, modelName, onNewChat }: {
       )}
       {turn.error && e && e.kind === 'context_full' && (
         <NoticeLine tone="blocked" testId="chat-notice-full" title={turn.error} action={action}
-          lead={NOTICE_FULL} rest={noticeFullRest(e.needed ? noticeCount(e.needed) : '', e.window ? noticeCount(e.window) : '')} />
+          lead={NOTICE_FULL} restMono rest={noticeFullRest(e.needed ? noticeCount(e.needed) : '', e.window ? noticeCount(e.window) : '')} />
       )}
       {turn.error && !(e && e.kind === 'context_full') && (
         <NoticeLine tone="blocked" testId="chat-turn-error" title={turn.error} lead={turn.error} />

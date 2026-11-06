@@ -62,20 +62,34 @@ a { color: inherit; }
   margin-bottom: 12px; color: #e4e4e4; font-size: 13.5px; line-height: 1.5; font-weight: 400; }
 .k-chat-user p, .k-chat-user ul, .k-chat-user ol { margin: 0 0 6px; }
 .k-chat-user > :last-child { margin-bottom: 0; }
-.k-chat-user code { background: #202225; border-color: #2c2e32; color: #c9cdd4; }
+
+/* Chat prose. Both chat blocks ARE `.k-prose` for its spacing, but .k-prose is
+   the fact pane's register: a blue-tinted code chip, a full cell grid, a violet
+   blockquote rule. A chat block restates each of those rules once, here, on the
+   doubled class (0,2,x) so it outranks .k-prose whatever the import order,
+   instead of every call site patching the properties it noticed. */
+.k-prose.k-chat-user code, .k-prose.k-chat-answer code {
+  font-size: 12px; background: #1c1c1c; border: 1px solid #262626; border-radius: 3px; padding: 0 4px; color: #ddd; }
+.k-prose.k-chat-user code { font-size: 11.5px; background: #1f1f1f; border-color: #2a2a2a; color: #ccc; font-weight: 400; }
+.k-prose.k-chat-user pre, .k-prose.k-chat-answer pre { background: #161616; border: 1px solid #262626; }
+.k-prose.k-chat-user pre code, .k-prose.k-chat-answer pre code { background: none; border: none; padding: 0; }
 
 /* The answer: no box. */
 .k-chat-answer { font-size: 14px; line-height: 1.65; color: #d0d0d0; margin: 6px 0; }
 .k-chat-answer h1, .k-chat-answer h2, .k-chat-answer h3, .k-chat-answer h4 {
-  font-family: var(--k-font-display); font-size: 14.5px; font-weight: 600; border-bottom: none; }
+  font-family: var(--k-font-display); font-size: 14.5px; font-weight: 600; border-bottom: none; color: #eee; }
 .k-chat-answer li::marker { color: #555; }
+.k-chat-answer strong { color: #f0f0f0; font-weight: 600; }
 /* A quote in an answer must not read as a user message: no ground, italic, a
    thin rule. */
-.k-chat-answer blockquote { background: none; font-style: italic; color: #9a9a9a; border-left: 1px solid #2c2c2c; padding: 0 0 0 12px; }
-.k-chat-answer table { display: table; width: 100%; border-collapse: separate; border-spacing: 0; border: 1px solid #262626; border-radius: 8px; overflow: hidden; }
-.k-chat-answer th { background: #171717; color: #999; font-size: 10.5px; text-transform: uppercase; border-color: #262626; padding: 8px 11px; }
-.k-chat-answer td { border-color: #262626; padding: 8px 11px; }
+.k-prose.k-chat-answer blockquote { background: none; font-style: italic; color: #9a9a9a; border-left: 1px solid #2c2c2c; padding: 0 0 0 12px; }
+/* A table: horizontal rules only, in a rounded frame. */
+.k-prose.k-chat-answer table { display: table; width: 100%; max-width: none; overflow: hidden; border-collapse: separate; border-spacing: 0;
+  font-size: 12.5px; line-height: 1.45; border: 1px solid #262626; border-radius: 8px; margin: 6px 0 4px; }
+.k-prose.k-chat-answer th { background: #171717; color: #888; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  border: none; border-bottom: 1px solid #262626; padding: 8px 11px; text-align: left; }
+.k-prose.k-chat-answer td { border: none; border-bottom: 1px solid #1e1e1e; padding: 8px 11px; color: #ccc; vertical-align: top; }
+.k-prose.k-chat-answer tr:last-child td { border-bottom: 0; }
 
 /* The streaming caret: until the turn ends. */
-.k-chat-caret { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: text-bottom; background: #e8c27a;
- }
+.k-chat-caret { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: #e8c27a; border-radius: 1px; }

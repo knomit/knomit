@@ -79,10 +79,10 @@ function Total({ label, usd, testid, strong }: { label: string; usd: number | nu
 }
 
 const footer: CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, fontSize: 10.5, fontFamily: 'var(--k-font-mono)', color: '#555',
+  display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, fontSize: 10.5, fontFamily: 'var(--k-font-mono)', color: '#555',
 };
 const cardStyle: CSSProperties = {
-  position: 'absolute', left: 0, top: 'calc(100% + 8px)', zIndex: 5, minWidth: 230, padding: '10px 12px',
+  position: 'absolute', left: 0, bottom: 'calc(100% + 8px)', zIndex: 5, minWidth: 230, padding: '10px 12px',
   background: '#181818', border: '1px solid #2c2c2c', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,.5)',
   fontSize: 11, whiteSpace: 'nowrap', color: '#aaa',
 };

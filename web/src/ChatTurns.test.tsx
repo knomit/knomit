@@ -63,6 +63,9 @@ describe('the activity summary (chatCopy.activitySummary)', () => {
   });
   it('a bind with no readable target reads "Bound"', () => {
     expect(words([{ kind: 'bind', target: '' }])).toBe('Bound');
+    // ...but never beside a bind that did name one: "Bound · Bound to all" says it twice.
+    expect(words([{ kind: 'bind', target: '' }, { kind: 'bind', target: 'all' }])).toBe('Bound to all');
+    expect(words([{ kind: 'bind', target: 'all' }, { kind: 'bind', target: '' }, { kind: 'query', target: 'all' }])).toBe('Bound to all · searched 1× in all');
   });
   it('marks the target and the counts bold, nothing else', () => {
     const [bound, searched] = activitySummary([{ kind: 'bind', target: 'all' }, { kind: 'query', target: 'lens-x' }]);
@@ -313,7 +316,8 @@ describe('the streaming caret', () => {
     act(() => { es.emit('text_delta', { text: 'Short answer', turn: 0 }); });
     const text = screen.getByTestId('chat-text');
     expect(within(text).getByTestId('chat-caret')).toBeInTheDocument();
-    expect(text.lastElementChild).toBe(within(text).getByTestId('chat-caret'));
+    // Inline: the last child of the last paragraph, on the same line as the last word.
+    expect(text.querySelector('p')!.lastElementChild).toBe(within(text).getByTestId('chat-caret'));
     act(() => { es.emit('turn_done', { turn: 0 }); });
     expect(screen.queryByTestId('chat-caret')).toBeNull();
   });

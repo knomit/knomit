@@ -542,6 +542,8 @@ describe('notices: one line, never a filled box', () => {
     expect(line.getAttribute('data-tone')).toBe('blocked');
     expect(line.textContent).toBe('Chat is full·1.02M > 1M, nothing sent·New chat');
     expect(line.getAttribute('title')).toBe(sentence);
+    // The figures are mono, as in the mockup's .num.
+    expect(screen.getByTestId('chat-notice-full-rest')).toHaveStyle({ fontFamily: 'var(--k-font-mono)', fontSize: '10.5px' });
   });
 
   it('with only the window known (the provider refused), it still says nothing was sent', async () => {

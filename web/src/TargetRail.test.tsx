@@ -456,10 +456,10 @@ describe('TargetRail: the Fleet section', () => {
   });
 
   // SABOTAGE: enable the + regardless of `local` -> red.
-  it('in a browser over TCP (local false): the + is off and the line says where to go', () => {
+  it('in a browser over TCP (local false): the + is off and the line reads Not in a fleet', () => {
     renderRail({ fleet: { ...standalone, local: false } });
     expect(screen.getByTestId('rail-new-fleet')).toBeDisabled();
-    expect(screen.getByTestId('rail-fleet-none')).toHaveTextContent('Not in a fleet — create or join from the desktop app');
+    expect(screen.getByTestId('rail-fleet-none')).toHaveTextContent(/^Not in a fleet$/);
   });
 
   it('the draft row reads New fleet', () => {
@@ -541,6 +541,16 @@ describe('TargetRail — chats', () => {
     expect(screen.getByTestId('rail-draft-chat')).toHaveAttribute('aria-current', 'true');
     fireEvent.click(screen.getByTestId('rail-draft-chat'));
     expect(onPickDraft).toHaveBeenCalledWith('chat');
+  });
+
+  it('the section + is a bare glyph (no box), lit in the chat amber on its tint while the draft shows; the draft row has the chat icon', () => {
+    const { unmount } = renderRail({ chats: [], chatsAvailable: true, drafts: { repo: false, lens: false, chat: true }, draftShown: 'chat' });
+    const plus = screen.getByTestId('rail-new-chat');
+    expect(plus).toHaveStyle({ width: '14px', height: '14px', color: '#e8c27a', background: '#221e14' });
+    expect(plus.style.border).toMatch(/^(none|medium)/);
+    expect(screen.getByTestId('rail-new-repo')).toHaveStyle({ color: '#777', background: 'transparent' });
+    expect(screen.getByTestId('rail-draft-chat').querySelector('svg')).not.toBeNull();
+    unmount();
   });
 
   it('the + is off on a locked rail', () => {

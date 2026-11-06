@@ -199,7 +199,7 @@ export function TargetRail({
             <div style={{ ...sectionHeader, marginTop: 0 }}>
               <ChatIcon color={CHAT_ACCENT} size={13} />
               <span style={sectionTitle}>Chats</span>
-              <PlusButton testId="rail-new-chat" label="New chat" disabled={locked}
+              <PlusButton testId="rail-new-chat" tone={PLUS_CHAT} label="New chat" disabled={locked}
                 active={draftShown === 'chat'} onClick={() => { release(); onNewDraft?.('chat'); }} />
             </div>
             {drafts.chat && (
@@ -238,7 +238,7 @@ export function TargetRail({
           <div style={sectionHeader}>
             <BookIcon color="#7c9" size={13} />
             <span style={sectionTitle}>Repositories</span>
-            <PlusButton testId="rail-new-repo" label="New repository" disabled={serverReadOnly || locked}
+            <PlusButton testId="rail-new-repo" tone={PLUS_REPO} label="New repository" disabled={serverReadOnly || locked}
               active={draftShown === 'repo'} onClick={() => { release(); onNewDraft?.('repo'); }} />
           </div>
           {drafts.repo && (
@@ -370,7 +370,7 @@ export function TargetRail({
           <div style={sectionHeader}>
             <LayersIcon color={LENS_ACCENT} size={13} />
             <span style={sectionTitle}>Lenses</span>
-            <PlusButton testId="rail-new-lens" label="New lens" disabled={serverReadOnly || locked}
+            <PlusButton testId="rail-new-lens" tone={PLUS_LENS} label="New lens" disabled={serverReadOnly || locked}
               active={draftShown === 'lens'} onClick={() => { release(); onNewDraft?.('lens'); }} />
           </div>
           {drafts.lens && (
@@ -417,7 +417,7 @@ export function TargetRail({
             <FleetIcon color={FLEET_ACCENT} size={13} />
             <span style={sectionTitle}>Fleet</span>
             {!fleetRepo && (
-              <PlusButton testId="rail-new-fleet" label="Create or join a fleet"
+              <PlusButton testId="rail-new-fleet" tone={PLUS_FLEET} label="Create or join a fleet"
                 disabled={locked || fleet?.local !== true}
                 active={draftShown === 'fleet'} onClick={() => { release(); onNewDraft?.('fleet'); }} />
             )}
@@ -450,7 +450,7 @@ export function TargetRail({
             </button>
           ) : !drafts.fleet && fleet && (
             <div data-testid="rail-fleet-none" style={{ color: '#555', fontSize: 12, padding: '4px 10px' }}>
-              {fleet.local ? 'Not in a fleet' : 'Not in a fleet — create or join from the desktop app'}
+              Not in a fleet
             </div>
           )}
         </div>
@@ -461,12 +461,12 @@ export function TargetRail({
 
 // A section's `+`: the manage rail's button, unchanged (the component wins
 // over the mock). Lit while its draft is the target on screen.
-function PlusButton({ testId, label, disabled, active, onClick }: {
-  testId: string; label: string; disabled: boolean; active: boolean; onClick: () => void;
+function PlusButton({ testId, label, disabled, active, tone, onClick }: {
+  testId: string; label: string; disabled: boolean; active: boolean; tone: { color: string; tint: string }; onClick: () => void;
 }) {
   return (
     <button type="button" data-testid={testId} title={label} aria-label={label}
-      onMouseDown={noMouseFocus} disabled={disabled} onClick={onClick} style={plusBtn(disabled, active)}>
+      onMouseDown={noMouseFocus} disabled={disabled} onClick={onClick} style={plusBtn(disabled, active, tone)}>
       <PlusIcon color="currentColor" size={14} />
     </button>
   );
@@ -482,6 +482,7 @@ function DraftRow({ kind, selected, disabled, onClick }: {
     <button type="button" data-testid={`rail-draft-${kind}`} aria-current={selected || undefined}
       disabled={disabled} onMouseDown={noMouseFocus} onClick={disabled ? undefined : onClick}
       style={draftRow(kind, selected)}>
+      {kind === 'chat' && <span data-testid="rail-draft-chat-icon" style={{ display: 'flex', width: 18, justifyContent: 'center', flexShrink: 0 }}><ChatIcon color="currentColor" size={13} /></span>}
       <span style={rowName}>{DRAFT_NAME[kind]}</span>
     </button>
   );
@@ -580,12 +581,18 @@ const archRow = (selected: boolean): CSSProperties => ({
     ? { background: '#221d16', color: '#e6d9c6', boxShadow: 'inset 2px 0 0 -0.5px #c4b29a' }
     : { color: '#8a7a6a' }),
 });
-const plusBtn = (disabled: boolean, active: boolean): CSSProperties => ({
+// The mockup's section `+`: a bare 14px glyph, #777, no box. Lit while its draft
+// is on screen: the glyph takes the section's accent on that accent's tint.
+const plusBtn = (disabled: boolean, active: boolean, tone: { color: string; tint: string }): CSSProperties => ({
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-  width: 22, height: 22, borderRadius: 4,
-  background: active ? '#1d4ed8' : 'transparent', color: disabled ? '#555' : active ? '#fff' : '#9a9a9a',
-  border: '1px solid ' + (active ? '#1d4ed8' : '#333'), cursor: disabled ? 'default' : 'pointer', padding: 0,
+  width: 14, height: 14, borderRadius: 3,
+  background: active ? tone.tint : 'transparent', color: disabled ? '#444' : active ? tone.color : '#777',
+  border: 'none', cursor: disabled ? 'default' : 'pointer', padding: 0,
 });
+const PLUS_CHAT = { color: CHAT_ACCENT, tint: '#221e14' };
+const PLUS_REPO = { color: DRAFT_BLUE, tint: '#14191f' };
+const PLUS_LENS = { color: LENS_ACCENT, tint: '#1d1a2c' };
+const PLUS_FLEET = { color: FLEET_ACCENT, tint: '#121f1d' };
 // The name is the one element that shrinks; the badges never do.
 const rowName: CSSProperties = {
   flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
