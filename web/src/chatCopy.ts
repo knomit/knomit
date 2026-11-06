@@ -139,3 +139,50 @@ export const PILL_SESSION = 'session';
 export const CONTEXT_LABEL = 'context';
 export const COMPOSER_HINT = 'Enter to send';
 export const CHAT_REPLY_PLACEHOLDER = 'Reply…';
+
+// ── PENDING APPROVAL ──
+// Chat UX v2, PR 5 (design section 1, the start screen). Awaiting the user's
+// approval before it ships. The strings the design gives are marked "design";
+// the rest are the mockup's wording (P1-new-chat.png) for what the design names
+// but does not word, and need a ruling.
+
+/** design: the heading and the line under it. */
+export const START_HEADING = 'Start a chat';
+export const START_INTRO = 'Pick a model, then ask. It can read every repo and lens you can; anything that writes asks you first.';
+/** design: the composer. `name` is the selected model's display name. */
+export const startPlaceholder = (name: string): string => `Ask ${name} about your knowledge…`;
+export const START_HINT = 'Enter to start · Shift+Enter for a new line';
+export const START_BUTTON = 'Start chat';
+/** design: the reachability word beside a provider. */
+export const PROVIDER_CONNECTED = 'connected';
+export const PROVIDER_RUNNING = 'running';
+/** design: the card's tags. "Price tier at 100K": the number is the model's own first tier. */
+export const TAG_DEFAULT = 'Default';
+export const TAG_TOOLS = 'Tools';
+export const TAG_OLLAMA = 'Ollama';
+export const TAG_NO_TOOLS = 'No tools';
+export const tagPriceTier = (at: string): string => `Price tier at ${at}`;
+/** design: the cost mark of a model that costs nothing. */
+export const COST_FREE = 'free';
+/** design, Suggestions. {repo} is a repo the reader has. */
+export const SUGGEST_CHANGED = 'What changed in knomit-kb this week?';
+export const SUGGEST_BIND = 'Bind to the all lens';
+export const suggestReview = (repo: string): string => `Review open items in ${repo}`;
+export const suggestContradictions = (repo: string): string => `Find contradictions in ${repo}`;
+
+/** Reused from approved PR 1 copy: "Input", "Output" and "Cache read" are
+ *  COST_ROW_INPUT, COST_ROW_OUTPUT and COST_ROW_CACHE_READ. NEW, from the mockup: */
+export const STAT_CONTEXT = 'Context';
+export const STAT_EFFORT = 'Effort';
+export const STAT_COST = 'Cost';
+export const STAT_SIZE = 'Size';
+export const STAT_KEEP_ALIVE = 'Keep alive';
+/** A price: "$0.10 / MTok". */
+export const perMTok = (usd: string): string => `${usd} / MTok`;
+/** An Ollama model's cost. */
+export const COST_NONE = 'none';
+/** A context window: "1M tokens", "32K (num_ctx)". */
+export const contextTokens = (n: string): string => `${n} tokens`;
+export const contextNumCtx = (n: string): string => `${n} (num_ctx)`;
+/** The cloud provider's "where it runs" prefix: "cloud · ANTHROPIC_API_KEY". */
+export const PROVIDER_CLOUD = 'cloud';

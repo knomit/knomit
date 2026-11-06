@@ -1266,6 +1266,8 @@ describe('a chat target', () => {
     fireEvent.click(await screen.findByTestId('rail-new-chat'));
     expect(screen.getByTestId('target-label')).toHaveTextContent('New chat');
     fireEvent.click(await screen.findByTestId('chat-model-anthropic-a1'));
+    fireEvent.change(screen.getByTestId('chat-start-input'), { target: { value: 'first words' } });
+    fireEvent.keyDown(screen.getByTestId('chat-start-input'), { key: 'Enter' });
     await waitFor(() => expect(screen.getByTestId('rail-chat-chat-a')).toHaveAttribute('aria-current', 'true'));
   };
 
