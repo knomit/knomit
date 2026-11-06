@@ -26,8 +26,8 @@
 // POST, so a snapshot started after the POST was answered 2xx lists it; until
 // then the local turn is kept after the snapshot's turns. A POST that fails
 // takes its local turn out outright.
-import { durationMinutes, durationMs, durationSeconds } from './chatCopy';
-import type { ChatApproval, ChatCallSummary, ChatNotice, ChatSnapshot, ChatViewItem } from './chatApi';
+import { durationMinutes, durationMs, durationSeconds, loadedToolsRow, toolVerb } from './chatCopy';
+import type { ChatApproval, ChatCall, ChatCallSummary, ChatNotice, ChatSnapshot, ChatViewItem } from './chatApi';
 
 /** The loader tool's name (llm.LoadToolsName): its calls get their own row. */
 export const LOADER_TOOL = 'load_tools';
@@ -348,6 +348,30 @@ export function toolRowLabel(tool: string): string {
   const rest = tool.startsWith('knomit_') ? tool.slice('knomit_'.length) : '';
   return rest ? `knomit: Knomit ${rest.replaceAll('_', ' ')}` : tool;
 }
+
+/** toolCallLabel is a call's label as its timeline row shows it, and as the
+ *  side panel's header and breadcrumb show the same call: the loader's loaded
+ *  tools, else the verb chatCopy has for the tool's kind, else toolRowLabel.
+ *  ONE function, so the row and the panel can never word a call differently. */
+export function toolCallLabel(c: ToolCall): string {
+  if (c.name === LOADER_TOOL && c.loaded?.length) return loadedToolsRow(c.loaded);
+  return toolVerb(toolKind(c.name), c.state === 'running') ?? toolRowLabel(c.name);
+}
+
+/** The transcript's own record of a call (what its row is drawn from), or undefined. */
+export function findCall(turns: ChatTurn[], callId: string): ToolCall | undefined {
+  for (const t of turns) for (const part of t.parts) {
+    if (part.kind !== 'group') continue;
+    const c = part.calls.find(x => x.id === callId);
+    if (c) return c;
+  }
+  return undefined;
+}
+
+/** A finished call as the call endpoint returned it, in the shape a row is drawn
+ *  from: for a call the transcript no longer holds. */
+export const toolCallOf = (callId: string, call: ChatCall): ToolCall =>
+  ({ id: callId, name: call.name, state: 'done', isError: call.is_error, args: call.arguments });
 
 /** A knomit_materialize document puts `<a id="f-..."></a>` on its own line
  *  before each fact so a document can link to it. The chat panel renders

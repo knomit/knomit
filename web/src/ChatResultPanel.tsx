@@ -4,7 +4,9 @@ import ReactMarkdown from 'react-markdown';
 import { markdownPlugins, markdownComponents } from './markdown';
 import { getChatCall } from './chatApi';
 import type { ChatCall } from './chatApi';
-import { toolRowLabel, materializedMarkdown } from './chatState';
+import { materializedMarkdown, toolCallOf } from './chatState';
+import type { ToolCall } from './chatState';
+import { ToolCallHead } from './ChatToolGroup';
 import { CHAT_RESULT_LOADING, PANEL_TAB_RESULT, PANEL_TAB_ARGUMENTS } from './chatCopy';
 
 /**
@@ -13,11 +15,15 @@ import { CHAT_RESULT_LOADING, PANEL_TAB_RESULT, PANEL_TAB_ARGUMENTS } from './ch
  * (GET /chats/{id}/calls/{callId}), so a large result costs nothing until
  * someone asks for it. It has two tabs, Result and Arguments. A materialize
  * result is a fact, so the Result tab renders it as one; any other result is
- * shown as the text it is.
+ * shown as the text it is. It is headed by the call's own timeline row
+ * (ToolCallHead): the panel is the details behind that row.
  */
-export function ChatResultPanel({ chatId, callId, onCall }: {
+export function ChatResultPanel({ chatId, callId, row, onCall }: {
   chatId: string;
   callId: string;
+  /** The transcript's record of the call, which its row is drawn from. Absent,
+   *  the heading is drawn from the loaded call. */
+  row?: ToolCall;
   /** Told the call once it has loaded (the side panel's breadcrumb reads it). */
   onCall?: (callId: string, call: ChatCall) => void;
 }) {
@@ -44,7 +50,7 @@ export function ChatResultPanel({ chatId, callId, onCall }: {
       {shown?.error && <div role="alert" data-testid="chat-result-error" style={{ color: '#e0a0a0', fontSize: 13 }}>{shown.error}</div>}
       {call && (
         <>
-          <div data-testid="chat-result-title" style={title}>{toolRowLabel(call.name)}</div>
+          <ToolCallHead call={row ?? toolCallOf(callId, call)} testId="chat-result-title" />
           <div role="tablist" style={tabs}>
             {(['result', 'arguments'] as const).map(t => (
               <button key={t} role="tab" type="button" data-testid={`chat-result-tab-${t}`} aria-selected={active === t}
@@ -71,10 +77,6 @@ export function ChatResultPanel({ chatId, callId, onCall }: {
 
 // Styling is the mockup's side-panel fact: .sfact (padding, h1, p) and .stabs.
 const panel: CSSProperties = { height: '100%', overflowY: 'auto', padding: '18px 20px', boxSizing: 'border-box' };
-const title: CSSProperties = {
-  fontFamily: 'var(--k-font-display)', fontSize: 19, fontWeight: 600, letterSpacing: '-.2px', lineHeight: 1.3,
-  color: '#eee', margin: '0 0 12px',
-};
 const tabs: CSSProperties = { display: 'flex', gap: 2, borderBottom: '1px solid #1e1e1e', marginBottom: 14 };
 const tabBtn = (on: boolean): CSSProperties => ({
   background: 'none', border: 'none', borderRadius: 0, padding: '7px 9px', cursor: 'pointer', fontSize: 11.5,

@@ -127,7 +127,7 @@ describe('the activity line on the page', () => {
     expect(['tu_1', 'tu_2', 'tu_3', 'tu_4'].map(id => screen.getByTestId(`chat-tool-arg-${id}`).textContent))
       .toEqual(['all', 'AI agent security incident', 'agentic practice', 'a1b2c3d4']);
     // The verbs: Bound, Searched, Searched, Read.
-    expect(['tu_1', 'tu_2', 'tu_3', 'tu_4'].map(id => screen.getByTestId(`chat-tool-select-${id}`).firstElementChild?.textContent))
+    expect(['tu_1', 'tu_2', 'tu_3', 'tu_4'].map(id => screen.getByTestId(`chat-tool-select-${id}`).querySelector('[data-call-part="label"]')?.textContent))
       .toEqual(['Bound', 'Searched', 'Searched', 'Read']);
   });
 
