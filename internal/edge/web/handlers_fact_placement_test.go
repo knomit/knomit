@@ -208,7 +208,7 @@ func TestFactUpdate_FreshPathRefusesAnUnknownTopic(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 }
 
-// REST and MCP refuse the same input with the same text: one topic/category
+// REST and MCP refuse the same input (MCP words it for an agent): one topic/category
 // pair, sent to knomit_learn on the repo's MCP mount, to POST /facts (as
 // domain) and to PUT /facts/kb/<topic>/<category>/<name>.md — one check,
 // fact.ValidatePlacement, on every create.
@@ -221,9 +221,11 @@ func TestFactPlacement_RESTAndMCPRefuseTheSameInput(t *testing.T) {
 	mount := repoMount(t, fx.m, "alpha")
 	sid := initAt(t, fx.h, mount)
 
-	for _, tc := range []struct{ name, topic, category, want string }{
-		{"unknown-topic", "chain", "links", `validate path: unknown topic "chain"`},
-		{"no-category", "architecture", "", "category is required"},
+	// REST keeps the shared ValidatePlacement text; knomit_learn words the same
+	// refusals for an agent (wantMCP) and lists the repo's topics.
+	for _, tc := range []struct{ name, topic, category, want, wantMCP string }{
+		{"unknown-topic", "chain", "links", `validate path: unknown topic "chain"`, `unknown topic "chain"; valid: `},
+		{"no-category", "architecture", "", "category is required", "category is missing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tip, paths := fx.tip(t), fx.paths(t)
@@ -232,7 +234,7 @@ func TestFactPlacement_RESTAndMCPRefuseTheSameInput(t *testing.T) {
 				`{"moment_name":"placement","facts":[{"topic":%q,"category":%q,"title":"A fact","body":"b"}]}`,
 				tc.topic, tc.category))
 			require.True(t, isErr, "MCP accepted it: %s", text)
-			require.Contains(t, text, tc.want)
+			require.Contains(t, text, tc.wantMCP)
 
 			domain, err := json.Marshal([]string{tc.topic, tc.category})
 			require.NoError(t, err)

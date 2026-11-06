@@ -233,10 +233,7 @@ const (
 // retries the wrong repair forever, so these are asserted as whole strings, not
 // as substrings and not merely as isError.
 const (
-	wantMissingHandle = "knomit_learn requires a `binding` argument: the opaque handle knomit_bind returned. " +
-		"Call knomit_bind with a repo or lens name, then pass its `binding` value on this and every " +
-		"later tool call. There is no session fallback — the handle is the only thing that says " +
-		"which knowledge base this call is for."
+	wantMissingHandle = "binding is missing: pass the handle knomit_bind returned"
 	wantUnknownHandle = "unknown binding handle — call knomit_bind"
 	// A handle minted on the unscoped mount, presented on jobA-repo's own
 	// URL-scoped mount: a handle works only on the endpoint that minted it.
