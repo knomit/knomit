@@ -85,7 +85,8 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
           <span style={tile}><KnomitMark /></span>
           {liveText
             ? <span data-testid="chat-activity-live" style={{ color: AMBER }}>{segs(liveText)}</span>
-            : (
+            : summary.length > 0 && (
+              // Nothing to say (a group of failed binds only): no empty item, so no double gap.
               <span data-testid="chat-activity-summary" style={{ color: live ? AMBER : '#8a8a8a', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {summary.map((piece, i) => (
                   <span key={i}>{i > 0 && ' · '}{segs(piece)}</span>

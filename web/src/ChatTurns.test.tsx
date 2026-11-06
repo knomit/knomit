@@ -352,3 +352,28 @@ describe('the streaming caret', () => {
     expect(screen.queryByTestId('chat-caret')).toBeNull();
   });
 });
+
+describe('the activity line on the page after a failed bind', () => {
+  const failedBind = (id: string, name: string): ChatViewItem => ({ ...call(id, 'knomit_bind', { name }), is_error: true });
+
+  it('a group of only failed binds has no summary at all: no empty span, no stray separator', async () => {
+    mount(snap([{ kind: 'user', text: 'q' }, failedBind('tu_1', 'nosuch-kb'), { kind: 'assistant', text: 'ok' }]));
+    const toggle = await screen.findByTestId('chat-tool-group-toggle');
+    expect(screen.queryByTestId('chat-activity-summary')).toBeNull();
+    expect(toggle.textContent).toBe('1 step›');
+    expect(toggle.textContent).not.toContain('·');
+  });
+
+  it('a failed bind in one group leaves the next group on the binding before it', async () => {
+    mount(snap([
+      { kind: 'user', text: 'q' },
+      call('tu_1', 'knomit_bind', { name: 'alpha' }), failedBind('tu_2', 'nosuch-kb'),
+      { kind: 'assistant', text: 'then' },
+      call('tu_3', 'knomit_query', { text: 'x' }),
+      { kind: 'assistant', text: 'done' },
+    ]));
+    await screen.findAllByTestId('chat-tool-group');
+    const lines = screen.getAllByTestId('chat-activity-summary').map(e => e.textContent);
+    expect(lines).toEqual(['Bound to alpha', 'Searched 1× in alpha']);
+  });
+});
