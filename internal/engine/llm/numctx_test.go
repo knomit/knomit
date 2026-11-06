@@ -291,7 +291,7 @@ func TestNumCtx_RegistryOpenCarriesTheUnavailableReason(t *testing.T) {
 	_, err := r.Open(context.Background(), "local", "m")
 	require.ErrorContains(t, err, OllamaNumCtxUnavailableReason)
 	st := r.List(context.Background())
-	require.Equal(t, []ModelStatus{{ID: "m", Name: "m",Available: false, Tools: false, Reason: OllamaNumCtxUnavailableReason}}, st[0].Models)
+	require.Equal(t, []ModelStatus{{ID: "m", Name: "m", Available: false, Tools: false, Reason: OllamaNumCtxUnavailableReason}}, st[0].Models)
 
 	// With num_ctx configured the same model opens at that window.
 	r = NewRegistry(map[string]config.LLMProviderConfig{

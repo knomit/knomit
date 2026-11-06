@@ -24,8 +24,8 @@ const registryCacheTTL = 60 * time.Second
 // model can run the chat's tool calls (Ollama: the /api/show "tools"
 // capability). Reason says why a model is unavailable or toolless.
 type ModelStatus struct {
-	ID   string
-	Name string // display name from the config; the id when none is given
+	ID        string
+	Name      string // display name from the config; the id when none is given
 	Available bool
 	Tools     bool
 	Reason    string

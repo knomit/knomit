@@ -86,11 +86,11 @@ func TestRegistry_ListMarksUnavailableAndToolless(t *testing.T) {
 	got := r.List(context.Background())
 	require.Equal(t, []ProviderStatus{
 		{Name: "anthropic", Kind: "anthropic", Models: []ModelStatus{
-			{ID: "a1", Name: "a1",Available: true, Tools: true},
-			{ID: "a2", Name: "a2",Available: false, Reason: "not offered by the provider"},
+			{ID: "a1", Name: "a1", Available: true, Tools: true},
+			{ID: "a2", Name: "a2", Available: false, Reason: "not offered by the provider"},
 		}},
 		{Name: "local", Kind: "ollama", Models: []ModelStatus{
-			{ID: "o1", Name: "o1",Available: true, Tools: false, Reason: "model does not support tool calling (capabilities: completion)"},
+			{ID: "o1", Name: "o1", Available: true, Tools: false, Reason: "model does not support tool calling (capabilities: completion)"},
 		}},
 	}, got)
 }
@@ -110,8 +110,8 @@ func TestRegistry_APIKeyEnvHoldingAKeyMakesOnlyThatProviderUnavailable(t *testin
 	got := r.List(context.Background())
 	want := fmt.Sprintf(config.APIKeyEnvNotANameMessage, "prov-x")
 	require.Equal(t, []ProviderStatus{
-		{Name: "prov-x", Kind: "anthropic", Models: []ModelStatus{{ID: "a1", Name: "a1",Reason: want}, {ID: "a2", Name: "a2",Reason: want}}},
-		{Name: "prov-y", Kind: "anthropic", Models: []ModelStatus{{ID: "a3", Name: "a3",Available: true, Tools: true}}},
+		{Name: "prov-x", Kind: "anthropic", Models: []ModelStatus{{ID: "a1", Name: "a1", Reason: want}, {ID: "a2", Name: "a2", Reason: want}}},
+		{Name: "prov-y", Kind: "anthropic", Models: []ModelStatus{{ID: "a3", Name: "a3", Available: true, Tools: true}}},
 	}, got)
 	for i := 0; i+8 <= len(key); i++ {
 		require.NotContains(t, want, key[i:i+8])
@@ -137,8 +137,8 @@ func TestRegistry_APIKeyEnvBadButAnotherKeySourceSetStaysAvailable(t *testing.T)
 	})
 	got := r.List(context.Background())
 	require.Equal(t, []ProviderStatus{
-		{Name: "prov-f", Kind: "anthropic", Models: []ModelStatus{{ID: "a1", Name: "a1",Available: true, Tools: true}}},
-		{Name: "prov-k", Kind: "anthropic", Models: []ModelStatus{{ID: "a2", Name: "a2",Available: true, Tools: true}}},
+		{Name: "prov-f", Kind: "anthropic", Models: []ModelStatus{{ID: "a1", Name: "a1", Available: true, Tools: true}}},
+		{Name: "prov-k", Kind: "anthropic", Models: []ModelStatus{{ID: "a2", Name: "a2", Available: true, Tools: true}}},
 	}, got)
 	for _, p := range []string{"prov-f", "prov-k"} {
 		m, err := r.Open(context.Background(), p, map[string]string{"prov-f": "a1", "prov-k": "a2"}[p])

@@ -218,7 +218,7 @@ export function SessionsTable({ rows, policy, error, now, target, chatProviders 
                 <tr data-testid="session-row" style={{ color: dead ? '#666' : '#ddd', borderTop: '1px solid #222' }}>
                   <td title={r.state}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 4, background: STATE_COLOR[r.state] }} /></td>
                   <td>
-                    {r.client.name ? clientLabel(r.client, chatProviders) :<span style={{ color: '#777' }}>unknown</span>}
+                    {r.client.name ? clientLabel(r.client, chatProviders) : <span style={{ color: '#777' }}>unknown</span>}
                     {/* A row the server never saw initialize: it outlived a
                         restart and was rebuilt from request headers. */}
                     {!r.client.initialized && <span style={{ marginLeft: 6, color: '#a78bfa' }}>resumed</span>}
