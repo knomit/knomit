@@ -278,7 +278,8 @@ func (m *orderedModel) Stream(ctx context.Context, s Snapshot, _ StreamOptions, 
 // reasoning, text, reasoning, call. The estimate counts all of their bytes.
 //
 // SABOTAGE: agent.go repeatStop.addReasoning, delete `r.closeText()` -> the
-// first text run lands after the reasoning and this fails.
+// first text run lands after the reasoning and this fails; swap the two
+// reasoning payloads in orderedModel -> the "first", "second" check fails.
 func TestLoop_RepeatStopKeepsStreamOrderAndCountsEveryRun(t *testing.T) {
 	m := &orderedModel{streamModel{stoppable: true}}
 	b := NewBuilder()
@@ -289,11 +290,23 @@ func TestLoop_RepeatStopKeepsStreamOrderAndCountsEveryRun(t *testing.T) {
 	require.NoError(t, err)
 	var kinds []BlockKind
 	var text string
-	for _, bl := range history(l.Builder)[1].Blocks {
+	var thinking []string
+	entry := history(l.Builder)[1]
+	for _, bl := range entry.Blocks {
 		kinds = append(kinds, bl.Kind)
 		text += bl.Text
+		if bl.Kind == BlockReasoning {
+			var n struct {
+				Thinking string `json:"thinking"`
+			}
+			require.NoError(t, json.Unmarshal(bl.Reasoning.Native, &n))
+			thinking = append(thinking, n.Thinking)
+		}
 	}
 	require.Equal(t, []BlockKind{BlockText, BlockReasoning, BlockText, BlockReasoning, BlockToolUse}, kinds)
+	require.Equal(t, []string{"first", "second"}, thinking, "the reasoning runs keep their order")
+	// Replay to Ollama joins the runs with a newline, in that order.
+	require.Equal(t, "first\nsecond", ollamaAssistant(entry, map[string]ollamaCallRef{}).Thinking)
 	require.Equal(t, "aaaabbbbcccc", text)
 	want := (12 + len(`{"thinking":"first"}`) + len(`{"thinking":"second"}`) + len("knomit_a") + len("{}")) / 4
 	require.Equal(t, int64(want)+5, res.Usage.Output)

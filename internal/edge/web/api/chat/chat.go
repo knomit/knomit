@@ -71,9 +71,6 @@ type viewItem struct {
 	ErrorInfo *noticeView `json:"error_info,omitempty"`
 	Error     string      `json:"error,omitempty"`     // how the turn ended, if it did not succeed
 	Cancelled bool        `json:"cancelled,omitempty"` // Error is the person's own Stop
-	// Tools is the turn's view of the loaded tools; present on an adaptive chat
-	// only (see adaptive.go).
-	Tools *turnTools `json:"tools,omitempty"`
 }
 
 // callSummary is a finished call's result in one number: a query's result count.
@@ -196,7 +193,10 @@ type chat struct {
 	// missedEnd is the last turn's terminal frame when no page stream was
 	// attached to take it; the next page stream to attach is sent it once,
 	// right after ready.
-	missedEnd  []byte
+	missedEnd []byte
+	// missedTurn is the view index of the turn missedEnd ends. An end is parked
+	// only while that turn is the latest and no newer turn runs (see sendLocked).
+	missedTurn int
 	lastState  []byte    // the last chat_state frame body sent, to send only changes
 	title      string    // the first message, cut (see titleOf); empty until the first turn
 	startedAt  time.Time // when the chat was made
@@ -205,6 +205,10 @@ type chat struct {
 	// fired timer and before it counts the owner's streams.
 	afterGraceStep func()
 	grace          *time.Timer
+	// betweenRunAndEnd is a test seam: finishTurn calls it after it has marked
+	// the turn not running and released c.mu, and before it sends the turn's
+	// end, which is where the next turn can start.
+	betweenRunAndEnd func()
 
 	// Per-request flags the truncation wording needs: whether the last
 	// request streamed text, and whether it streamed reasoning.
@@ -391,22 +395,29 @@ func tagChat(id string, b []byte) []byte {
 func (c *chat) emit(kind string, data any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.sendLocked(kind, data, false)
+	c.sendLocked(kind, data, false, 0)
 }
 
 // emitEnd sends a turn's terminal event (turn_done or turn_error). If no page
 // stream took it, the frame is kept for the next page stream to attach, which
 // gets it right after ready: a turn can outlive the streams it started on, and
 // the end of a turn must reach the client once whichever stream is attached
-// then.
-func (c *chat) emitEnd(kind string, data any) {
+// then. turn is the view index of the turn that ended.
+//
+// The end of turn N is sent after finishTurn released c.mu, so turn N+1 can
+// start in between. An end that was not delivered is parked only if its turn is
+// still the latest and nothing newer runs, decided under c.mu in the same step
+// that parks it: a stale end must never be handed to a page that attaches while
+// the newer turn runs.
+func (c *chat) emitEnd(kind string, data any, turn int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.sendLocked(kind, data, true)
+	c.sendLocked(kind, data, true, turn)
 }
 
 // sendLocked requires c.mu. Lock order: c.mu, then manager.pageMu.
-func (c *chat) sendLocked(kind string, data any, terminal bool) {
+// turn is the turn a terminal event ends; it is ignored otherwise.
+func (c *chat) sendLocked(kind string, data any, terminal bool, turn int) {
 	b, err := json.Marshal(data)
 	if err != nil {
 		return
@@ -414,10 +425,10 @@ func (c *chat) sendLocked(kind string, data any, terminal bool) {
 	frame := []byte("event: " + kind + "\ndata: " + string(tagChat(c.id, b)) + "\n\n")
 	c.lastActive = time.Now()
 	delivered := c.m.broadcast(c.owner, frame)
-	if terminal {
+	if terminal && turn == c.turnAt && !c.running {
 		c.missedEnd = nil
 		if !delivered {
-			c.missedEnd = frame
+			c.missedEnd, c.missedTurn = frame, turn
 		}
 	}
 }
@@ -490,7 +501,7 @@ func (c *chat) noteState() {
 		return
 	}
 	c.lastState = b
-	c.sendLocked("chat_state", st, false)
+	c.sendLocked("chat_state", st, false, 0)
 }
 
 // adoptPage is what a newly attached page stream does to a chat: stop its
@@ -505,7 +516,7 @@ func (c *chat) adoptPage(s *pageSub) {
 		c.grace.Stop()
 		c.grace = nil
 	}
-	if c.missedEnd != nil && c.m.deliverTo(s, c.missedEnd) {
+	if c.missedEnd != nil && !c.running && c.missedTurn == c.turnAt && c.m.deliverTo(s, c.missedEnd) {
 		c.missedEnd = nil
 	}
 }
@@ -612,12 +623,7 @@ func (c *chat) startTurn(text, sendID string) (int, error) {
 	c.turnBegan, c.firstSeen = time.Now(), false
 	c.turnAt = len(c.view)
 	turn := c.turnAt
-	user := viewItem{Kind: "user", Text: text, SendID: sendID}
-	if c.adapt != nil {
-		// Every turn of an adaptive chat shows the loaded set it opens with.
-		user.Tools = c.adapt.turnView(0, 0)
-	}
-	c.view = append(c.view, user)
+	c.view = append(c.view, viewItem{Kind: "user", Text: text, SendID: sendID})
 	if c.title == "" {
 		c.title = titleOf(text)
 	}
@@ -668,10 +674,7 @@ func (c *chat) finishTurn(ctx context.Context, res *llm.TurnResult, err error) {
 		}
 	}
 	ended := c.ended
-	var tools *turnTools
-	if turn < len(c.view) {
-		tools = c.view[turn].Tools
-	}
+	hook := c.betweenRunAndEnd
 	c.mu.Unlock()
 	c.store.appendTranscript(map[string]any{"turn_end": true, "error": errString(err)})
 	c.logPreload(turn, res)
@@ -679,26 +682,25 @@ func (c *chat) finishTurn(ctx context.Context, res *llm.TurnResult, err error) {
 		return
 	}
 	c.noteState()
+	if hook != nil {
+		hook()
+	}
 	if err == nil {
-		done := map[string]any{
+		c.emitEnd("turn_done", map[string]any{
 			"turn": turn, "stop_reason": res.StopReason, "requests": res.Requests, "tool_calls": res.ToolCalls,
 			"usage": usageView(res.Usage), "cost_usd": res.Cost.USD,
-		}
-		if tools != nil {
-			done["tools"] = tools
-		}
-		c.emitEnd("turn_done", done)
+		}, turn)
 		return
 	}
 	if !truncatedBare && cancelled {
-		c.emitEnd("turn_error", map[string]any{"message": msg, "cancelled": true, "turn": turn})
+		c.emitEnd("turn_error", map[string]any{"message": msg, "cancelled": true, "turn": turn}, turn)
 		return
 	}
 	out := map[string]any{"message": msg, "turn": turn}
 	if errInfo != nil {
 		out["error_info"] = errInfo
 	}
-	c.emitEnd("turn_error", out)
+	c.emitEnd("turn_error", out, turn)
 }
 
 func errString(err error) string {

@@ -149,3 +149,67 @@ func TestChat_StartTurnClearsThePreviousTurnsMissedEnd(t *testing.T) {
 	require.NoError(t, json.Unmarshal(evs[len(evs)-1].Data, &payload))
 	require.Equal(t, second.Turn, payload.Turn, "the end it gets is turn two's")
 }
+
+// Turn one's end is sent after finishTurn released the lock, so turn two can
+// start in that gap. The end that nobody took is then turn one's, not the
+// current turn's: it must not be parked for a page that attaches while turn two
+// runs. The seam starts turn two exactly there, with no stream attached, so the
+// interleaving is the same every run.
+//
+// SABOTAGE: chat.go sendLocked, change the park condition `terminal && turn ==
+// c.turnAt && !c.running` to `terminal` (and adoptPage's to `c.missedEnd !=
+// nil`) -> turn one's turn_done is parked after turn two started, the attaching
+// stream gets it, and this fails.
+func TestChat_AnEndThatLandsAfterTheNextTurnStartedIsNotParked(t *testing.T) {
+	release := make(chan struct{})
+	done := func(text string) *llm.Response {
+		return &llm.Response{Blocks: []llm.Block{{Kind: llm.BlockText, Text: text}}, StopReason: llm.StopEndTurn}
+	}
+	h := newHarness(t)
+	h.queue("a1",
+		textStep("one", usage),
+		step{fn: func(llm.Snapshot) step { <-release; return step{resp: done("two")} }})
+	id := h.create("uid:501", "a1")
+	c := h.mgr.find(id, writer.String())
+	require.NotNil(t, c)
+	started := make(chan int, 1)
+	c.mu.Lock()
+	c.betweenRunAndEnd = func() {
+		c.mu.Lock()
+		c.betweenRunAndEnd = nil // once
+		c.mu.Unlock()
+		turn, err := c.startTurn("two", "")
+		require.NoError(t, err)
+		started <- turn
+	}
+	c.mu.Unlock()
+
+	// No stream is attached: nothing can take turn one's end.
+	code, body := h.do("uid:501", http.MethodPost, "/chats/"+id+"/turns", map[string]string{"text": "one"})
+	require.Equal(t, http.StatusAccepted, code, string(body))
+	var first struct {
+		Turn int `json:"turn"`
+	}
+	require.NoError(t, json.Unmarshal(body, &first))
+	var second int
+	select {
+	case second = <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("turn two never started in the gap")
+	}
+	require.Greater(t, second, first.Turn)
+
+	s := h.attach("uid:501", id)
+	select {
+	case extra := <-s.events:
+		t.Fatalf("a stream attaching during turn two got %q: turn one's end is stale", extra.Name)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	evs := s.until("turn_done")
+	var payload struct {
+		Turn int `json:"turn"`
+	}
+	require.NoError(t, json.Unmarshal(evs[len(evs)-1].Data, &payload))
+	require.Equal(t, second, payload.Turn, "the end it gets is turn two's")
+}
