@@ -5,12 +5,15 @@ import { markdownPlugins, markdownComponents } from './markdown';
 import { ChatToolGroup } from './ChatToolGroup';
 import { ChatTurnFooter } from './ChatTurnFooter';
 import { ContextMeter } from './ChatPill';
+import { TurnNotices, NoticeLine } from './ChatNotice';
+import { SendingLine, ThinkingPlaceholder, StoppedMark } from './ChatWaiting';
 import { chatPlugins, chatComponents } from './chatTableBars';
 import { boundAfter, compactCount, sessionCost } from './chatState';
 import type { ChatState, ChatTurn, ToolCall } from './chatState';
 import type { ApprovalDecision } from './chatApi';
 import {
-  CHAT_INPUT_PLACEHOLDER, CHAT_REPLY_PLACEHOLDER, CHAT_SEND, CHAT_STOP, COMPOSER_HINT, CONTEXT_LABEL,
+  CHAT_CONTINUE_MESSAGE, CHAT_INPUT_PLACEHOLDER, CHAT_REPLY_PLACEHOLDER, CHAT_SEND, CHAT_STOP, CHAT_STOP_KEY, COMPOSER_HINT, CONTEXT_LABEL,
+  NOT_SENT, NOT_SENT_RETRY,
 } from './chatCopy';
 
 /** How a turn is drawn: its work (runs of tool calls, each with the text that
@@ -42,19 +45,63 @@ const COLUMN: CSSProperties = { width: 740, maxWidth: 'calc(100% - 48px)', margi
  * faint strip), its activity line, its final text as markdown, and a cost
  * footer; the server's price-tier warning; and the rounded box to write in.
  */
-export function ChatPanel({ state, selectedId, actionError, context, onSend, onStop, onSelect, onAnswer }: {
+export function ChatPanel({ state, selectedId, actionError, notSent, modelName, context, onSend, onStop, onSelect, onAnswer, onNewChat }: {
   state: ChatState;
   selectedId: string | null;
-  /** The last failed send, cancel or answer. */
+  /** The last failed cancel or answer. */
   actionError: string;
+  /** The last refused send: its text goes back in the composer, and the reason
+   *  shows under the box with Retry. */
+  notSent: { text: string; reason: string } | null;
+  /** The chat model's display name, for the notices. */
+  modelName: string;
   context: ChatContextUse;
   onSend: (text: string) => void;
   onStop: () => void;
   onSelect: (call: ToolCall) => void;
   onAnswer: (callId: string, decision: ApprovalDecision) => void;
+  /** Start an empty chat with the same model (the notices' action). */
+  onNewChat?: () => void;
 }) {
   const [draft, setDraft] = useState('');
   const scroller = useRef<HTMLDivElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
+  const lastTurn = state.turns[state.turns.length - 1];
+  const sending = !!lastTurn?.local && !lastTurn.local.accepted;
+
+  // A refused send keeps its text: it goes back into the composer (in front of
+  // anything typed since), with no change to the box's own look.
+  const restored = useRef<unknown>(null);
+  useEffect(() => {
+    if (!notSent || restored.current === notSent) return;
+    restored.current = notSent;
+    setDraft(d => (d.trim() ? `${notSent.text}\n${d}` : notSent.text));
+  }, [notSent]);
+
+  // Stop. A send still in flight is withdrawn, and its text comes back.
+  const stop = () => {
+    if (!state.running) return;
+    if (sending && lastTurn) setDraft(d => (d.trim() ? `${lastTurn.user}\n${d}` : lastTurn.user));
+    onStop();
+  };
+  const stopRef = useRef(stop);
+  useEffect(() => { stopRef.current = stop; });
+  // Esc anywhere in the chat stops it. The chat stays mounted when it is not
+  // on screen, so only a visible chat answers, and not when something else
+  // (a dialog, a menu) already took the key.
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      const el = root.current;
+      if (!el || !shown(el)) return;
+      const active = document.activeElement;
+      if (active && active !== document.body && !el.contains(active)) return;
+      stopRef.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   useEffect(() => {
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -66,6 +113,7 @@ export function ChatPanel({ state, selectedId, actionError, context, onSend, onS
     setDraft('');
     onSend(text);
   };
+  const editResend = (text: string) => { setDraft(text); box.current?.focus(); };
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
   };
@@ -85,7 +133,7 @@ export function ChatPanel({ state, selectedId, actionError, context, onSend, onS
   const hasText = !!draft.trim();
 
   return (
-    <div data-testid="chat-panel" style={panel}>
+    <div ref={root} data-testid="chat-panel" style={panel}>
       <div ref={scroller} data-testid="chat-transcript" style={transcript}>
         <div style={COLUMN}>
           {state.turns.map((t, ti) => {
@@ -96,9 +144,14 @@ export function ChatPanel({ state, selectedId, actionError, context, onSend, onS
             return (
               <div key={ti} data-testid={`chat-turn-${ti}`} style={turnBox(ti > 0)}>
                 {t.user && (
-                  <div data-testid="chat-user" className="k-chat-user k-prose">
+                  <div data-testid="chat-user" data-sending={t.local && !t.local.accepted ? true : undefined} className="k-chat-user k-prose"
+                    style={t.local && !t.local.accepted ? sendingStrip : undefined}>
                     <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>{t.user}</ReactMarkdown>
                   </div>
+                )}
+                {t.local && !t.local.accepted && <SendingLine />}
+                {live && t.parts.length === 0 && !(t.local && !t.local.accepted) && (
+                  <ThinkingPlaceholder since={t.acceptedAt} expectedMs={state.expectedFirstTokenMs} thinking={t.thinking} />
                 )}
                 {blocks.map(b => {
                   if (b.kind === 'text') {
@@ -114,8 +167,11 @@ export function ChatPanel({ state, selectedId, actionError, context, onSend, onS
                       running={live} onStop={onStop} selectedId={selectedId} onSelect={onSelect} onAnswer={onAnswer} />
                   );
                 })}
-                {t.warning && <div data-testid="chat-warning" style={warningBox}>{t.warning}</div>}
-                {t.error && <div role="alert" data-testid="chat-turn-error" style={errorBox}>{t.error}</div>}
+                {t.stopped && !live && (
+                  <StoppedMark latest={ti === state.turns.length - 1} onEdit={() => editResend(t.user)}
+                    onContinue={() => { if (!state.running) onSend(CHAT_CONTINUE_MESSAGE); }} />
+                )}
+                <TurnNotices turn={t} modelName={modelName} onNewChat={onNewChat} />
                 {t.usage && !live && (
                   <ChatTurnFooter usage={t.usage} costUsd={t.costUsd} answer={answer}
                     sessionCostUsd={total} sessionTurns={state.turns.length} />
@@ -123,12 +179,13 @@ export function ChatPanel({ state, selectedId, actionError, context, onSend, onS
               </div>
             );
           })}
-          {actionError && <div role="alert" data-testid="chat-action-error" style={errorBox}>{actionError}</div>}
+          {actionError && <div role="alert"><NoticeLine tone="blocked" testId="chat-action-error" lead={actionError} /></div>}
         </div>
       </div>
       <div style={{ ...COLUMN, flexShrink: 0, paddingBottom: 14 }}>
         <div style={composer}>
           <textarea
+            ref={box}
             data-testid="chat-input"
             value={draft}
             rows={2}
@@ -149,7 +206,13 @@ export function ChatPanel({ state, selectedId, actionError, context, onSend, onS
             <span style={{ color: '#5a5a5a' }}>{COMPOSER_HINT}</span>
             <span style={{ flex: 1 }} />
             {state.running
-              ? <button type="button" data-testid="chat-stop" onClick={onStop} style={stopBtn}>{CHAT_STOP}</button>
+              ? (
+                <button type="button" data-testid="chat-stop" onClick={stop} style={stopBtn}>
+                  <svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10"><rect width="10" height="10" rx="2" fill="currentColor" /></svg>
+                  {CHAT_STOP}
+                  <kbd style={keycap}>{CHAT_STOP_KEY}</kbd>
+                </button>
+              )
               : (
                 <button type="button" data-testid="chat-send" aria-label={CHAT_SEND} title={CHAT_SEND} disabled={!hasText}
                   onClick={submit} style={sendBtn(hasText)}>
@@ -160,16 +223,28 @@ export function ChatPanel({ state, selectedId, actionError, context, onSend, onS
               )}
           </div>
         </div>
+        {notSent && (
+          <div data-testid="chat-not-sent" style={notSentLine}>
+            <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: '50%', background: '#b0736c', flexShrink: 0 }} />
+            <span title={notSent.reason}>{NOT_SENT}: {notSent.reason}</span>
+            <button type="button" data-testid="chat-retry" onClick={submit} style={retryLink}>{NOT_SENT_RETRY}</button>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
+/** Whether an element is on screen: no ancestor is display:none (a chat that is
+ *  not the one shown stays mounted, hidden). */
+function shown(el: HTMLElement | null): boolean {
+  for (let n = el; n; n = n.parentElement) if (getComputedStyle(n).display === 'none') return false;
+  return true;
+}
+
 const panel: CSSProperties = { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 };
 const transcript: CSSProperties = { flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 0' };
 const turnBox = (sep: boolean): CSSProperties => ({ padding: '18px 0 14px', ...(sep ? { borderTop: '1px solid #1c1c1c' } : {}) });
-const errorBox: CSSProperties = { background: '#2b1c1c', color: '#e0a0a0', border: '1px solid #3a2a2a', borderRadius: 4, padding: '6px 10px', fontSize: 12.5, margin: '6px 0' };
-const warningBox: CSSProperties = { background: '#2a200e', color: '#f5c47a', border: '1px solid #a36a18', borderRadius: 4, padding: '6px 10px', fontSize: 12.5, margin: '6px 0' };
 const composer: CSSProperties = { background: '#171717', border: '1px solid #2e2e2e', borderRadius: 12, padding: '10px 12px 8px' };
 const input: CSSProperties = {
   display: 'block', width: '100%', resize: 'none', background: 'transparent', color: '#ddd', border: 'none',
@@ -185,6 +260,15 @@ const sendBtn = (active: boolean): CSSProperties => ({
   cursor: active ? 'pointer' : 'default', flexShrink: 0,
 });
 const stopBtn: CSSProperties = {
-  background: '#1d4ed8', color: '#fff', border: '1px solid #1d4ed8', borderRadius: 4,
-  padding: '7px 14px', fontSize: 13, cursor: 'pointer', flexShrink: 0,
+  display: 'inline-flex', alignItems: 'center', gap: 7, height: 28, padding: '0 11px 0 9px', borderRadius: 8, flexShrink: 0,
+  background: '#2b1c1c', color: '#f3c0c0', border: '1px solid #5c2a2a', fontFamily: 'inherit', fontSize: 12, fontWeight: 500, cursor: 'pointer',
+};
+const keycap: CSSProperties = {
+  fontFamily: 'var(--k-font-mono)', fontSize: 9.5, color: '#a07a7a', border: '1px solid #5c2a2a', borderRadius: 3, padding: '0 4px', fontWeight: 400,
+};
+const sendingStrip: CSSProperties = { opacity: 0.6, borderLeftStyle: 'dashed', background: '#161718' };
+const notSentLine: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, margin: '7px 0 0', padding: '0 4px', fontSize: 11, color: '#8a7a78' };
+const retryLink: CSSProperties = {
+  background: 'transparent', border: 'none', padding: 0, font: 'inherit', color: '#c8c8c8', cursor: 'pointer',
+  textDecoration: 'underline', textDecorationColor: '#4a4a4a', textUnderlineOffset: 3,
 };

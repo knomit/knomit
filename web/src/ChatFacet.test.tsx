@@ -137,7 +137,7 @@ describe('ChatFacet', () => {
     fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'hello' } });
     fireEvent.click(screen.getByTestId('chat-send'));
     await waitFor(() => expect(callsTo(fx, '/turns')).toHaveLength(1));
-    expect(callsTo(fx, '/turns')[0].body).toEqual({ text: 'hello' });
+    expect(callsTo(fx, '/turns')[0].body).toEqual({ text: 'hello', send_id: expect.any(String) });
     expect(screen.getByTestId('chat-user')).toHaveTextContent('hello');
     expect(screen.getByTestId('chat-stop')).toBeInTheDocument();
 
@@ -165,10 +165,16 @@ describe('ChatFacet', () => {
     const es = latestStream('/chats/chat-a/events')!;
     act(() => {
       es.emit('text_delta', { text: 'partial answer', turn: 0 });
-      es.emit('warning', { message: 'This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save.', threshold: 95000, turn: 0 });
+      es.emit('warning', {
+        message: 'This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save.',
+        kind: 'price_tier', threshold: 95000, prompt_tokens: 95400, tier_tokens: 100000, mult: 5, model: 'm', turn: 0,
+      });
       es.emit('turn_error', { message: 'The model declined to answer.', turn: 0 });
     });
-    expect(screen.getByTestId('chat-warning').textContent).toBe('This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save.');
+    // One footnote line, with the server's numbers; the server's sentence is its title.
+    const notice = screen.getByTestId('chat-notice-price');
+    expect(notice.textContent).toBe("95.4K of 100K·claude-test-x's higher price tier is next (5×)");
+    expect(notice.getAttribute('title')).toBe('This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save.');
     expect(screen.getByTestId('chat-turn-error').textContent).toBe('The model declined to answer.');
     expect(screen.getByTestId('chat-text')).toHaveTextContent('partial answer');
     // The only buttons are the group-less panel's: Send. No retry.
@@ -401,7 +407,8 @@ describe('ChatFacet: turn_error races and fast follow-ups', () => {
       vi.useRealTimers();
     }
     await waitFor(() => expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first']));
-    expect(screen.getByTestId('chat-action-error').textContent).toBe(`${BASE}/turns → ${CHAT_SEND_TIMEOUT}`);
+    expect(screen.getByTestId('chat-not-sent').textContent).toBe(`Not sent: ${CHAT_SEND_TIMEOUT}Retry`);
+    await waitFor(() => expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).value).toBe('second'));
     expect(screen.getByTestId('chat-send')).toBeInTheDocument();
   });
 
@@ -411,8 +418,10 @@ describe('ChatFacet: turn_error races and fast follow-ups', () => {
     await screen.findByTestId('chat-turn-0');
     fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'second' } });
     fireEvent.click(screen.getByTestId('chat-send'));
-    await waitFor(() => expect(screen.getByTestId('chat-action-error')).toHaveTextContent(detail));
-    expect(screen.getByTestId('chat-action-error')).toHaveTextContent(String(status));
+    await waitFor(() => expect(screen.getByTestId('chat-not-sent')).toHaveTextContent(detail));
+    expect(screen.getByTestId('chat-not-sent').textContent).toBe(`Not sent: ${detail} (${status})Retry`);
+    // A refused send never loses its text: it is back in the composer, unchanged.
+    await waitFor(() => expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).value).toBe('second'));
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first']);
     expect(screen.queryByTestId('chat-stop')).toBeNull();
     expect(screen.getByTestId('chat-send')).toBeInTheDocument();
@@ -434,13 +443,13 @@ describe('ChatFacet: the snapshot is the whole truth', () => {
     ]);
     const expected = [['$0.2500', '1 in · 4 out'], ['–', '5 in · 8 out']];
     expect(lines()).toEqual(expected);
-    expect(screen.getByTestId('chat-warning').textContent).toBe('The server warns here.');
+    expect(screen.getByTestId('chat-notice-price').textContent).toBe('The server warns here.');
 
     // The stream reconnects: `ready` again, the transcript read again.
     act(() => { latestStream('/chats/chat-a/events')!.emit('ready', {}); });
     await act(async () => { await new Promise(r => setTimeout(r, 20)); });
     expect(lines()).toEqual(expected);
-    expect(screen.getAllByTestId('chat-warning')).toHaveLength(1);
+    expect(screen.getAllByTestId('chat-notice-price')).toHaveLength(1);
   });
 });
 
@@ -584,7 +593,7 @@ describe('ChatFacet: events are routed by turn index', () => {
     await waitFor(() => expect(reads()).toBe(before + 1));
     expect(await screen.findByTestId('chat-approval-tu_9')).toBeInTheDocument();
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'second']);
-    expect(screen.getByTestId('chat-action-error').textContent).toBe(`${BASE}/turns → ${CHAT_SEND_TIMEOUT}`);
+    expect(screen.getByTestId('chat-not-sent').textContent).toBe(`Not sent: ${CHAT_SEND_TIMEOUT}Retry`);
   });
 });
 

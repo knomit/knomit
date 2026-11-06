@@ -139,3 +139,44 @@ export const PILL_SESSION = 'session';
 export const CONTEXT_LABEL = 'context';
 export const COMPOSER_HINT = 'Enter to send';
 export const CHAT_REPLY_PLACEHOLDER = 'Reply…';
+
+// ── APPROVED (2026-11-06, PR 2) ──
+/** The fixed follow-up the Continue button sends after a stop. Approved by the
+ *  user on 2026-11-06. */
+export const CHAT_CONTINUE_MESSAGE = 'Continue.';
+
+// ── PENDING APPROVAL ──
+// Chat UX v2, PR 2 (design 2026-11-05-chat-ux-v2, sections 2 and 5). Every
+// string here is from the design's copy table unless its comment says it is
+// not. None has been approved yet.
+
+/** Waiting for the reply: the unaccepted send, the placeholder, and the stall. */
+export const CHAT_SENDING = 'Sending…';
+export const CHAT_THINKING = 'Thinking…';
+export const CHAT_NO_RESPONSE = 'No response yet';
+/** The placeholder's seconds counter (the mockup words it "4s"; not in the copy table). */
+export const waitCounter = (seconds: number): string => `${seconds}s`;
+
+/** Stop. The keycap is the key's own name; the design draws it, the table does not list it. */
+export const CHAT_STOP_KEY = 'Esc';
+export const CHAT_STOPPED = 'Stopped by you';
+export const CHAT_EDIT_RESEND = 'Edit and resend';
+export const CHAT_CONTINUE = 'Continue';
+
+/** Timeline rows: a query's result count (the mockup's "24 results"; the
+ *  singular is not in the table). */
+export const resultCount = (n: number): string => `${n} ${n === 1 ? 'result' : 'results'}`;
+
+/** Notices. The price-tier line is `<n> of <m>` then the rest; the model is its display name. */
+export const noticeOf = (n: string, m: string): string => `${n} of ${m}`;
+export const noticeTierNext = (model: string, mult: number): string =>
+  `${model}'s higher price tier is next${mult > 0 ? ` (${parseFloat(mult.toFixed(2))}×)` : ''}`;
+export const NOTICE_NEW_CHAT = 'New chat';
+export const NOTICE_REASONING_CUT = 'Reasoning summary cut short';
+export const NOTICE_ANSWER_COMPLETE = 'the answer is complete';
+export const NOTICE_FULL = 'Chat is full';
+/** `<needed> > <window>, nothing sent`; with no known size, just `nothing sent`. */
+export const noticeFullRest = (needed: string, window: string): string =>
+  `${needed && window ? `${needed} > ${window}, ` : ''}nothing sent`;
+export const NOT_SENT = 'Not sent';
+export const NOT_SENT_RETRY = 'Retry';

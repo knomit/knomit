@@ -24,9 +24,27 @@ export interface ChatViewItem {
   kind: 'user' | 'assistant' | 'tool_call';
   text?: string; id?: string; name?: string; arguments?: unknown;
   state?: 'running' | 'done'; is_error?: boolean;
+  /** On a finished tool call: how long the tool ran, and its result in one number. */
+  duration_ms?: number; summary?: ChatCallSummary;
+  /** On a user item: the structured detail of `warning` and of `error`. */
+  warning_info?: ChatNotice; error_info?: ChatNotice;
   /** On a user item: how the turn it opens went (see chat.go viewItem). */
   usage?: { input: number; cache_read: number; cache_write: number; output: number };
   cost_usd?: number; warning?: string; error?: string; cancelled?: boolean;
+}
+
+/** A finished call's result in one number (a query's fact count). */
+export interface ChatCallSummary { count: number }
+
+/** The numbers behind a notice, so the page words the line itself. A
+ *  "price_tier" carries the prompt size, the threshold, the tier boundary
+ *  (`tier_tokens`, 0 with one tier), the price multiplier and the model; a
+ *  "context_full" carries what the request needed (0 when only the provider
+ *  knew) and the model's window. */
+export interface ChatNotice {
+  kind: 'price_tier' | 'context_full';
+  prompt_tokens?: number; threshold?: number; tier_tokens?: number; mult?: number; model?: string;
+  needed?: number; window?: number;
 }
 
 /** A tool call waiting for the person. `target` is empty when the server could
@@ -42,7 +60,13 @@ export interface ChatApproval {
 export interface ChatGrant { target: string; kind: string; tool: string; action: string }
 
 export interface ChatSnapshot extends ChatInfo {
-  running: boolean; usage_seq?: number; items: ChatViewItem[]; pending_approvals: ChatApproval[]; grants: ChatGrant[];
+  running: boolean; usage_seq?: number;
+  /** The last request's prompt tokens: what the context meter shows as used. */
+  prompt_tokens?: number;
+  /** The slowest time to a first reply this model took in this server run, in
+   *  ms; absent until one has been observed. */
+  expected_first_token_ms?: number;
+  items: ChatViewItem[]; pending_approvals: ChatApproval[]; grants: ChatGrant[];
 }
 
 /** GET /chats/{id}/calls/{callId}. */
@@ -82,12 +106,12 @@ export function getChat(id: string): Promise<ChatSnapshot> {
  *  minutes. If it did reach the server, the turn shows up in the next snapshot. */
 export const SEND_TIMEOUT_MS = 15_000;
 
-export async function sendChatTurn(id: string, text: string, timeoutMs = SEND_TIMEOUT_MS): Promise<unknown> {
+export async function sendChatTurn(id: string, text: string, sendId: string, timeoutMs = SEND_TIMEOUT_MS): Promise<unknown> {
   const url = `${chatUrl(id)}/turns`;
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    return await fetchJSON(url, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ text }), signal: ctl.signal });
+    return await fetchJSON(url, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ text, send_id: sendId }), signal: ctl.signal });
   } catch (e) {
     if (ctl.signal.aborted) throw new Error(`${url} → ${CHAT_SEND_TIMEOUT}`);
     throw e;
@@ -107,8 +131,12 @@ async function noContent(url: string, init: RequestInit): Promise<void> {
   }
 }
 
-export function cancelChatTurn(id: string): Promise<void> {
-  return noContent(`${chatUrl(id)}/cancel`, { method: 'POST' });
+/** Stop. With `sendId` (the id the send went out under) the server also
+ *  withdraws that send if it has not accepted it yet. */
+export function cancelChatTurn(id: string, sendId?: string): Promise<void> {
+  return noContent(`${chatUrl(id)}/cancel`, sendId
+    ? { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ send_id: sendId }) }
+    : { method: 'POST' });
 }
 
 export function answerChatApproval(id: string, callId: string, decision: ApprovalDecision): Promise<void> {
@@ -140,7 +168,7 @@ export function revokeChatGrant(id: string, grant: ChatGrant): Promise<void> {
 /** The chat model's context window, how it was resolved ("config", "memory",
  *  "trained"; absent when the model does not say) and whether Ollama reported
  *  it partly on the CPU after the first request. */
-export interface ChatContext { window: number; how?: string; spill: boolean }
+export interface ChatContext { window: number; how?: string; spill: boolean; prompt_tokens?: number }
 
 export function getChatContext(id: string): Promise<ChatContext> {
   return fetchJSON<ChatContext>(`${chatUrl(id)}/context`);
@@ -152,7 +180,7 @@ export function getChatCall(id: string, callId: string): Promise<ChatCall> {
 
 /** The server's SSE event names (internal/edge/web/api/chat/chat.go). */
 export const CHAT_EVENT_NAMES = [
-  'ready', 'text_delta', 'reasoning', 'tool_call', 'approval', 'usage', 'warning', 'turn_done', 'turn_error', 'chat_end',
+  'ready', 'text_delta', 'thinking_delta', 'reasoning', 'tool_call', 'approval', 'usage', 'warning', 'turn_done', 'turn_error', 'chat_end',
 ] as const;
 export type ChatEventName = typeof CHAT_EVENT_NAMES[number];
 
