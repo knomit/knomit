@@ -236,13 +236,16 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
         {!serverOpen && (
           <>
             <span className="k-bar-sep" data-testid="crumb-sep" aria-hidden="true" style={{ display: 'flex', alignItems: 'center', margin: '0 8px 0 12px', color: '#555', fontSize: 13, flexShrink: 0 }}>/</span>
-            <span className="k-bar-label" data-testid="target-label" title={label.name ? (target.chip ? `${label.name} (${target.chip.text})` : label.name) : undefined} style={{
+            <span className="k-bar-label" data-testid="target-label" title={label.name ? (target.chip ? `${label.name} (${target.chip.text})` : target.sub ? `${label.name} · ${target.sub}` : label.name) : undefined} style={{
               display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden',
               fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
               color: label.color,
             }}>
               {label.icon}
               <span className="k-bar-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label.name}</span>
+              {/* The grey model name gives way first: it shrinks before the title does,
+                  and is dropped below the narrow breakpoint (App.css). */}
+              {target.sub && <span className="k-bar-sub" data-testid="target-label-sub" style={{ color: '#7a7a7a', fontWeight: 400, flexShrink: 100, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{target.sub}</span>}
               {/* A target with only Settings says why: archived, its store
                   missing, or still being created. */}
               {target.chip && (

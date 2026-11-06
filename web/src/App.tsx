@@ -25,9 +25,11 @@ import { BrowseFacet } from './BrowseFacet';
 import { ChatFacet } from './ChatFacet';
 import { ChatStartForm } from './ChatStartForm';
 import { useChats, useChatProviders } from './useChats';
+import { useSeenTurns } from './chatRail';
 import { createChat } from './chatApi';
 import { NEW_CHAT_ERROR } from './chatCopy';
 import type { ChatInfo } from './chatApi';
+import { deleteChat } from './chatApi';
 import { ActivityFacet } from './ActivityFacet';
 import { SettingsFacet } from './SettingsFacet';
 import { FacetLayoutProvider } from './facetLayout';
@@ -1088,6 +1090,13 @@ export default function App() {
   const { chats, loaded: chatsLoaded, add: addChat, remove: removeChat } = useChats(chatServed);
   const chatProviders = useChatProviders(chatServed);
   const chatsAvailable = chatServed && (chatProviders?.length ?? 0) > 0;
+  // The chat on screen has been seen; one that answered while another page was
+  // up is a "new answer" on the rail until it is opened.
+  const chatSeen = useSeenTurns(chats, displayed.kind === 'chat' ? displayed.id : null);
+  // The rail's x: the chat ends on the server (DELETE) and leaves the list.
+  const onEndChat = useCallback((id: string) => {
+    deleteChat(id).then(() => removeChat(id), e => { if ((e as { status?: number }).status === 404) removeChat(id); });
+  }, [removeChat]);
   // The card the fleet's Members shows once after a create or a join.
   const [fleetLanding, setFleetLanding] = useState<FleetLanding | null>(null);
   const shownFacet: Facet | null = displayed.kind === 'draft' ? null : facets.includes(view.facet) ? view.facet : 'settings';
@@ -1801,6 +1810,8 @@ export default function App() {
               chats={chats}
               chatProviders={chatProviders ?? []}
               chatsAvailable={chatsAvailable}
+              chatSeen={chatSeen}
+              onEndChat={onEndChat}
               draftShown={draftShownKind}
               onNewDraft={onNewDraft}
               onPickDraft={onPickDraft}

@@ -188,8 +188,11 @@ type chat struct {
 	// missedEnd is the last turn's terminal frame when no page stream was
 	// attached to take it; the next page stream to attach is sent it once,
 	// right after ready.
-	missedEnd []byte
-	lastState []byte // the last chat_state frame body sent, to send only changes
+	missedEnd  []byte
+	lastState  []byte    // the last chat_state frame body sent, to send only changes
+	title      string    // the first message, cut (see titleOf); empty until the first turn
+	startedAt  time.Time // when the chat was made
+	lastActive time.Time // the last turn start or row change
 	// afterGraceStep is a test seam: graceFired calls it after clearing the
 	// fired timer and before it counts the owner's streams.
 	afterGraceStep func()
@@ -401,6 +404,7 @@ func (c *chat) sendLocked(kind string, data any, terminal bool) {
 		return
 	}
 	frame := []byte("event: " + kind + "\ndata: " + string(tagChat(c.id, b)) + "\n\n")
+	c.lastActive = time.Now()
 	delivered := c.m.broadcast(c.owner, frame)
 	if terminal {
 		c.missedEnd = nil
@@ -411,16 +415,28 @@ func (c *chat) sendLocked(kind string, data any, terminal bool) {
 }
 
 // rowState is the chat's row in the rail: what the chat_state event carries
-// (tagged with the chat id) and the shape a list row can grow from.
+// (tagged with the chat id) and what a GET /chats row carries beside the chat's
+// identity, so the two never disagree.
+//
+// Title is the first message cut (empty before the first turn); State is
+// idle | running | awaiting_approval | error; Turns counts the user turns;
+// CostUSD sums them (absent without a price card); LastActivity and StartedAt
+// are RFC 3339 UTC.
 type rowState struct {
-	State   string   `json:"state"` // idle | running | awaiting_approval | error
-	Turns   int      `json:"turns"`
-	CostUSD *float64 `json:"cost_usd,omitempty"` // summed over the turns; absent without a price card
+	Title        string   `json:"title"`
+	State        string   `json:"state"`
+	Turns        int      `json:"turns"`
+	CostUSD      *float64 `json:"cost_usd,omitempty"`
+	LastActivity string   `json:"last_activity"`
+	StartedAt    string   `json:"started_at"`
 }
 
 // stateLocked requires c.mu.
 func (c *chat) stateLocked() rowState {
-	st := rowState{State: "idle"}
+	st := rowState{
+		Title: c.title, State: "idle",
+		LastActivity: c.lastActive.UTC().Format(time.RFC3339Nano), StartedAt: c.startedAt.UTC().Format(time.RFC3339Nano),
+	}
 	var cost float64
 	priced := false
 	for _, it := range c.view {
@@ -457,7 +473,11 @@ func (c *chat) noteState() {
 		return
 	}
 	st := c.stateLocked()
-	b, err := json.Marshal(st)
+	// last_activity moves with every frame; only a change of the row itself is
+	// worth a chat_state.
+	key := st
+	key.LastActivity = ""
+	b, err := json.Marshal(key)
 	if err != nil || bytes.Equal(b, c.lastState) {
 		return
 	}
@@ -584,6 +604,10 @@ func (c *chat) startTurn(text, sendID string) (int, error) {
 	c.turnAt = len(c.view)
 	turn := c.turnAt
 	c.view = append(c.view, viewItem{Kind: "user", Text: text, SendID: sendID})
+	if c.title == "" {
+		c.title = titleOf(text)
+	}
+	c.lastActive = time.Now()
 	c.turns.Add(1)
 	c.mu.Unlock()
 	c.store.appendTranscript(viewItem{Kind: "user", Text: text, SendID: sendID})
@@ -901,3 +925,26 @@ func (c *chat) end(reason string) {
 }
 
 func (c *chat) String() string { return fmt.Sprintf("chat %s", c.id) }
+
+// chatTitleMax is how many characters of the first message the chat's title
+// keeps.
+const chatTitleMax = 60
+
+// titleOf is the chat's title: the first message with its whitespace collapsed,
+// cut to chatTitleMax characters (runes), at a word boundary when one falls in
+// the last 15, with an ellipsis when anything was cut.
+func titleOf(text string) string {
+	t := strings.Join(strings.Fields(text), " ")
+	r := []rune(t)
+	if len(r) <= chatTitleMax {
+		return t
+	}
+	cut := r[:chatTitleMax]
+	for i := len(cut) - 1; i >= chatTitleMax-15; i-- {
+		if cut[i] == ' ' {
+			cut = cut[:i]
+			break
+		}
+	}
+	return strings.TrimRight(string(cut), " ") + "\u2026"
+}

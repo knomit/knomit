@@ -379,7 +379,7 @@ func (m *manager) create(ctx context.Context, p auth.Principal, provider, model 
 		store: st, ctx: cctx, cancel: cancel,
 		calls: map[string]llm.ToolUse{}, pending: map[string]*pendingApproval{},
 		grants: map[grantKey]grantInfo{}, meta: map[string]callMeta{},
-		done: make(chan struct{}),
+		done: make(chan struct{}), startedAt: time.Now(), lastActive: time.Now(),
 	}
 	fail := func(err error) (*chat, error) {
 		cancel()

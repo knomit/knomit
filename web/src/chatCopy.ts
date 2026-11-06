@@ -237,3 +237,27 @@ export const contextTokens = (n: string): string => `${n} tokens`;
 export const contextNumCtx = (n: string): string => `${n} (num_ctx)`;
 /** The cloud provider's "where it runs" prefix: "cloud · ANTHROPIC_API_KEY". */
 export const PROVIDER_CLOUD = 'cloud';
+
+// ── APPROVED (2026-11-06) ──
+// Chat UX v2, PR 4 (design section 6, the rail). Approved by the user on
+// 2026-11-06: the design's copy-table strings for the rail row, the hover card's
+// field labels exactly as in the mockup (R2) with "1 turn" for one, and the
+// wording for ending a chat.
+
+/** The expander under the five most recent chats. */
+export const railMore = (n: number): string => `${n} more`;
+/** The state in words, in a row's tooltip. The design gives no words for idle,
+ *  so the tooltip shows none for it. */
+export const RAIL_STATE_RUNNING = 'Running';
+export const RAIL_STATE_ATTENTION = 'Waiting for your approval';
+export const RAIL_STATE_NEW_ANSWER = 'New answer';
+export const RAIL_STATE_FAILED = 'Failed';
+/** The tooltip's field labels. */
+export const RAIL_TIP_MODEL = 'Model';
+export const RAIL_TIP_STARTED = 'Started';
+export const RAIL_TIP_COST = 'Cost';
+export const railTurns = (n: number): string => `${n} ${n === 1 ? 'turn' : 'turns'}`;
+/** The hover x, and its confirmation when a turn is still running. */
+export const RAIL_END_CHAT = 'End chat';
+export const RAIL_END_CONFIRM = 'End this chat? A turn is still running and will be stopped.';
+export const RAIL_END_KEEP = 'Keep chat';

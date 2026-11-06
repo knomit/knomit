@@ -105,6 +105,21 @@ type chatItem struct {
 	Links    hal.LinkMap `json:"_links"`
 }
 
+// listItem is a chat as GET /chats lists it: its identity plus the same row the
+// chat_state event carries (title, state, turns, cost_usd, last_activity,
+// started_at).
+type listItem struct {
+	chatItem
+	rowState
+}
+
+func listItemOf(c *chat) listItem {
+	it := itemOf(c)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return listItem{chatItem: it, rowState: c.stateLocked()}
+}
+
 func chatLinks(id string) hal.LinkMap {
 	base := httpx.APIBase + "/chats/" + id
 	return hal.LinkMap{
@@ -197,19 +212,19 @@ func (m *manager) handleList(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items := []chatItem{}
+	items := []listItem{}
 	for _, c := range m.listFor(p.String()) {
-		items = append(items, itemOf(c))
+		items = append(items, listItemOf(c))
 	}
 	sortChatItems(items)
-	hal.WriteHAL(w, http.StatusOK, hal.CollectionView[chatItem]{
+	hal.WriteHAL(w, http.StatusOK, hal.CollectionView[listItem]{
 		Count:    len(items),
 		Links:    hal.LinkMap{"self": {Href: httpx.APIBase + "/chats"}},
-		Embedded: map[string][]chatItem{"chats": items},
+		Embedded: map[string][]listItem{"chats": items},
 	})
 }
 
-func sortChatItems(items []chatItem) {
+func sortChatItems(items []listItem) {
 	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
 }
 

@@ -11,8 +11,11 @@ import { CredentialChip } from './CredentialChip';
 import { RepoDot } from './settingsParts';
 import { PendingCreateRow } from './PendingCreateRow';
 import { useRepoCreates, activeCreateByRepo, createFlag, pendingCreates } from './useRepoCreates';
-import { BookIcon, LayersIcon, ArchiveIcon, PlusIcon, ChevronDownIcon, FleetIcon, ChatIcon, ProviderIcon } from './icons';
+import { BookIcon, LayersIcon, ArchiveIcon, PlusIcon, ChevronDownIcon, FleetIcon, ChatIcon } from './icons';
 import { LENS, noMouseFocus } from './utils';
+import { ChatRailRow } from './ChatRailRow';
+import { RAIL_CHATS_SHOWN, railState, recentChats } from './chatRail';
+import { railMore } from './chatCopy';
 import { remoteFailing, DRAFT_NAME } from './facets';
 import type { PinnedTarget, DraftKind } from './facets';
 
@@ -49,6 +52,11 @@ interface Props {
   /** Whether chat is served here: a provider is configured and the server is
    *  not read-only. Without it the Chats group is absent, not disabled. */
   chatsAvailable?: boolean;
+  /** Per chat, the last completed turn the person has seen (useSeenTurns): what
+   *  makes a finished answer "new". */
+  chatSeen?: Record<string, number>;
+  /** The x on a chat row: end the chat (the caller deletes it). */
+  onEndChat?: (id: string) => void;
   /** GET /fleet, or null before it answered. The Fleet section draws its one
    *  row from it (fleet_repo), and the fleet repository is not listed under
    *  Repositories: it is the fleet target. `local` decides whether the `+`
@@ -96,9 +104,10 @@ export function TargetRail({
   repos, lenses, context, currentRepo, remoteError, serverReadOnly, onSelect,
   archived = [], pinned = null, onPin, drafts = { repo: false, lens: false }, draftShown = null,
   onNewDraft, onPickDraft, focusRequest, onFocusHandled, locked = false, fleet = null, onPickFleet,
-  chats = [], chatProviders = [], chatsAvailable = false,
+  chats = [], chatProviders = [], chatsAvailable = false, chatSeen = {}, onEndChat,
 }: Props) {
   const [query, setQuery] = useState('');
+  const [chatsOpen, setChatsOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   // A create still working on a listed repo flags its row; one not yet
   // registered is a row of its own. The poller is already mounted app-wide.
@@ -130,6 +139,12 @@ export function TargetRail({
   const release = () => searchRef.current?.blur();
   const pick = (ctx: BrowseContext) => { release(); onSelect(ctx); };
   const pin = (t: PinnedTarget) => { release(); onPin?.(t); };
+
+  const recent = recentChats(chats);
+  // A selected chat is never hidden behind "N more": it joins the five.
+  const pinnedChat = pinned?.kind === 'chat' && draftShown === null ? pinned.id : null;
+  const shownChats = chatsOpen ? recent : recent.filter((c, i) => i < RAIL_CHATS_SHOWN || c.id === pinnedChat);
+  const hiddenChats = recent.length - shownChats.length;
 
   const q = query.trim().toLowerCase();
   const match = (name: string) => !q || name.toLowerCase().includes(q);
@@ -175,6 +190,50 @@ export function TargetRail({
       </label>
 
       <div data-testid="rail-list" style={locked ? { ...list, opacity: 0.4 } : list}>
+        {/* Chats come first, the group people return to. A chat is a pinned
+            target (it has no store to browse), so a row pins it. The five most
+            recent show; the rest expand in place. A row is one line: the
+            provider's mark, whose colour is the chat's state, and its title. */}
+        {chatsAvailable && (
+          <div data-testid="rail-chats">
+            <div style={{ ...sectionHeader, marginTop: 0 }}>
+              <ChatIcon color={CHAT_ACCENT} size={13} />
+              <span style={sectionTitle}>Chats</span>
+              <PlusButton testId="rail-new-chat" label="New chat" disabled={locked}
+                active={draftShown === 'chat'} onClick={() => { release(); onNewDraft?.('chat'); }} />
+            </div>
+            {drafts.chat && (
+              <DraftRow kind="chat" selected={draftShown === 'chat'} disabled={locked}
+                onClick={() => { release(); onPickDraft?.('chat'); }} />
+            )}
+            {chats.length === 0 && !drafts.chat && <div style={{ color: '#555', fontSize: 12, padding: '4px 10px' }}>None</div>}
+            {shownChats.map((c, i) => {
+              const selected = pinned?.kind === 'chat' && pinned.id === c.id && draftShown === null;
+              return (
+                <ChatRailRow
+                  key={c.id}
+                  chat={c}
+                  index={i}
+                  providerKind={chatProviders.find(p => p.name === c.provider)?.kind}
+                  state={railState(c, chatSeen[c.id], selected)}
+                  selected={selected}
+                  locked={locked}
+                  rowStyle={row(selected ? 'chat' : null, false)}
+                  onPin={() => pin({ kind: 'chat', id: c.id })}
+                  onEnd={id => onEndChat?.(id)}
+                />
+              );
+            })}
+            {hiddenChats > 0 && (
+              <button type="button" data-testid="rail-chats-more" aria-expanded="false"
+                onMouseDown={noMouseFocus} disabled={locked} onClick={() => setChatsOpen(true)}
+                style={{ ...row(null, false), color: '#8a8a8a', fontSize: 12.5 }}>
+                {railMore(hiddenChats)}
+              </button>
+            )}
+          </div>
+        )}
+
         <div data-testid="rail-repos">
           <div style={sectionHeader}>
             <BookIcon color="#7c9" size={13} />
@@ -349,47 +408,6 @@ export function TargetRail({
             );
           })}
         </div>
-
-        {/* Chats: a group beside the repositories and the lenses. A chat
-            is a pinned target (it has no store to browse), so a row pins it. */}
-        {chatsAvailable && (
-          <div data-testid="rail-chats">
-            <div style={sectionHeader}>
-              <ChatIcon color={CHAT_ACCENT} size={13} />
-              <span style={sectionTitle}>Chats</span>
-              <PlusButton testId="rail-new-chat" label="New chat" disabled={locked}
-                active={draftShown === 'chat'} onClick={() => { release(); onNewDraft?.('chat'); }} />
-            </div>
-            {drafts.chat && (
-              <DraftRow kind="chat" selected={draftShown === 'chat'} disabled={locked}
-                onClick={() => { release(); onPickDraft?.('chat'); }} />
-            )}
-            {chats.length === 0 && !drafts.chat && <div style={{ color: '#555', fontSize: 12, padding: '4px 10px' }}>None</div>}
-            {chats.map(c => {
-              const selected = pinned?.kind === 'chat' && pinned.id === c.id && draftShown === null;
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  data-testid={`rail-chat-${c.id}`}
-                  aria-current={selected || undefined}
-                  disabled={locked}
-                  onMouseDown={noMouseFocus}
-                  onClick={locked ? undefined : () => pin({ kind: 'chat', id: c.id })}
-                  style={row(selected ? 'chat' : null, false)}
-                >
-                  {/* The provider's mark stands in for the dot. Its slot is the
-                      dot's 7px: the mark overflows it evenly (negative margins),
-                      so the name column stays aligned with the repo and lens rows. */}
-                  <span data-testid={`rail-chat-mark-${c.id}`} style={chatMarkSlot}>
-                    <ProviderIcon kind={chatProviders.find(p => p.name === c.provider)?.kind} name={c.provider} color={CHAT_ACCENT} size={13} />
-                  </span>
-                  <span style={rowName}>{c.name || c.model}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
 
         {/* The fleet: one row once this instance is in one, with its role;
             otherwise the `+` that opens New fleet (create or join), which
@@ -571,10 +589,6 @@ const plusBtn = (disabled: boolean, active: boolean): CSSProperties => ({
 // The name is the one element that shrinks; the badges never do.
 const rowName: CSSProperties = {
   flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-};
-const chatMarkSlot: CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-  width: 7, height: 13, margin: '0 -3px', flexShrink: 0, overflow: 'visible',
 };
 const badges: CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 'auto',

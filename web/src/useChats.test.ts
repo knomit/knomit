@@ -1,14 +1,65 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { useChats } from './useChats';
+import { installFakeEventSource, uninstallFakeEventSource, latestStream, CHAT_EVENTS_STREAM } from './testEventSource';
 
 const A = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
 const B = { id: 'chat-b', provider: 'local', model: 'o1' };
 const listBody = (...chats: unknown[]) => new Response(JSON.stringify({ count: chats.length, _embedded: { chats } }), { status: 200 });
 
-afterEach(() => { vi.unstubAllGlobals(); });
+beforeEach(() => { installFakeEventSource(); });
+afterEach(() => { uninstallFakeEventSource(); vi.unstubAllGlobals(); });
 
 describe('useChats', () => {
+  it('applies a chat_state from the page stream to the chat\'s row, for every listed chat, and reads the list again on a reconnect', async () => {
+    const row = (id: string, state: string, turns: number) => ({ id, provider: 'anthropic', model: 'm', title: 'hello', state, turns, last_activity: '2026-11-06T10:00:00Z' });
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => listBody(row('chat-a', 'idle', 0), row('chat-b', 'idle', 1)));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useChats());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    // Nothing here mounts a ChatFacet: the rail itself is subscribed.
+    await waitFor(() => expect(latestStream(CHAT_EVENTS_STREAM)).toBeTruthy());
+    const es = latestStream(CHAT_EVENTS_STREAM)!;
+    act(() => {
+      es.emit('chat_state', { chat: 'chat-b', state: 'running', turns: 2, title: 'hello', cost_usd: 0.5, last_activity: '2026-11-06T10:05:00Z', started_at: '2026-11-06T09:00:00Z' });
+    });
+    const byId = (id: string) => result.current.chats.find(c => c.id === id)!;
+    expect(byId('chat-b')).toMatchObject({ state: 'running', turns: 2, cost_usd: 0.5, last_activity: '2026-11-06T10:05:00Z', title: 'hello' });
+    expect(byId('chat-a')).toMatchObject({ state: 'idle', turns: 0 });
+    // An event for a chat the list does not hold changes nothing.
+    act(() => { es.emit('chat_state', { chat: 'chat-z', state: 'error', turns: 9 }); });
+    expect(result.current.chats.map(c => c.id).sort()).toEqual(['chat-a', 'chat-b']);
+    // The absent cost is absent again.
+    act(() => { es.emit('chat_state', { chat: 'chat-b', state: 'idle', turns: 2, title: 'hello' }); });
+    expect(byId('chat-b').cost_usd).toBeUndefined();
+    // A reconnect (a page-level ready) reads the list again.
+    const before = fetchMock.mock.calls.length;
+    act(() => { es.emit('ready', {}); });
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  it('a chat_state that arrives while a reconnect re-read is in flight is not overwritten by the older list', async () => {
+    const row = (state: string, turns: number) => ({ id: 'chat-a', provider: 'anthropic', model: 'm', title: 't', state, turns, last_activity: '2026-11-06T10:00:00Z' });
+    let release!: () => void;
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>()
+      .mockResolvedValueOnce(listBody(row('running', 1)))
+      // The reconnect's read: cut while the chat was still running.
+      .mockImplementationOnce(() => new Promise<Response>(res => { release = () => res(listBody(row('running', 1))); }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useChats());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    await waitFor(() => expect(latestStream(CHAT_EVENTS_STREAM)).toBeTruthy());
+    const es = latestStream(CHAT_EVENTS_STREAM)!;
+    act(() => { es.emit('ready', {}); }); // a reconnect: the re-read starts
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    // The turn ends while the read is in flight.
+    act(() => { es.emit('chat_state', { chat: 'chat-a', state: 'idle', turns: 1, title: 't', last_activity: '2026-11-06T10:05:00Z', started_at: 's' }); });
+    expect(result.current.chats[0].state).toBe('idle');
+    // The older answer lands: the newer event still wins.
+    await act(async () => { release(); });
+    expect(result.current.chats[0]).toMatchObject({ state: 'idle', last_activity: '2026-11-06T10:05:00Z' });
+  });
+
   it('loads GET /chats and add() makes a new chat visible in the same render, with no further fetch', async () => {
     const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => listBody(A));
     vi.stubGlobal('fetch', fetchMock);
