@@ -18,6 +18,18 @@ const approval = (callId: string, turn: number): ChatApproval =>
   ({ call_id: callId, tool: 'knomit_learn', action: 'learn', target: 'alpha', target_kind: 'repo', destructive: false, grantable: true, turn });
 const usage1 = { input: 1, cache_read: 2, cache_write: 3, output: 4 };
 
+describe('adaptive chats: the loader call', () => {
+  it('the loader call keeps the tools it loaded, from the event and from the snapshot', () => {
+    const live = run([...sent('q', 1, 0), call('tu_1', 'load_tools', 0),
+      { kind: 'tool_call', id: 'tu_1', name: 'load_tools', state: 'done', loaded: ['knomit_query', 'knomit_explain'], turn: 0 }]);
+    const g = live.turns[0].parts[0];
+    expect(g.kind === 'group' && g.calls[0].loaded).toEqual(['knomit_query', 'knomit_explain']);
+    const fromSnap = run([ready([u('q'), { kind: 'tool_call', id: 'tu_1', name: 'load_tools', state: 'done', loaded: ['knomit_query'] }])]);
+    const g2 = fromSnap.turns[0].parts[0];
+    expect(g2.kind === 'group' && g2.calls[0].loaded).toEqual(['knomit_query']);
+  });
+});
+
 describe('chatReducer: live events are routed by the turn index they name', () => {
   it('groups consecutive tool calls into one group', () => {
     const s = run([...sent('q', 1, 0), text('looking', 0), call('tu_1', 'knomit_repos', 0), call('tu_2', 'knomit_query', 0), text('found it', 0)]);

@@ -133,3 +133,34 @@ func TestEmbeddingRanker_ErrorPropagates(t *testing.T) {
 	require.Nil(t, got)
 	require.ErrorIs(t, err, boom)
 }
+
+// WarmToolVectors embeds the toolset once, ahead of the first Rank, so a chat's
+// first turn does not embed every tool on the request path; the Rank that
+// follows embeds none.
+//
+// SABOTAGE: make WarmToolVectors return without embedding -> the Rank after it
+// embeds three tools and this fails.
+func TestWarmToolVectors_EmbedsOnceAndRankEmbedsNone(t *testing.T) {
+	e := newRankEmbedder(t)
+	e.queries["m"] = []float32{1, 1, 1}
+	require.NoError(t, WarmToolVectors(context.Background(), e, rankToolset()))
+	require.Len(t, e.docCall, 3, "warming embeds every tool")
+	require.Empty(t, e.qCall, "warming embeds no query")
+
+	_, err := NewEmbeddingRanker(e, rankToolset()).Rank(context.Background(), "m")
+	require.NoError(t, err)
+	require.Len(t, e.docCall, 3, "the first Rank embedded no tool")
+	require.Equal(t, []string{"m"}, e.qCall)
+
+	// Warming again costs nothing.
+	require.NoError(t, WarmToolVectors(context.Background(), e, rankToolset()))
+	require.Len(t, e.docCall, 3)
+}
+
+func TestWarmToolVectors_StopsWhenTheChatEnds(t *testing.T) {
+	e := newRankEmbedder(t)
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.Error(t, WarmToolVectors(ended, e, rankToolset()))
+	require.Empty(t, e.docCall)
+}

@@ -156,3 +156,65 @@ func (w *ToolWindow) stubItem(it Item, calls map[string]ToolUse, capBytes int) I
 func (w *ToolWindow) replayableCall(name string, args json.RawMessage) bool {
 	return w.replayable != nil && w.replayable(name, args)
 }
+
+// DropEndedReasoning returns snap with the reasoning blocks of the ended turns
+// (hook 6) left out; the running turn (hook 7) and every other hook are
+// returned as they are. It is part of the adaptive projection, so it exists
+// only for a loop with a Window, which is only ever a provider whose reasoning
+// carries no signature to keep valid: Ollama's `thinking` is plain text
+// (Reasoning.Native is {"thinking": text}, see OllamaChat), and a provider
+// with a stable prefix (Anthropic), whose thinking blocks are signed and bound
+// to the history before them, never gets a Window (ErrWindowWithStablePrefix),
+// so its blocks are never dropped. An entry that holds nothing but reasoning is
+// left whole: dropping its blocks would send an empty assistant message.
+// tool_use and tool_result blocks are never touched, so every call stays
+// paired by id (invariant da80d551). It copies; snap and the Builder behind it
+// are not touched, and the stored history and the session log keep the
+// reasoning.
+func (w *ToolWindow) DropEndedReasoning(snap Snapshot) Snapshot {
+	out := snap
+	out.Hooks[HookConversation] = make([]Item, len(snap.Hooks[HookConversation]))
+	for i, it := range snap.Hooks[HookConversation] {
+		out.Hooks[HookConversation][i] = withoutReasoning(it)
+	}
+	return out
+}
+
+// withoutReasoning is it with its reasoning blocks removed, as a copy; it is
+// returned itself when it has none or would be left empty.
+func withoutReasoning(it Item) Item {
+	if it.Entry == nil {
+		return it
+	}
+	kept := make([]Block, 0, len(it.Entry.Blocks))
+	for _, b := range it.Entry.Blocks {
+		if b.Kind != BlockReasoning {
+			kept = append(kept, b)
+		}
+	}
+	if len(kept) == len(it.Entry.Blocks) || len(kept) == 0 {
+		return it
+	}
+	e := *it.Entry
+	e.Blocks = kept
+	it.Entry = &e
+	return it
+}
+
+// projectionOf says what the projection did to one request: stored is the
+// Builder's whole snapshot, sent the view the request carried. Only ended
+// turns (hook 6) are stubbed, so only they are counted.
+func projectionOf(stored, sent Snapshot) *ProjectionLog {
+	p := &ProjectionLog{SavedTokensEst: max(viewBytes(stored)-viewBytes(sent), 0) / 4}
+	for _, it := range sent.Hooks[HookConversation] {
+		if it.Entry == nil {
+			continue
+		}
+		for _, b := range it.Entry.Blocks {
+			if b.ToolResult != nil && b.ToolResult.Elided {
+				p.StubbedResults++
+			}
+		}
+	}
+	return p
+}

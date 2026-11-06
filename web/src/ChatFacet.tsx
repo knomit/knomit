@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { publishChatPill, forgetChatPill } from './chatPillStore';
 import { ChatPanel } from './ChatPanel';
-import { ChatResultPanel } from './ChatResultPanel';
+import { ChatSidePanel } from './ChatSidePanel';
+import { initialPanelState, panelReducer, shownEntry, usePanelWidth } from './chatPanelState';
 import { ChatSettings } from './ChatSettings';
 import {
   answerChatApproval, cancelChatTurn, getChat, getChatContext, sendChatTurn,
@@ -9,7 +10,7 @@ import {
 import type { ApprovalDecision, ChatApproval, ChatInfo, ChatNotice } from './chatApi';
 import { subscribeChatEvents } from './chatEvents';
 import { NEW_CHAT_ERROR } from './chatCopy';
-import { chatReducer, initialChatState, refusalReason, sessionCost } from './chatState';
+import { boundBeforeCall, chatReducer, initialChatState, refusalReason, sessionCost } from './chatState';
 import { RECONNECT_INITIAL_MS, RECONNECT_MAX_MS } from './eventStream';
 import type { ToolCall, UsagePayload } from './chatState';
 
@@ -110,6 +111,7 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
       ...(typeof d.started_ms === 'number' ? { started_ms: d.started_ms } : {}),
       ...(typeof d.ended_ms === 'number' ? { ended_ms: d.ended_ms } : {}),
       ...(d.summary && typeof (d.summary as { count?: unknown }).count === 'number' ? { summary: { count: (d.summary as { count: number }).count } } : {}),
+      ...(Array.isArray(d.loaded) ? { loaded: d.loaded.map(String) } : {}),
       turn: turnOf(d),
     }));
     on('approval', d => dispatch({ kind: 'approval', approval: d as unknown as ChatApproval }));
@@ -244,8 +246,10 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
  * App keeps one mounted per live chat, so a chat's stream and transcript
  * survive the reader looking at a repository.
  */
-export function ChatFacet({ chat, facet, onGone, onNewChat }: {
+export function ChatFacet({ chat, facet, onGone, onNewChat, onOpenInBrowse }: {
   chat: ChatInfo;
+  /** Open a fact in Browse (the side panel's "Open in Browse"). */
+  onOpenInBrowse?: (repo: string, path: string) => void;
   /** Start an empty chat with this chat's model (a notice's "New chat"). */
   onNewChat?: (chat: ChatInfo) => void | Promise<void>;
   /** The tab on screen. */
@@ -256,8 +260,16 @@ export function ChatFacet({ chat, facet, onGone, onNewChat }: {
   const { state, actionError, notSent, landed, send, stop, answer } = useChatSession(chat.id, onGone);
   // A failed "New chat" (from a notice) is shown, not swallowed.
   const [newChatError, setNewChatError] = useState('');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const onSelect = useCallback((c: ToolCall) => setSelectedId(cur => (cur === c.id ? null : c.id)), []);
+  // The side panel: absent until a step (or, later, a fact link) opens it. The
+  // step that is open stays highlighted; clicking it again closes the panel.
+  const [panel, dispatchPanel] = useReducer(panelReducer, initialPanelState);
+  const { width: panelWidth, onSplitterDown } = usePanelWidth();
+  const openEntry = shownEntry(panel);
+  const selectedId = openEntry?.kind === 'result' ? openEntry.callId : null;
+  const onSelect = useCallback((c: ToolCall) => {
+    if (selectedId === c.id) dispatchPanel({ type: 'close' });
+    else dispatchPanel({ type: 'open', entry: { kind: 'result', callId: c.id } });
+  }, [selectedId]);
 
   // The model's context window, for the composer's meter and the top bar's
   // pill. A chat whose window cannot be read keeps 0 (no "/ window", no fill).
@@ -280,8 +292,8 @@ export function ChatFacet({ chat, facet, onGone, onNewChat }: {
     <>
       {facet === 'settings' && <ChatSettings chatId={chat.id} />}
       <div data-testid="chat-facet" style={{ flex: 1, minHeight: 0, display: facet === 'chat' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
-        <div data-testid="chat-columns" className="k-chat-body">
-          <div className="k-chat-main">
+        <div data-testid="chat-columns" data-chat-scope className="k-chat-body">
+          <div className={openEntry ? 'k-chat-main k-chat-main--narrow' : 'k-chat-main'} data-panel={openEntry ? 'open' : 'closed'}>
             <ChatPanel state={state} selectedId={selectedId} actionError={newChatError || actionError} notSent={notSent} landed={landed} modelName={chat.name || chat.model}
               context={{ used: state.ctxTokens, window: ctxWindow }}
               onSend={send} onStop={stop} onSelect={onSelect} onAnswer={answer}
@@ -290,12 +302,12 @@ export function ChatFacet({ chat, facet, onGone, onNewChat }: {
                 Promise.resolve(onNewChat(chat)).catch(() => setNewChatError(NEW_CHAT_ERROR));
               } : undefined} />
           </div>
-          {/* Until the side panel (a later change) replaces it, a result opens
-              here, and only while a row is selected. */}
-          {selectedId && (
-            <div data-testid="settings-scroll" className="k-chat-result">
-              <ChatResultPanel chatId={chat.id} callId={selectedId} />
-            </div>
+          {/* No right column by default. A step (or a fact link) opens the
+              side panel; the chat column narrows to make room. */}
+          {openEntry && (
+            <ChatSidePanel chatId={chat.id} panel={panel} dispatch={dispatchPanel} running={state.running}
+              width={panelWidth} onSplitterDown={onSplitterDown} onOpenInBrowse={onOpenInBrowse}
+              boundFor={callId => boundBeforeCall(state.turns, callId)} />
           )}
         </div>
       </div>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { ChatResultPanel } from './ChatResultPanel';
 import { materializedMarkdown } from './chatState';
 import { stubFleetFetch } from './fleetTestFetch';
@@ -33,7 +33,11 @@ describe('ChatResultPanel', () => {
     expect(text).toHaveTextContent('no such repo');
     expect(text).toHaveAttribute('data-error', 'true');
     expect(screen.queryByTestId('chat-result-fact')).toBeNull();
+    // The arguments are on their own tab, not stacked under the result.
+    expect(screen.queryByTestId('chat-result-args')).toBeNull();
+    fireEvent.click(screen.getByTestId('chat-result-tab-arguments'));
     expect(screen.getByTestId('chat-result-args')).toHaveTextContent('"text": "x"');
+    expect(screen.queryByTestId('chat-result-text')).toBeNull();
   });
 
   it('shows the error when the call cannot be read', async () => {

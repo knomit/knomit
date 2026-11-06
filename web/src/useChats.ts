@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listChats, listChatProviders } from './chatApi';
 import type { ChatInfo, ChatProvider } from './chatApi';
-import { subscribeChatEvents } from './chatEvents';
+import { watchChatStates, latestChatState } from './chatEvents';
+
+/** The row fields a chat_state carries. */
+function patchOf(data: Record<string, unknown>): Partial<ChatInfo> {
+  return {
+    title: String(data.title ?? ''), state: data.state as ChatInfo['state'], turns: Number(data.turns ?? 0),
+    last_activity: String(data.last_activity ?? ''), started_at: String(data.started_at ?? ''),
+    cost_usd: typeof data.cost_usd === 'number' ? data.cost_usd : undefined,
+  };
+}
 
 /**
  * useChats is GET /chats: the caller's live chats, which is the BACKING LIST of
@@ -26,6 +35,8 @@ export function useChats(enabled = true): {
   const rev = useRef(0);
   const added = useRef(new Map<string, number>());
   const removed = useRef(new Map<string, number>());
+  // Chats whose add() applied a row from the stream's record.
+  const streamed = useRef(new Set<string>());
   const reloadRef = useRef<() => void>(() => {});
   // One map per list read still in flight: the rows chat_state updated meanwhile.
   const inFlight = useRef(new Set<Map<string, Partial<ChatInfo>>>());
@@ -44,7 +55,12 @@ export function useChats(enabled = true): {
         if (cancelled) return;
         const gone = (id: string) => (removed.current.get(id) ?? -1) > startedAt;
         setChats(prev => {
-          const out = list.filter(c => !gone(c.id)).map(c => (during.has(c.id) ? { ...c, ...during.get(c.id) } : c));
+          // A chat added after this read began, whose add applied a row the
+          // stream carried, is newer than the read's row for it: the add stands.
+          // An add with no stream row knows nothing the read does not: the
+          // read's row stands (the stream may have dropped during the create).
+          const mine = (id: string) => (added.current.get(id) ?? -1) > startedAt && streamed.current.has(id) ? prev.find(p => p.id === id) : undefined;
+          const out = list.filter(c => !gone(c.id)).map(c => mine(c.id) ?? (during.has(c.id) ? { ...c, ...during.get(c.id) } : c));
           for (const c of prev) {
             if ((added.current.get(c.id) ?? -1) > startedAt && !out.some(o => o.id === c.id)) out.push(c);
           }
@@ -69,41 +85,42 @@ export function useChats(enabled = true): {
   // The rail is live from the page's one events stream: each listed chat's
   // `chat_state` (title, state, turns, cost, last activity) is applied to its
   // row, mounted or not, and a reconnect of the stream reads the list again.
-  const ids = chats.map(c => c.id).join('\n');
+  // The page stream is watched whether or not any chat is listed yet, and the
+  // hub keeps the latest chat_state of every chat it carries (listed or not):
+  // add() picks up what arrived before the chat was known.
   useEffect(() => {
-    if (!enabled || ids === '') return;
+    if (!enabled) return;
     // The connect-time `ready` is not a change (the list was just read); a
-    // later one is a reconnect. `ready` reaches every subscriber, so one of them
-    // (the first) answers it, not one per chat.
+    // later one is a reconnect.
     let connected = false;
-    const offs = ids.split('\n').map((id, i) => subscribeChatEvents(id, (name, data) => {
+    return watchChatStates((name, data) => {
       if (name === 'ready') {
-        if (i !== 0) return;
         if (connected) reloadRef.current(); else connected = true;
         return;
       }
-      if (name !== 'chat_state') return;
-      const patch: Partial<ChatInfo> = {
-        title: String(data.title ?? ''), state: data.state as ChatInfo['state'], turns: Number(data.turns ?? 0),
-        last_activity: String(data.last_activity ?? ''), started_at: String(data.started_at ?? ''),
-        cost_usd: typeof data.cost_usd === 'number' ? data.cost_usd : undefined,
-      };
+      const id = String(data.chat ?? '');
+      const patch = patchOf(data);
       // A list read in flight is older than this event: it must not undo it.
       for (const during of inFlight.current) during.set(id, patch);
       setChats(prev => prev.map(c => c.id !== id ? c : { ...c, ...patch }));
-    }));
-    return () => offs.forEach(off => off());
-  }, [enabled, ids]);
+    });
+  }, [enabled]);
 
   const add = useCallback((c: ChatInfo) => {
     rev.current += 1;
     added.current.set(c.id, rev.current);
     removed.current.delete(c.id);
-    setChats(prev => (prev.some(p => p.id === c.id) ? prev : [...prev, c]));
+    // What the stream already said about this chat (its create may have started
+    // a turn) is its row: nothing is read again.
+    const seen = latestChatState(c.id);
+    const row = seen ? { ...c, ...patchOf(seen) } : c;
+    if (seen) streamed.current.add(c.id); else streamed.current.delete(c.id);
+    setChats(prev => (prev.some(p => p.id === c.id) ? prev : [...prev, row]));
   }, []);
   const remove = useCallback((id: string) => {
     rev.current += 1;
     removed.current.set(id, rev.current);
+    streamed.current.delete(id);
     added.current.delete(id);
     setChats(prev => (prev.some(p => p.id === id) ? prev.filter(p => p.id !== id) : prev));
   }, []);

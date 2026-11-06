@@ -53,6 +53,8 @@ export interface ChatViewItem {
   /** On a user item: how the turn it opens went (see chat.go viewItem). */
   usage?: { input: number; cache_read: number; cache_write: number; output: number };
   cost_usd?: number; warning?: string; error?: string; cancelled?: boolean;
+  /** On the call to the loader tool: the tools that call loaded. */
+  loaded?: string[];
 }
 
 /** A finished call's result in one number (a query's fact count). */

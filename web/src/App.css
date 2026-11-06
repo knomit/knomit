@@ -47,14 +47,28 @@ a { color: inherit; }
   .k-bar-sub { display: none !important; }
   .k-bar-pill { display: none !important; }
   .k-chat-body { flex-direction: column !important; }
-  .k-chat-result { width: 100% !important; max-height: 45%; border-left: none !important; border-top: 1px solid #222; order: -1; }
 }
 
-/* The chat: a centered column (ChatPanel), and the result panel beside it
-   while a tool row is selected. */
+/* The chat: a centered column (ChatPanel). With no side panel it takes the
+   full width. A step (or a fact link) opens the side panel on the right at its
+   remembered width; the column narrows to fit, it is not overlaid. */
 .k-chat-body { flex: 1 1 0; min-height: 0; min-width: 0; display: flex; overflow: hidden; }
 .k-chat-main { flex: 1 1 0; min-width: 0; min-height: 0; }
-.k-chat-result { width: 420px; max-width: 50%; flex-shrink: 0; overflow-y: auto; border-left: 1px solid #222; }
+.k-chat-result { width: var(--k-panel-w, 470px); max-width: 60%; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; background: #111;
+  /* mockup.html .side */ border-left: 1px solid #262626; box-shadow: -18px 0 30px -24px rgba(0,0,0,.8); }
+/* At a phone width the side panel STACKS ABOVE the chat, full width, and the
+   splitter goes (there is nothing to drag sideways); the page never scrolls
+   sideways because of it. These come AFTER the base rule above, so they win by
+   order and need no override flag. */
+@media (max-width: 640px) {
+  .k-chat-result { width: 100%; max-width: 100%; max-height: 50%; border-left: none; box-shadow: none; border-top: none; border-bottom: 1px solid #222; order: -1; }
+  .k-chat-body > [data-testid="chat-panel-splitter"] { display: none; }
+}
+/* The link a click opened stays marked (the design's .fp.open). In the narrowed
+   column a fact link in a table caps at 150px. PR 6 renders the links; these
+   are their hooks. */
+.fp.open { border-color: #6ea8fe; }
+.k-chat-main--narrow table .fp { max-width: 150px; }
 
 /* A user message: a faint strip with a 2px rule, normal weight. Not a
    blockquote: it is the person's own words. */
@@ -101,6 +115,7 @@ a { color: inherit; }
   border: none; border-bottom: 1px solid #262626; padding: 8px 11px; text-align: left; }
 .k-prose.k-chat-answer td { border: none; border-bottom: 1px solid #1e1e1e; padding: 8px 11px; color: #ccc; vertical-align: top; }
 .k-prose.k-chat-answer tr:last-child td { border-bottom: 0; }
+.k-chat-table-scroll { max-width: 100%; overflow-x: auto; margin: 0 0 12px; }
 
 /* The streaming caret: until the turn ends. */
 .k-chat-caret { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: #e8c27a; border-radius: 1px; }
