@@ -5,7 +5,7 @@ import { ChatPill } from './ChatPill';
 import { installFakeEventSource, uninstallFakeEventSource, latestStream } from './testEventSource';
 import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatSnapshot, ChatViewItem } from './chatApi';
-import { activitySummary, liveStep, activitySteps } from './chatCopy';
+import { activitySummary, liveStep, activitySteps, costSession, toolVerb } from './chatCopy';
 import { cachedPercent, compactCount, sessionCost, keyArg } from './chatState';
 import type { ChatTurn } from './chatState';
 
@@ -44,9 +44,25 @@ describe('the activity summary (chatCopy.activitySummary)', () => {
     ])).toBe('Bound to all · searched 3× in all · read 2 facts');
   });
   it('a tool with no wording is counted as "used N tools"', () => {
-    expect(words([{ kind: null, target: '' }])).toBe('Used 1 tools');
+    expect(words([{ kind: null, target: '' }])).toBe('Used 1 tool');
     expect(words([{ kind: null, target: '' }, { kind: null, target: '' }])).toBe('Used 2 tools');
     expect(words([{ kind: 'bind', target: 'all' }, { kind: null, target: '' }, { kind: null, target: '' }])).toBe('Bound to all · used 2 tools');
+  });
+  it('uses the singular for one: "read 1 fact", "used 1 tool", "Session (1 turn)", and the plural from two', () => {
+    expect(words([{ kind: 'read', target: '' }])).toBe('Read 1 fact');
+    expect(words([{ kind: 'read', target: '' }, { kind: 'read', target: '' }])).toBe('Read 2 facts');
+    expect(words([{ kind: 'bind', target: 'all' }, { kind: null, target: '' }])).toBe('Bound to all · used 1 tool');
+    expect(words([{ kind: null, target: '' }, { kind: null, target: '' }, { kind: null, target: '' }])).toBe('Used 3 tools');
+    expect(costSession(1)).toBe('Session (1 turn)');
+    expect(costSession(2)).toBe('Session (2 turns)');
+    expect(costSession(0)).toBe('Session (0 turns)');
+  });
+  it('words a timeline row: Bound, Searched (Searching while running), Read; other tools have none', () => {
+    expect([toolVerb('bind', false), toolVerb('query', false), toolVerb('query', true), toolVerb('read', false), toolVerb(null, false)])
+      .toEqual(['Bound', 'Searched', 'Searching', 'Read', null]);
+  });
+  it('a bind with no readable target reads "Bound"', () => {
+    expect(words([{ kind: 'bind', target: '' }])).toBe('Bound');
   });
   it('marks the target and the counts bold, nothing else', () => {
     const [bound, searched] = activitySummary([{ kind: 'bind', target: 'all' }, { kind: 'query', target: 'lens-x' }]);
@@ -90,7 +106,7 @@ describe('the activity line on the page', () => {
   it('is collapsed by default, and says what the calls were', async () => {
     mount(snap(items()));
     await screen.findByTestId('chat-turn-0');
-    expect(summaryText()).toBe('Bound to all · searched 2× in all · read 1 facts');
+    expect(summaryText()).toBe('Bound to all · searched 2× in all · read 1 fact');
     expect(screen.getByTestId('chat-activity-steps').textContent).toBe('4 steps');
     expect(screen.getByTestId('chat-tool-group')).toHaveAttribute('data-open', 'false');
     expect(screen.queryByTestId('chat-timeline')).toBeNull();
@@ -103,6 +119,9 @@ describe('the activity line on the page', () => {
     expect(screen.getByTestId('chat-tool-group')).toHaveAttribute('data-open', 'true');
     expect(['tu_1', 'tu_2', 'tu_3', 'tu_4'].map(id => screen.getByTestId(`chat-tool-arg-${id}`).textContent))
       .toEqual(['all', 'AI agent security incident', 'agentic practice', 'a1b2c3d4']);
+    // The verbs: Bound, Searched, Searched, Read.
+    expect(['tu_1', 'tu_2', 'tu_3', 'tu_4'].map(id => screen.getByTestId(`chat-tool-select-${id}`).firstElementChild?.textContent))
+      .toEqual(['Bound', 'Searched', 'Searched', 'Read']);
   });
 
   it('a tool with no wording reads "used N tools"', async () => {

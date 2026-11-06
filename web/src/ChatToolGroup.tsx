@@ -7,7 +7,7 @@ import type { ToolCall } from './chatState';
 import { toolRowLabel, toolKind, callTarget, boundAfter, keyArg, queryText } from './chatState';
 import {
   APPROVAL_ALLOW, APPROVAL_DECLINE, APPROVAL_ALLOW_SESSION, APPROVAL_TARGET_UNRESOLVED, CHAT_STOP,
-  activitySummary, activitySteps, liveStep,
+  activitySummary, activitySteps, liveStep, toolVerb,
 } from './chatCopy';
 import type { SummarySeg } from './chatCopy';
 
@@ -118,7 +118,7 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
                 <span aria-hidden="true" data-testid={`chat-tool-dot-${c.id}`} style={dot(c.state, c.isError)} />
                 <button type="button" data-testid={`chat-tool-select-${c.id}`} disabled={!canOpen}
                   aria-pressed={selected} onClick={() => onSelect(c)} style={rowBtn(selected, c.isError)}>
-                  <span style={{ color: c.state === 'running' ? AMBER : undefined }}>{toolRowLabel(c.name)}</span>
+                  <span style={{ color: c.state === 'running' ? AMBER : undefined }}>{toolVerb(toolKind(c.name), c.state === 'running') ?? toolRowLabel(c.name)}</span>
                   {arg && <span data-testid={`chat-tool-arg-${c.id}`} style={argMono}>{arg}</span>}
                 </button>
                 {ap && <ApprovalCard approval={ap} onAnswer={d => onAnswer(c.id, d)} />}

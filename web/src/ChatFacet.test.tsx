@@ -81,7 +81,7 @@ describe('ChatFacet', () => {
     const toggle = screen.getByTestId('chat-tool-group-toggle');
     // The activity line: the summary worded from the one knomit_repos call (no
     // wording for it, so "used N tools"), and the step count.
-    expect(screen.getByTestId('chat-activity-summary').textContent).toBe('Used 1 tools');
+    expect(screen.getByTestId('chat-activity-summary').textContent).toBe('Used 1 tool');
     expect(screen.getByTestId('chat-activity-steps').textContent).toBe('1 step');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByTestId('chat-tool-row-tu_1')).toBeNull();

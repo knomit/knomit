@@ -65,9 +65,10 @@ export const CHAT_REVOKE_GRANT = 'Revoke';
  *  (`<url> → <this>`, the same shape as every other request error). */
 export const CHAT_SEND_TIMEOUT = 'no answer';
 
-// ── PENDING APPROVAL ──
-// Chat UX v2 (design 2026-11-05-chat-ux-v2, section 2). Every string below is
-// NEW and needs the user's approval before it ships.
+// ── APPROVED (2026-11-06) ──
+// Chat UX v2, PR 1 (design 2026-11-05-chat-ux-v2, section 2). Approved by the
+// user on 2026-11-06, with the singular forms ("1 step", "read 1 fact",
+// "used 1 tool", "Session (1 turn)") and the timeline verbs below.
 
 /** The activity line's words. ONE function words the whole summary: the pieces
  *  are joined with " · ". `strong` marks the parts drawn bold (the target and
@@ -91,8 +92,8 @@ export function activitySummary(calls: SummaryCall[]): SummarySeg[][] {
   for (const [t, n] of queries) {
     pieces.push([{ text: 'searched ' }, { text: `${n}×`, strong: true }, ...(t ? [{ text: ' in ' + t }] : [])]);
   }
-  if (reads) pieces.push([{ text: 'read ' }, { text: String(reads), strong: true }, { text: ' facts' }]);
-  if (other) pieces.push([{ text: 'used ' }, { text: String(other), strong: true }, { text: ' tools' }]);
+  if (reads) pieces.push([{ text: 'read ' }, { text: String(reads), strong: true }, { text: reads === 1 ? ' fact' : ' facts' }]);
+  if (other) pieces.push([{ text: 'used ' }, { text: String(other), strong: true }, { text: other === 1 ? ' tool' : ' tools' }]);
   // The line opens a sentence: capitalize the first word.
   const first = pieces[0]?.[0];
   if (first) first.text = first.text.charAt(0).toUpperCase() + first.text.slice(1);
@@ -118,7 +119,18 @@ export const COST_ROW_CACHE_READ = 'Cache read';
 export const COST_ROW_CACHE_WRITE = 'Cache write (5m)';
 export const COST_ROW_OUTPUT = 'Output';
 export const COST_THIS_TURN = 'This turn';
-export const costSession = (turns: number): string => `Session (${turns} turns)`;
+export const costSession = (turns: number): string => `Session (${turns} ${turns === 1 ? 'turn' : 'turns'})`;
+
+/** The verb of a timeline row for the tools that have wording; every other tool
+ *  keeps toolRowLabel. A query that is still running reads "Searching". */
+export function toolVerb(kind: 'bind' | 'query' | 'read' | null, running: boolean): string | null {
+  switch (kind) {
+    case 'bind': return 'Bound';
+    case 'query': return running ? 'Searching' : 'Searched';
+    case 'read': return 'Read';
+    default: return null;
+  }
+}
 
 /** The top-bar pill and the composer's meter row. */
 export const PILL_SESSION = 'session';
