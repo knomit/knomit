@@ -8,8 +8,28 @@ import {
 } from './chatApi';
 import type { ApprovalDecision, ChatApproval, ChatInfo, ChatNotice } from './chatApi';
 import { subscribeChatEvents } from './chatEvents';
+import { NEW_CHAT_ERROR } from './chatCopy';
 import { chatReducer, initialChatState, refusalReason, sessionCost } from './chatState';
+import { RECONNECT_INITIAL_MS, RECONNECT_MAX_MS } from './eventStream';
 import type { ToolCall, UsagePayload } from './chatState';
+
+/** The waits between tries of a cancel that failed: the events stream's own
+ *  bounded backoff (it starts at RECONNECT_INITIAL_MS, doubles, and never
+ *  exceeds RECONNECT_MAX_MS), three retries. */
+export const CANCEL_RETRY_DELAYS_MS = [0, 1, 2].map(i => Math.min(RECONNECT_INITIAL_MS * 2 ** i, RECONNECT_MAX_MS));
+
+/** cancelWithRetry sends the cancel and, if it fails, tries again after each
+ *  delay. It rejects with the last error when every try failed. */
+async function cancelWithRetry(chatId: string, sendId: string): Promise<void> {
+  let last: unknown;
+  for (let i = 0; i <= CANCEL_RETRY_DELAYS_MS.length; i++) {
+    try { await cancelChatTurn(chatId, sendId); return; } catch (e) {
+      last = e;
+      if (i < CANCEL_RETRY_DELAYS_MS.length) await new Promise(r => setTimeout(r, CANCEL_RETRY_DELAYS_MS[i]));
+    }
+  }
+  throw last;
+}
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -29,6 +49,8 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
   const [actionError, setActionError] = useState('');
   // The last send the server refused (or never answered): its text, and why.
   const [notSent, setNotSent] = useState<{ text: string; reason: string } | null>(null);
+  // A send the person had stopped (its text was put back in the composer) that the server accepted after all.
+  const [landed, setLanded] = useState<{ text: string } | null>(null);
   const goneRef = useRef(onGone);
   const sendSeq = useRef(0);
   // The id each send goes out under, so a Stop can name it to the server; and
@@ -122,33 +144,66 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
   // take (a turn started elsewhere): read the snapshot.
   useEffect(() => { if (state.staleSeq > 0) refreshRef.current(); }, [state.staleSeq]);
 
+  /** Whether the server accepted send `sendId`: the snapshot's user items carry
+   *  the send_id of the POST that started them, so ours is there or it is not.
+   *  Nothing is counted: another tab's turn, this tab's earlier turns and a
+   *  queued POST cannot be mistaken for it. The snapshot is applied either way. */
+  const accepted = useCallback((sendId: number): Promise<boolean> => getChat(chatId).then(snapshot => {
+    const wire = wireIds.current.get(sendId);
+    const yes = wire !== undefined && snapshot.items.some(i => i.kind === 'user' && i.send_id === wire);
+    if (yes) acceptedRef.current.add(sendId);
+    dispatch({ kind: 'ready', snapshot, confirmed: [...acceptedRef.current] });
+    return yes;
+  }), [chatId]);
   const send = useCallback((text: string) => {
     setActionError('');
     setNotSent(null);
+    setLanded(null);
     const sendId = ++sendSeq.current;
     const wire = `${tag}-${sendId}`;
     wireIds.current.set(sendId, wire);
     dispatch({ kind: 'user', text, sendId });
     sendChatTurn(chatId, text, wire).then(body => {
       acceptedRef.current.add(sendId);
-      // The person stopped it first: the turn is not theirs to show any more
-      // (the server ends it if it got there before the Stop did); read what it has.
-      if (withdrawn.current.has(sendId)) { refreshRef.current(); return; }
+      // The person stopped it first, but the server had it: it ends that turn.
+      // The text was put back in the composer, and the transcript will list the
+      // turn, so it must not stay in both places.
+      if (withdrawn.current.has(sendId)) {
+        accepted(sendId).then(yes => { if (yes) setLanded({ text }); }).catch(() => refreshRef.current());
+        return;
+      }
       dispatch({ kind: 'send_accepted', sendId, turn: Number((body as { turn?: number } | null)?.turn), at: Date.now() });
     }).catch(e => {
       // Refused (a 409 while the stopped turn still unwinds, any other
       // non-2xx), a network error or no answer in time: the turn never
       // started, so it leaves the transcript, and its text goes back in the
       // composer with the reason. A 404 means the chat is gone.
-      dispatch({ kind: 'send_failed', sendId });
+      if (statusOf(e) !== undefined || withdrawn.current.has(sendId)) dispatch({ kind: 'send_failed', sendId });
       if (withdrawn.current.has(sendId)) return; // the person's own Stop: nothing to explain
       if (statusOf(e) === 404) { goneRef.current(chatId); return; }
-      setNotSent({ text, reason: `${refusalReason(errText(e))}${statusOf(e) ? ` (${statusOf(e)})` : ''}` });
-      // No status means no answer (a timeout, a dropped connection): the server
-      // may have appended the turn anyway, so read what it has.
-      if (statusOf(e) === undefined) refreshRef.current();
+      const reason = `${refusalReason(errText(e))}${statusOf(e) ? ` (${statusOf(e)})` : ''}`;
+      if (statusOf(e) !== undefined) { setNotSent({ text, reason }); return; }
+      // No status means no answer (a timeout, a dropped connection): the POST
+      // may still be on its way. Stop it by name first, so a late arrival is
+      // refused (and one the server already runs under this id is ended), then
+      // ask which: if the snapshot lists this send_id the text is in the
+      // transcript and must not also wait in the composer (Retry would send it
+      // twice); if not, it is the only copy and goes back.
+      //
+      // The turn stays in the transcript (as still sending) until that is known.
+      // If the cancel cannot be delivered even after its retries, the POST may
+      // STILL land, so the text is NOT put back as "Not sent": the send stays
+      // where it is, the error is shown, and a later snapshot (or Stop) settles it.
+      cancelWithRetry(chatId, wire).then(
+        () => accepted(sendId).then(yes => {
+          if (yes) return;
+          dispatch({ kind: 'send_failed', sendId });
+          setNotSent({ text, reason });
+        }).catch(() => { dispatch({ kind: 'send_failed', sendId }); setNotSent({ text, reason }); refreshRef.current(); }),
+        cancelErr => { setActionError(errText(cancelErr)); accepted(sendId).catch(() => refreshRef.current()); },
+      );
     });
-  }, [chatId, tag]);
+  }, [chatId, tag, accepted]);
   const stop = useCallback(() => {
     // A send still in flight is withdrawn: the server is told which one, so it
     // is refused even if it arrives after this Stop.
@@ -175,7 +230,7 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
         else setActionError(errText(e));
       });
   }, [chatId]);
-  return { state, actionError, notSent, send, stop, answer };
+  return { state, actionError, notSent, landed, send, stop, answer };
 }
 
 /**
@@ -190,13 +245,15 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
 export function ChatFacet({ chat, facet, onGone, onNewChat }: {
   chat: ChatInfo;
   /** Start an empty chat with this chat's model (a notice's "New chat"). */
-  onNewChat?: (chat: ChatInfo) => void;
+  onNewChat?: (chat: ChatInfo) => void | Promise<void>;
   /** The tab on screen. */
   facet: 'chat' | 'settings';
   /** The chat is over; it leaves the list. */
   onGone: (id: string) => void;
 }) {
-  const { state, actionError, notSent, send, stop, answer } = useChatSession(chat.id, onGone);
+  const { state, actionError, notSent, landed, send, stop, answer } = useChatSession(chat.id, onGone);
+  // A failed "New chat" (from a notice) is shown, not swallowed.
+  const [newChatError, setNewChatError] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const onSelect = useCallback((c: ToolCall) => setSelectedId(cur => (cur === c.id ? null : c.id)), []);
 
@@ -223,10 +280,13 @@ export function ChatFacet({ chat, facet, onGone, onNewChat }: {
       <div data-testid="chat-facet" style={{ flex: 1, minHeight: 0, display: facet === 'chat' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
         <div data-testid="chat-columns" className="k-chat-body">
           <div className="k-chat-main">
-            <ChatPanel state={state} selectedId={selectedId} actionError={actionError} notSent={notSent} modelName={chat.name || chat.model}
+            <ChatPanel state={state} selectedId={selectedId} actionError={newChatError || actionError} notSent={notSent} landed={landed} modelName={chat.name || chat.model}
               context={{ used: state.ctxTokens, window: ctxWindow }}
               onSend={send} onStop={stop} onSelect={onSelect} onAnswer={answer}
-              onNewChat={onNewChat ? () => onNewChat(chat) : undefined} />
+              onNewChat={onNewChat ? () => {
+                setNewChatError('');
+                Promise.resolve(onNewChat(chat)).catch(() => setNewChatError(NEW_CHAT_ERROR));
+              } : undefined} />
           </div>
           {/* Until the side panel (a later change) replaces it, a result opens
               here, and only while a row is selected. */}

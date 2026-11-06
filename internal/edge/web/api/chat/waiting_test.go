@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +32,8 @@ type snapshotView struct {
 	ExpectedFirstTokenMS int64 `json:"expected_first_token_ms"`
 	Items                []struct {
 		Kind        string               `json:"kind"`
+		SendID      string               `json:"send_id"`
+		Text        string               `json:"text"`
 		ID          string               `json:"id"`
 		DurationMS  int64                `json:"duration_ms"`
 		Summary     *struct{ Count int } `json:"summary"`
@@ -351,4 +354,125 @@ func TestChat_ExpectedFirstTokenIsTheSlowestObserved(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "fast"))
 	drive(t, h, "uid:501", id, s, nil)
 	require.Equal(t, first, h.snapshot("uid:501", id).ExpectedFirstTokenMS, "a faster reply does not lower the slowest")
+}
+
+// The snapshot's user item carries the send id of the POST that started it: the
+// exact identity the page matches its own send by. Another send's turn, and a
+// turn that came without an id, do not carry ours.
+func TestChat_SnapshotUserItemCarriesItsSendID(t *testing.T) {
+	h := newHarness(t)
+	h.queue("a1", textStep("one", usage), textStep("two", usage), textStep("three", usage))
+	id := h.create("uid:501", "a1")
+	s := h.attach("uid:501", id)
+	require.Equal(t, http.StatusAccepted, h.sendTurn("uid:501", id, "from this tab", "tab-A-1"))
+	drive(t, h, "uid:501", id, s, nil)
+	require.Equal(t, http.StatusAccepted, h.sendTurn("uid:501", id, "from another tab", "tab-B-7"))
+	drive(t, h, "uid:501", id, s, nil)
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "no id at all"))
+	drive(t, h, "uid:501", id, s, nil)
+
+	var got [][2]string
+	for _, it := range h.snapshot("uid:501", id).Items {
+		if it.Kind == "user" {
+			got = append(got, [2]string{it.Text, it.SendID})
+		}
+	}
+	require.Equal(t, [][2]string{{"from this tab", "tab-A-1"}, {"from another tab", "tab-B-7"}, {"no id at all", ""}}, got)
+}
+
+// A send withdrawn by a timeout's cancel, whose POST then arrives late, starts
+// no turn: the snapshot never lists its id, so the page's restored text is the
+// only copy.
+func TestChat_LateArrivingPostAfterATimeoutCancelLeavesNoTurn(t *testing.T) {
+	h := newHarness(t)
+	m := h.queue("a1", textStep("never", usage))
+	id := h.create("uid:501", "a1")
+	require.Equal(t, http.StatusNoContent, h.cancelSend("uid:501", id, "late-1"))
+	require.Equal(t, http.StatusConflict, h.sendTurn("uid:501", id, "late text", "late-1"))
+	snap := h.snapshot("uid:501", id)
+	require.Empty(t, snap.Items)
+	require.Empty(t, m.requests())
+}
+
+// A second Stop for the same send changes nothing: one entry, still withdrawn once.
+func TestChat_DuplicateCancelForOneSendIsHarmless(t *testing.T) {
+	h := newHarness(t)
+	m := h.queue("a1", textStep("after", usage))
+	id := h.create("uid:501", "a1")
+	require.Equal(t, http.StatusNoContent, h.cancelSend("uid:501", id, "dup"))
+	require.Equal(t, http.StatusNoContent, h.cancelSend("uid:501", id, "dup"))
+	c := h.mgr.find(id, writer.String())
+	c.mu.Lock()
+	require.Equal(t, []string{"dup"}, c.sends, "one entry for two cancels")
+	require.Equal(t, "withdrawn", c.sendState["dup"])
+	c.mu.Unlock()
+
+	require.Equal(t, http.StatusConflict, h.sendTurn("uid:501", id, "x", "dup"), "still withdrawn")
+	require.Empty(t, m.requests())
+	// A cancel after the refusal still leaves other sends alone.
+	require.Equal(t, http.StatusNoContent, h.cancelSend("uid:501", id, "dup"))
+	require.Equal(t, http.StatusAccepted, h.sendTurn("uid:501", id, "y", "other"))
+}
+
+// The per-chat memory of send ids is bounded: the oldest is forgotten after
+// maxSends newer ones, and a forgotten withdrawn id no longer withdraws.
+func TestChat_SendIDMemoryIsBoundedAndEvictsTheOldest(t *testing.T) {
+	cancelMany := func(h *harness, id string, n int) {
+		for i := 0; i < n; i++ {
+			require.Equal(t, http.StatusNoContent, h.cancelSend("uid:501", id, fmt.Sprintf("n-%d", i)))
+		}
+	}
+	// maxSends-1 newer ids: "first" is the oldest of exactly maxSends, still remembered.
+	h := newHarness(t)
+	h.queue("a1", textStep("ok", usage))
+	id := h.create("uid:501", "a1")
+	require.Equal(t, http.StatusNoContent, h.cancelSend("uid:501", id, "first"))
+	cancelMany(h, id, maxSends-1)
+	c := h.mgr.find(id, writer.String())
+	c.mu.Lock()
+	require.Len(t, c.sends, maxSends)
+	require.Len(t, c.sendState, maxSends)
+	c.mu.Unlock()
+	require.Equal(t, http.StatusConflict, h.sendTurn("uid:501", id, "x", "first"), "at the bound it is still withdrawn")
+
+	// One more newer id evicts "first": it is no longer withdrawn, and the memory stays at the bound.
+	h2 := newHarness(t)
+	h2.queue("a1", textStep("ok", usage))
+	id2 := h2.create("uid:501", "a1")
+	require.Equal(t, http.StatusNoContent, h2.cancelSend("uid:501", id2, "first"))
+	cancelMany(h2, id2, maxSends)
+	c2 := h2.mgr.find(id2, writer.String())
+	c2.mu.Lock()
+	require.Len(t, c2.sends, maxSends, "never more than maxSends")
+	require.Len(t, c2.sendState, maxSends)
+	require.NotContains(t, c2.sendState, "first", "the oldest was forgotten")
+	require.Contains(t, c2.sendState, fmt.Sprintf("n-%d", maxSends-1), "the newest is kept")
+	c2.mu.Unlock()
+	require.Equal(t, http.StatusAccepted, h2.sendTurn("uid:501", id2, "x", "first"), "a forgotten withdrawn id starts its turn")
+}
+
+// A send_id is a short token: more than 64 bytes is refused with 400 on both
+// routes, nothing is remembered, and exactly 64 is accepted.
+func TestChat_SendIDOver64BytesIsRefused(t *testing.T) {
+	h := newHarness(t)
+	m := h.queue("a1", textStep("ok", usage))
+	id := h.create("uid:501", "a1")
+	long := strings.Repeat("x", maxSendIDBytes+1)
+
+	code, body := h.do("uid:501", http.MethodPost, "/chats/"+id+"/turns", map[string]string{"text": "hi", "send_id": long})
+	require.Equal(t, http.StatusBadRequest, code, string(body))
+	require.Contains(t, string(body), sendIDTooLong)
+	require.Empty(t, h.snapshot("uid:501", id).Items, "a refused send starts no turn")
+	require.Empty(t, m.requests())
+
+	code, body = h.do("uid:501", http.MethodPost, "/chats/"+id+"/cancel", map[string]string{"send_id": long})
+	require.Equal(t, http.StatusBadRequest, code, string(body))
+	c := h.mgr.find(id, writer.String())
+	c.mu.Lock()
+	require.Empty(t, c.sends, "a refused id is not remembered")
+	c.mu.Unlock()
+
+	exact := strings.Repeat("y", maxSendIDBytes)
+	require.Equal(t, http.StatusNoContent, h.cancelSend("uid:501", id, exact), "64 bytes is allowed")
+	require.Equal(t, http.StatusAccepted, h.sendTurn("uid:501", id, "hi", strings.Repeat("z", maxSendIDBytes)))
 }

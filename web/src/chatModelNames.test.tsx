@@ -22,7 +22,8 @@ describe('model names in the New chat picker', () => {
     render(<ChatStartForm providers={providers} onCreated={() => {}} />);
     const named = screen.getByTestId('chat-model-anthropic-claude-haiku-5-5');
     expect(named).toHaveTextContent('Haiku 5.5');
-    expect(named).not.toHaveTextContent('claude-haiku-5-5');
+    // The id is shown under the name, in its own line.
+    expect(screen.getByTestId('chat-model-id-anthropic-claude-haiku-5-5')).toHaveTextContent('claude-haiku-5-5');
     expect(named).toHaveAttribute('title', 'claude-haiku-5-5');
     expect(screen.getByTestId('chat-model-anthropic-claude-sonnet-5-5')).toHaveTextContent('claude-sonnet-5-5');
   });

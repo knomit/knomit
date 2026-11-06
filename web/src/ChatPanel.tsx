@@ -45,7 +45,7 @@ const COLUMN: CSSProperties = { width: 740, maxWidth: 'calc(100% - 48px)', margi
  * faint strip), its activity line, its final text as markdown, and a cost
  * footer; the server's price-tier warning; and the rounded box to write in.
  */
-export function ChatPanel({ state, selectedId, actionError, notSent, modelName, context, onSend, onStop, onSelect, onAnswer, onNewChat }: {
+export function ChatPanel({ state, selectedId, actionError, notSent, landed, modelName, context, onSend, onStop, onSelect, onAnswer, onNewChat }: {
   state: ChatState;
   selectedId: string | null;
   /** The last failed cancel or answer. */
@@ -53,6 +53,8 @@ export function ChatPanel({ state, selectedId, actionError, notSent, modelName, 
   /** The last refused send: its text goes back in the composer, and the reason
    *  shows under the box with Retry. */
   notSent: { text: string; reason: string } | null;
+  /** A send the person stopped that the server accepted anyway: its text, which was put back in the composer. */
+  landed?: { text: string } | null;
   /** The chat model's display name, for the notices. */
   modelName: string;
   context: ChatContextUse;
@@ -78,6 +80,16 @@ export function ChatPanel({ state, selectedId, actionError, notSent, modelName, 
     restored.current = notSent;
     setDraft(d => (d.trim() ? `${notSent.text}\n${d}` : notSent.text));
   }, [notSent]);
+
+  // The turn the person stopped turned out to be in the transcript: its text
+  // must not also wait in the composer (resending would duplicate it). Only the
+  // restored text is taken out; anything typed since stays.
+  const settled = useRef<unknown>(null);
+  useEffect(() => {
+    if (!landed || settled.current === landed) return;
+    settled.current = landed;
+    setDraft(d => (d === landed.text ? '' : d.startsWith(`${landed.text}\n`) ? d.slice(landed.text.length + 1) : d));
+  }, [landed]);
 
   // Stop. A send still in flight is withdrawn, and its text comes back.
   const stop = () => {
@@ -196,15 +208,17 @@ export function ChatPanel({ state, selectedId, actionError, notSent, modelName, 
             style={input}
           />
           <div data-testid="chat-composer-row" style={composerRow}>
-            <span data-testid="chat-context" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span>{CONTEXT_LABEL}</span>
-              <ContextMeter used={context.used} window={context.window} />
-              <span data-testid="chat-context-text">
-                {compactCount(context.used)}{context.window > 0 ? ` / ${compactCount(context.window)}` : ''}
+            <span style={leftGroup}>
+              <span data-testid="chat-context" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span>{CONTEXT_LABEL}</span>
+                <ContextMeter used={context.used} window={context.window} />
+                <span data-testid="chat-context-text">
+                  {compactCount(context.used)}{context.window > 0 ? ` / ${compactCount(context.window)}` : ''}
+                </span>
               </span>
+              <span style={{ color: '#5a5a5a' }}>{COMPOSER_HINT}</span>
+              <span style={{ flex: 1 }} />
             </span>
-            <span style={{ color: '#5a5a5a' }}>{COMPOSER_HINT}</span>
-            <span style={{ flex: 1 }} />
             {state.running
               ? (
                 <button type="button" data-testid="chat-stop" onClick={stop} style={stopBtn}>
@@ -250,8 +264,11 @@ const input: CSSProperties = {
   display: 'block', width: '100%', resize: 'none', background: 'transparent', color: '#ddd', border: 'none',
   padding: '2px 2px 8px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none',
 };
+// The Stop/Send button always stays on this row: the meter and the hint wrap
+// inside their own group instead of pushing it down.
+const leftGroup: CSSProperties = { whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 2, columnGap: 12, flex: 1, minWidth: 0 };
 const composerRow: CSSProperties = {
-  display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 4, columnGap: 12, whiteSpace: 'nowrap',
+  display: 'flex', alignItems: 'center', flexWrap: 'nowrap', columnGap: 12,
   fontSize: 11, fontFamily: 'var(--k-font-mono)', color: '#6a6a6a', minHeight: 28,
 };
 const sendBtn = (active: boolean): CSSProperties => ({

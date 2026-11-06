@@ -5,6 +5,7 @@ import { installFakeEventSource, uninstallFakeEventSource, chatStream } from './
 import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatSnapshot, ChatViewItem } from './chatApi';
 import { CHAT_CONTINUE_MESSAGE } from './chatCopy';
+import { SEND_TIMEOUT_MS } from './chatApi';
 import { chatReducer, initialChatState, snapshotState, formatDuration, noticeCount, refusalReason } from './chatState';
 import type { ChatEvent } from './chatState';
 
@@ -18,20 +19,26 @@ const snap = (items: ChatViewItem[], over: Partial<ChatSnapshot> = {}): ChatSnap
   ({ ...CHAT, running: false, grants: [], pending_approvals: [], items, ...over });
 
 /** The fetch seam, with POST /turns held until the test answers it. */
-function mount(s: ChatSnapshot, opts: { facet?: 'chat' | 'settings'; onNewChat?: () => void } = {}) {
+function mount(s: ChatSnapshot, opts: { facet?: 'chat' | 'settings'; onNewChat?: () => void; routes?: Parameters<typeof stubFleetFetch>[0] } = {}) {
   const fx = stubFleetFetch({
     [`GET ${BASE}`]: { body: s },
     [`GET ${BASE}/context`]: { body: { window: 1_000_000, spill: false } },
     [`POST ${BASE}/cancel`]: { status: 204 },
+    ...opts.routes,
   });
   const inner = globalThis.fetch;
+  let posted: { input: string | URL | Request; init: RequestInit } | null = null;
   const turn: { resolve: (r: Response) => void; pending: boolean } = { resolve: () => {}, pending: false };
   vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     if (init?.method === 'POST' && url.endsWith('/turns')) {
       void inner(input, init); // recorded by the stub
+      posted = { input, init };
       turn.pending = true;
-      return new Promise<Response>(r => { turn.resolve = r; });
+      return new Promise<Response>((r, rej) => {
+        turn.resolve = r;
+        init.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')));
+      });
     }
     return inner(input, init);
   }));
@@ -42,7 +49,9 @@ function mount(s: ChatSnapshot, opts: { facet?: 'chat' | 'settings'; onNewChat?:
     await new Promise(r => setTimeout(r, 0));
   });
   const calls = (part: string) => fx.calls.filter(c => c.route.includes(part));
-  return { fx, answer, calls, onNewChat };
+  // The POST the page gave up on (aborted) still reaches the server, as a request that sat in a queue would: deliver it now.
+  const late = () => inner(posted!.input, { ...posted!.init, signal: undefined });
+  return { fx, answer, calls, onNewChat, late };
 }
 
 beforeEach(() => { installFakeEventSource(); });
@@ -103,6 +112,49 @@ describe('Stop', () => {
     await answer(409, { title: 'Send withdrawn', detail: 'the send was stopped before the server accepted it' });
     expect(screen.queryByTestId('chat-not-sent')).toBeNull();
     expect(composer().value).toBe('Retract only the ones in knomit-kb');
+  });
+
+  it('a Stop that LOST the race to acceptance: the server listed the turn, so the restored text is taken out of the composer (no duplicate)', async () => {
+    const { fx, calls, answer } = mount(snap([]));
+    await screen.findByTestId('chat-input');
+    send('Retract only the ones in knomit-kb');
+    fireEvent.click(screen.getByTestId('chat-stop'));
+    expect(composer().value).toBe('Retract only the ones in knomit-kb');
+    await waitFor(() => expect(calls('/cancel')).toHaveLength(1));
+    // The server had already taken the turn (and the cancel ended it): the POST answers 202, the snapshot lists it under OUR send id.
+    const sendId = (calls('/turns')[0].body as { send_id: string }).send_id;
+    fx.set(`GET ${BASE}`, { body: snap([{ kind: 'user', text: 'Retract only the ones in knomit-kb', send_id: sendId, cancelled: true, error: 'The turn was cancelled.' }]) });
+    await answer(202, { turn: 0 });
+    await waitFor(() => expect(composer().value).toBe(''));
+    expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['Retract only the ones in knomit-kb']);
+    expect(screen.queryByTestId('chat-not-sent')).toBeNull();
+  });
+
+  it('a Stop that lost the race, but the snapshot holds only ANOTHER tab\'s user item: the restored text stays (it is the only copy)', async () => {
+    const { fx, calls, answer } = mount(snap([{ kind: 'user', text: 'earlier' }, { kind: 'assistant', text: 'a' }]));
+    await screen.findByTestId('chat-turn-0');
+    send('my words');
+    fireEvent.click(screen.getByTestId('chat-stop'));
+    await waitFor(() => expect(calls('/cancel')).toHaveLength(1));
+    // One MORE user item than before, but it is another tab's send, not ours: a count would have taken it for ours.
+    fx.set(`GET ${BASE}`, { body: snap([{ kind: 'user', text: 'earlier' }, { kind: 'assistant', text: 'a' }, { kind: 'user', text: 'typed in another tab', send_id: 'other-tab-1' }]) });
+    await answer(202, { turn: 2 });
+    await new Promise(r => setTimeout(r, 50));
+    expect(composer().value).toBe('my words');
+    expect(screen.queryByTestId('chat-not-sent')).toBeNull();
+  });
+
+  it('when the person typed more after the restored text, only the restored part goes', async () => {
+    const { fx, calls, answer } = mount(snap([]));
+    await screen.findByTestId('chat-input');
+    send('first draft');
+    fireEvent.click(screen.getByTestId('chat-stop'));
+    type('first draft\nand more');
+    await waitFor(() => expect(calls('/cancel')).toHaveLength(1));
+    const sendId = (calls('/turns')[0].body as { send_id: string }).send_id;
+    fx.set(`GET ${BASE}`, { body: snap([{ kind: 'user', text: 'first draft', send_id: sendId, cancelled: true, error: 'The turn was cancelled.' }]) });
+    await answer(202, { turn: 0 });
+    await waitFor(() => expect(composer().value).toBe('and more'));
   });
 
   it('Stop before acceptance keeps what was typed since, after the restored text', async () => {
@@ -190,6 +242,92 @@ describe('Stop', () => {
   });
 });
 
+describe('a send that times out: the snapshot decides, by send_id', () => {
+  const EARLIER: ChatViewItem[] = [{ kind: 'user', text: 'earlier', send_id: 'old-1' }, { kind: 'assistant', text: 'a' }];
+
+  /** Send `text` into a non-empty chat, let the 15 s bound pass with the POST unanswered, and return what the page did. */
+  async function timeOut(after: (sendId: string) => ChatViewItem[], routes?: Parameters<typeof stubFleetFetch>[0], extraMs = 0) {
+    const m = mount(snap(EARLIER), { routes });
+    await screen.findByTestId('chat-turn-0');
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      send('my words');
+      const sendId = (m.calls('/turns')[0].body as { send_id: string }).send_id;
+      m.fx.set(`GET ${BASE}`, { body: snap(after(sendId)) });
+      await act(async () => { await vi.advanceTimersByTimeAsync(SEND_TIMEOUT_MS + 1 + extraMs); });
+      return { ...m, sendId };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it('(a) the snapshot holds ANOTHER tab\'s user item and not ours: the text is restored and "Not sent" shows', async () => {
+    const { calls, sendId } = await timeOut(() => [...EARLIER, { kind: 'user', text: 'typed in another tab', send_id: 'other-tab-1' }]);
+    await waitFor(() => expect(screen.getByTestId('chat-not-sent')).toBeInTheDocument());
+    await waitFor(() => expect(composer().value).toBe('my words'));
+    expect(screen.getByTestId('chat-not-sent').textContent).toBe('Not sent: no answerRetry');
+    // The send was stopped by name, so a late arrival cannot start a turn.
+    expect(calls('/cancel').map(c => c.body)).toEqual([{ send_id: sendId }]);
+    // Both the person's earlier turn and the other tab's are in the transcript, ours is not.
+    expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['earlier', 'typed in another tab']);
+  });
+
+  it('(b) a non-empty transcript in which OURS landed: the text is not restored and nothing says "Not sent"', async () => {
+    const { calls, sendId } = await timeOut(id => [...EARLIER, { kind: 'user', text: 'my words', send_id: id }]);
+    await waitFor(() => expect(screen.getAllByTestId('chat-user')).toHaveLength(2));
+    await new Promise(r => setTimeout(r, 50));
+    expect(composer().value).toBe('');
+    expect(screen.queryByTestId('chat-not-sent')).toBeNull();
+    expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['earlier', 'my words']);
+    expect(calls('/cancel').map(c => c.body)).toEqual([{ send_id: sendId }]);
+  });
+
+  it('(c) after the timeout the late POST really arrives at the server and is refused with 409 Send withdrawn: no duplicate turn, the restored text stays', async () => {
+    // A server that keeps what the cancel named, as the real one does.
+    const withdrawn = new Set<string>();
+    const { calls, late, sendId } = await timeOut(() => EARLIER, {
+      [`POST ${BASE}/cancel`]: body => { withdrawn.add((body as { send_id: string }).send_id); return { status: 204 }; },
+      [`POST ${BASE}/turns`]: body => (withdrawn.has((body as { send_id: string }).send_id)
+        ? { status: 409, body: { title: 'Send withdrawn', detail: 'the send was stopped before the server accepted it' } }
+        : { status: 202, body: { turn: 2 } }),
+    });
+    await waitFor(() => expect(screen.getByTestId('chat-not-sent')).toBeInTheDocument());
+    await waitFor(() => expect(composer().value).toBe('my words'));
+    // Now the aborted request is delivered, late.
+    const res = await late();
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { title: string }).title).toBe('Send withdrawn');
+    expect(calls('/turns').map(c => (c.body as { send_id: string }).send_id)).toEqual([sendId, sendId]);
+    expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['earlier']);
+    expect(composer().value).toBe('my words');
+    expect(screen.getByTestId('chat-not-sent').textContent).toBe('Not sent: no answerRetry');
+  });
+
+  it('a cancel that fails once is retried (500 ms later, same send_id); when it lands the text is restored as usual', async () => {
+    let n = 0;
+    const { calls, sendId } = await timeOut(() => EARLIER, {
+      [`POST ${BASE}/cancel`]: () => (++n === 1 ? { status: 500, body: { detail: 'blip' } } : { status: 204 }),
+    }, 500);
+    await waitFor(() => expect(screen.getByTestId('chat-not-sent')).toBeInTheDocument());
+    await waitFor(() => expect(composer().value).toBe('my words'));
+    expect(calls('/cancel').map(c => c.body)).toEqual([{ send_id: sendId }, { send_id: sendId }]);
+  });
+
+  it('a cancel that keeps failing (1 try + 3 retries at 500, 1000, 2000 ms) does NOT restore the text as "Not sent": the POST may still land', async () => {
+    const { calls, sendId } = await timeOut(() => EARLIER, {
+      [`POST ${BASE}/cancel`]: { status: 500, body: { detail: 'cannot cancel' } },
+    }, 500 + 1000 + 2000);
+    await waitFor(() => expect(calls('/cancel')).toHaveLength(4));
+    expect(calls('/cancel').map(c => c.body)).toEqual(Array(4).fill({ send_id: sendId }));
+    await waitFor(() => expect(screen.getByTestId('chat-action-error').textContent).toContain('cannot cancel'));
+    expect(screen.queryByTestId('chat-not-sent')).toBeNull();
+    expect(composer().value).toBe('');
+    // The send is still on screen as sending (not lost, not duplicated), and Stop can withdraw it again.
+    expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['earlier', 'my words']);
+    expect(screen.getByTestId('chat-sending')).toBeInTheDocument();
+  });
+});
+
 describe('the thinking placeholder', () => {
   const T0 = new Date('2026-11-06T10:00:00Z').getTime();
   const fake = () => vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'], now: T0 });
@@ -222,6 +360,21 @@ describe('the thinking placeholder', () => {
     expect(screen.getByTestId('chat-thinking-label').textContent).toBe('No response yet');
     expect(screen.getByTestId('chat-thinking-counter').textContent).toBe('7s');
     expect(screen.getByTestId('chat-thinking').getAttribute('data-stalled')).toBe('true');
+  });
+
+  it('streaming reasoning is a sign of life: past the expected time WITH thinking text it still says Thinking…, not No response yet', async () => {
+    fake();
+    const { answer } = mount(snap([], { expected_first_token_ms: 5000 }));
+    await screen.findByTestId('chat-input');
+    send('hello');
+    await answer(202, { turn: 0 });
+    const es = chatStream('chat-a')!;
+    await tick(1000);
+    act(() => { es.emit('thinking_delta', { text: 'Comparing blast radius…', turn: 0 }); });
+    await tick(9000); // 10 s in, twice the expected 5000 ms
+    expect(screen.getByTestId('chat-thinking-counter').textContent).toBe('10s');
+    expect(screen.getByTestId('chat-thinking-label').textContent).toBe('Thinking…');
+    expect(screen.getByTestId('chat-thinking').getAttribute('data-stalled')).toBeNull();
   });
 
   it('with no observation yet (0), it never says "No response yet", however long it waits', async () => {
@@ -365,6 +518,20 @@ describe('notices: one line, never a filled box', () => {
     fireEvent.click(screen.getByTestId('chat-notice-price-action'));
     expect(onNewChat).toHaveBeenCalledTimes(1);
     expect(onNewChat).toHaveBeenCalledWith(CHAT);
+  });
+
+  it('a failed "New chat" is shown in the same one-line style with the existing "New chat hit an error", not swallowed', async () => {
+    const onNewChat = vi.fn().mockRejectedValue(new Error('boom'));
+    mount(snap([
+      { kind: 'user', text: 'q', warning: PRICE, warning_info: { kind: 'price_tier', prompt_tokens: 95_400, tier_tokens: 100_000, mult: 5 } },
+      { kind: 'assistant', text: 'a' },
+    ]), { onNewChat });
+    await screen.findByTestId('chat-turn-0');
+    fireEvent.click(screen.getByTestId('chat-notice-price-action'));
+    const line = await screen.findByTestId('chat-action-error');
+    expect(onNewChat).toHaveBeenCalledWith(CHAT);
+    expect(line.textContent).toBe('New chat hit an error');
+    expect(line.getAttribute('data-tone')).toBe('blocked');
   });
 
   it('a blocked send reads "Chat is full · 1.02M > 1M, nothing sent · New chat", with the server sentence as the title', async () => {

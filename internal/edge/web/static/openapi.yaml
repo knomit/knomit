@@ -4073,7 +4073,14 @@ paths:
         The configured providers (`[llm.providers]`) with each allowlisted
         model's availability: `available` (the provider offers it), `tools`
         (it can run the chat's tool calls) and a `reason` when it cannot be
-        used. Cached for 60 seconds. Not served by a read-only (demo) server.
+        used. Each provider also carries `reachable` and where it runs: `host`
+        (Ollama) or `key_source` (the NAME of the environment variable an
+        Anthropic key is read from, never the key, and only when that variable
+        is set). Each model carries what the
+        start screen shows, all from config or the provider: `best_for`,
+        `context_window`, `effort`, `price` and, for Ollama, `num_ctx`,
+        `parameter_size`, `quantization` and `keep_alive`. Cached for 60
+        seconds. Not served by a read-only (demo) server.
       operationId: listChatProviders
       responses:
         "200":
@@ -4095,6 +4102,9 @@ paths:
                           properties:
                             name: { type: string }
                             kind: { type: string, enum: [anthropic, ollama] }
+                            host: { type: string, description: "Where an Ollama provider runs; credentials stripped" }
+                            key_source: { type: string, description: "Name of the env var the key is read from, when it is set; never the key" }
+                            reachable: { type: boolean }
                             models:
                               type: array
                               items:
@@ -4105,6 +4115,27 @@ paths:
                                   available: { type: boolean }
                                   tools: { type: boolean }
                                   reason: { type: string }
+                                  best_for: { type: string }
+                                  context_window: { type: integer }
+                                  effort: { type: string }
+                                  num_ctx: { type: integer, description: "Ollama: the value requests are sent with" }
+                                  parameter_size: { type: string }
+                                  quantization: { type: string }
+                                  keep_alive: { type: string }
+                                  price:
+                                    type: object
+                                    properties:
+                                      tiers:
+                                        type: array
+                                        items:
+                                          type: object
+                                          properties:
+                                            up_to_prompt_tokens: { type: integer, description: "0: no upper bound" }
+                                            input_per_mtok: { type: number }
+                                            output_per_mtok: { type: number }
+                                      cache_read_mult: { type: number }
+                                      cache_write_5m_mult: { type: number }
+                                      warn_prompt_tokens: { type: integer }
         "401": { $ref: "#/components/responses/Problem" }
 
   /chats:
@@ -4154,12 +4185,23 @@ paths:
               properties:
                 provider: { type: string }
                 model: { type: string }
+                message:
+                  type: string
+                  description: |
+                    Optional first message. When present the first turn starts
+                    exactly as `POST /chats/{id}/turns` would start it, and the
+                    response carries `turn`.
       responses:
         "201":
-          description: The chat; Location is the chat
+          description: The chat; Location is the chat. `turn` is the view index of the first turn, present only when a message was sent.
           content:
             application/hal+json:
-              schema: { $ref: "#/components/schemas/ChatItem" }
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ChatItem"
+                  - type: object
+                    properties:
+                      turn: { type: integer }
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }

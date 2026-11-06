@@ -7,12 +7,12 @@ import {
 
 // Notices are ONE LINE in the voice of the cost footer, never a filled box:
 // [tone icon] [key phrase] · [rest, footer grey] · [action link], 11.5px. The
-// full server sentence is the title (hover). Tones: caution (amber), blocked
-// (red), info (blue). The price-tier line is a trade-off, not a failure, so it
-// takes the info tone (the KB convention reserves amber for failures).
+// full server sentence is the title (hover). Tones: blocked (red) and info
+// (blue). There is no amber tone: the KB convention reserves amber for
+// failures, and the price-tier line is a trade-off, so it takes the info tone.
 
-export type NoticeTone = 'caution' | 'blocked' | 'info';
-const TONE: Record<NoticeTone, string> = { caution: '#b8995a', blocked: '#b0736c', info: '#7393b3' };
+export type NoticeTone = 'blocked' | 'info';
+const TONE: Record<NoticeTone, string> = { blocked: '#b0736c', info: '#7393b3' };
 const FOOT = '#8a8a8a';
 const TEXT = '#d4d4d4';
 
@@ -24,15 +24,8 @@ function ToneIcon({ tone }: { tone: NoticeTone }) {
       <svg {...svgProps}><circle cx="12" cy="12" r="9" /><line x1="12" y1="11" x2="12" y2="16" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
     );
   }
-  if (tone === 'blocked') {
-    return (
-      <svg {...svgProps}><circle cx="12" cy="12" r="9" /><line x1="5.6" y1="5.6" x2="18.4" y2="18.4" /></svg>
-    );
-  }
   return (
-    <svg {...svgProps}>
-      <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
-    </svg>
+    <svg {...svgProps}><circle cx="12" cy="12" r="9" /><line x1="5.6" y1="5.6" x2="18.4" y2="18.4" /></svg>
   );
 }
 

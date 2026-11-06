@@ -374,7 +374,7 @@ describe('ChatFacet: turn_error races and fast follow-ups', () => {
   });
 
   it('N2: a send that is never answered counts as failed after the bound: the turn is taken back out and the error shown', async () => {
-    mount(snapshot({ running: false, items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] }));
+    mount(snapshot({ running: false, items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] }), { [`POST ${BASE}/cancel`]: { status: 204 } });
     await screen.findByTestId('chat-turn-0');
     const inner = globalThis.fetch;
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
@@ -554,11 +554,14 @@ describe('ChatFacet: events are routed by turn index', () => {
   it('N2: after a send times out the page reads the snapshot, so a turn the server did append (and its approval) shows up', async () => {
     const fx = stubFleetFetch({
       [`GET ${BASE}`]: { body: snapshot({ items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] }) },
+      [`POST ${BASE}/cancel`]: { status: 204 },
     });
     const inner = globalThis.fetch;
+    let sentId = '';
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       if (url === `${BASE}/turns`) {
+        sentId = (JSON.parse(String(init?.body)) as { send_id: string }).send_id;
         return new Promise<Response>((_res, rej) => { init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))); });
       }
       return inner(input, init);
@@ -567,26 +570,30 @@ describe('ChatFacet: events are routed by turn index', () => {
     await screen.findByTestId('chat-turn-0');
     const reads = () => fx.calls.filter(c => c.route === `GET ${BASE}`).length;
     const before = reads();
-    // The server did take the turn, and it is waiting for approval.
-    fx.set(`GET ${BASE}`, { body: snapshot({
-      running: true,
-      items: [
-        { kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' },
-        { kind: 'user', text: 'second' }, { kind: 'tool_call', id: 'tu_9', name: 'knomit_learn', state: 'running' },
-      ],
-      pending_approvals: [learnApproval(2)],
-    }) });
     vi.useFakeTimers({ shouldAdvanceTime: false });
     try {
       sendText('second');
+      // The server did take the turn (its user item carries THIS send's id), and it is waiting for approval.
+      fx.set(`GET ${BASE}`, { body: snapshot({
+        running: true,
+        items: [
+          { kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' },
+          { kind: 'user', text: 'second', send_id: sentId }, { kind: 'tool_call', id: 'tu_9', name: 'knomit_learn', state: 'running' },
+        ],
+        pending_approvals: [learnApproval(2)],
+      }) });
       await act(async () => { await vi.advanceTimersByTimeAsync(SEND_TIMEOUT_MS + 1); });
     } finally {
       vi.useRealTimers();
     }
     await waitFor(() => expect(reads()).toBe(before + 1));
+    // The timeout also stopped the send by name, so a late POST cannot start a turn.
+    expect(fx.calls.filter(c => c.route === `POST ${BASE}/cancel`).map(c => c.body)).toEqual([{ send_id: sentId }]);
     expect(await screen.findByTestId('chat-approval-tu_9')).toBeInTheDocument();
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'second']);
-    expect(screen.getByTestId('chat-not-sent').textContent).toBe(`Not sent: ${CHAT_SEND_TIMEOUT}Retry`);
+    // The server has the turn: its text is in the transcript, so it is NOT also kept in the composer (Retry would send it twice).
+    expect(screen.queryByTestId('chat-not-sent')).toBeNull();
+    expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).value).toBe('');
   });
 });
 

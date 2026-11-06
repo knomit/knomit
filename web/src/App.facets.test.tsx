@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent, cleanup, within } from '@testing-library/react';
 import App from './App';
 import { installFakeEventSource, uninstallFakeEventSource, streamsMatching, latestStream, chatStream } from './testEventSource';
 import { __resetRepoCreatesForTest } from './useRepoCreates';
@@ -1266,8 +1266,37 @@ describe('a chat target', () => {
     fireEvent.click(await screen.findByTestId('rail-new-chat'));
     expect(screen.getByTestId('target-label')).toHaveTextContent('New chat');
     fireEvent.click(await screen.findByTestId('chat-model-anthropic-a1'));
+    fireEvent.change(screen.getByTestId('chat-start-input'), { target: { value: 'first words' } });
+    fireEvent.keyDown(screen.getByTestId('chat-start-input'), { key: 'Enter' });
     await waitFor(() => expect(screen.getByTestId('rail-chat-chat-a')).toHaveAttribute('aria-current', 'true'));
   };
+
+  // SABOTAGE: ChatStartForm.start calls createChat without the message -> the POST
+  // body has no message and the transcript stays empty.
+  it('Enter on the start screen creates the chat with its first message, which shows as the first turn', async () => {
+    await primeApi();
+    const server = { chats: [] as unknown[], created: false };
+    const fx = stubFleetFetch({
+      'GET /api/v1/chat-providers': { body: PROVIDERS },
+      'GET /api/v1/chats': () => ({ body: { _embedded: { chats: server.chats } } }),
+      'POST /api/v1/chats': () => { server.chats = [CHAT_A]; server.created = true; return { status: 201, body: { ...CHAT_A, turn: 0 } }; },
+      'GET /api/v1/chats/chat-a': () => ({ body: {
+        ...CHAT_A, running: true, pending_approvals: [], grants: [],
+        items: server.created ? [{ kind: 'user', text: 'first words' }] : [],
+      } }),
+    });
+    await mountApp();
+    fireEvent.click(await screen.findByTestId('rail-new-chat'));
+    fireEvent.click(await screen.findByTestId('chat-model-anthropic-a1'));
+    expect(fx.calls.filter(c => c.route === 'POST /api/v1/chats')).toHaveLength(0);
+    fireEvent.change(screen.getByTestId('chat-start-input'), { target: { value: 'first words' } });
+    fireEvent.keyDown(screen.getByTestId('chat-start-input'), { key: 'Enter' });
+    const turn = await screen.findByTestId('chat-turn-0');
+    expect(within(turn).getByTestId('chat-user')).toHaveTextContent('first words');
+    const post = fx.calls.filter(c => c.route === 'POST /api/v1/chats');
+    expect(post).toHaveLength(1);
+    expect(post[0].body).toEqual({ provider: 'anthropic', model: 'a1', message: 'first words' });
+  });
 
   it('a chat pinned in the same render it is added is not auto-unpinned', async () => {
     await primeApi();
