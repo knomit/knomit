@@ -21,9 +21,25 @@ interface Hub {
   /** The stream has said `ready` at least once: a chat that subscribes now has
    *  missed it and is told, so its first read does not wait for a reconnect. */
   ready: boolean;
+  /** Page-level watchers: they see `ready` and EVERY chat's `chat_state`, listed
+   *  or not, and hold the stream open while they watch. */
+  watchers: Set<ChatEventListener>;
+  /** The latest chat_state per chat id, kept whether or not anyone subscribes to
+   *  that chat: a chat created in this page has its first events (the turn its
+   *  create started) before the page knows its id. Bounded by the owner's own
+   *  chats (the stream carries no one else's); dropped on `chat_end`, cleared on
+   *  every connect (`ready`), and gone with the stream. */
+  rows: Map<string, Record<string, unknown>>;
 }
 
 let hub: Hub | null = null;
+
+/** The latest chat_state the page stream carried for this chat since it connected. */
+export function latestChatState(chatId: string): Record<string, unknown> | undefined {
+  return hub?.rows.get(chatId);
+}
+
+const idle = (h: Hub) => h.byChat.size === 0 && h.watchers.size === 0;
 
 /** How many streams the page has open for chat events: 0 or 1. */
 export function chatEventStreamCount(): number { return hub ? 1 : 0; }
@@ -33,17 +49,25 @@ const route = (h: Hub, name: string, e: MessageEvent) => {
   try { data = e.data ? JSON.parse(e.data) as Record<string, unknown> : {}; } catch { return; }
   if (name === 'ready') {
     h.ready = true;
+    h.rows.clear();
     // Page-level: nothing says which chats missed what, so all reload.
     for (const set of [...h.byChat.values()]) for (const fn of [...set]) fn(name, data);
+    for (const fn of [...h.watchers]) fn(name, data);
     return;
   }
   const chat = typeof data.chat === 'string' ? data.chat : '';
+  if (name === 'chat_state' && chat) {
+    h.rows.set(chat, data);
+    for (const fn of [...h.watchers]) fn(name, data);
+  } else if (name === 'chat_end') {
+    h.rows.delete(chat);
+  }
   const set = h.byChat.get(chat);
   if (set) for (const fn of [...set]) fn(name, data);
 };
 
 function open(): Hub {
-  const h: Hub = { es: openEventStream(chatEventsUrl()), byChat: new Map(), ready: false };
+  const h: Hub = { es: openEventStream(chatEventsUrl()), byChat: new Map(), ready: false, watchers: new Set(), rows: new Map() };
   for (const name of CHAT_EVENT_NAMES) h.es.addEventListener(name, (e: MessageEvent) => route(h, name, e));
   return h;
 }
@@ -69,7 +93,25 @@ export function subscribeChatEvents(chatId: string, fn: ChatEventListener): () =
     // Deferred one microtask so a remount in the same commit (StrictMode's
     // effect replay, a keyed re-render) keeps the connection.
     queueMicrotask(() => {
-      if (hub === h && h.byChat.size === 0) { hub = null; h.es.close(); }
+      if (hub === h && idle(h)) { hub = null; h.es.close(); }
+    });
+  };
+}
+
+/**
+ * Watch the page-level events (`ready`, and every chat's `chat_state`) and keep
+ * the stream open while watching, even with no chat subscribed: the rail needs
+ * the first events of a chat it does not know yet. Returns the unwatch.
+ */
+export function watchChatStates(fn: ChatEventListener): () => void {
+  if (!hub) hub = open();
+  const h = hub;
+  h.watchers.add(fn);
+  if (h.ready) queueMicrotask(() => { if (h.watchers.has(fn)) fn('ready', {}); });
+  return () => {
+    h.watchers.delete(fn);
+    queueMicrotask(() => {
+      if (hub === h && idle(h)) { hub = null; h.es.close(); }
     });
   };
 }
