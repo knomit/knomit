@@ -228,7 +228,9 @@ func TestWindow_LoadMakesRoomByEvictingOnlyWhatIsEnough(t *testing.T) {
 	require.Equal(t, []string{"old"}, ch[0].Evicted)
 	require.Equal(t, ToolsReasonModel, ch[0].Reason)
 	require.Equal(t, []string{"mid", "new"}, ch[0].LoadedNow)
-	require.Equal(t, 100+150, ch[0].Tokens, "the loaded set's definitions after the change, bytes/4")
+	// What the loaded set adds to a request: each definition less its stub.
+	require.Equal(t, (100-w.stubBytes["mid"]/4)+(150-w.stubBytes["new"]/4), ch[0].Tokens)
+	require.Less(t, ch[0].Tokens, 100+150)
 }
 
 func TestWindow_NoRoomEvenAfterEvictingChangesNothing(t *testing.T) {

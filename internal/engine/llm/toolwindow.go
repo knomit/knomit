@@ -80,7 +80,7 @@ type ToolsChange struct {
 	// on with no preload. It is data for the log, never a user-facing error.
 	RankerError string
 	LoadedNow   []string // the loaded set after the change, sorted
-	Tokens      int      // definition tokens (bytes/4) of the loaded set after the change
+	Tokens      int      // tokens (bytes/4) the loaded set adds to a request over the stubs it replaces, after the change
 }
 
 // Pinned is a set of tool names that must not be evicted.
@@ -253,10 +253,13 @@ func (w *ToolWindow) loadedNames() []string {
 	return out
 }
 
+// loadedTokens is what the loaded set adds to a request, in tokens (bytes/4):
+// each loaded tool's full definition less the stub it replaces, which the
+// request carries whether the tool is loaded or not.
 func (w *ToolWindow) loadedTokens() int {
 	n := 0
 	for name := range w.loaded {
-		n += w.sizes[name]
+		n += w.growth(name)
 	}
 	return n
 }

@@ -31,8 +31,8 @@ const (
 
 // turnTools is a turn's view of the loaded tools, on its user item and on
 // turn_done: counts, because the page words them. Loaded and Evicted are this
-// turn's changes; LoadedNow, Total (the catalogue) and Tokens (definition
-// tokens, bytes/4, of the loaded set) are the window's state after them.
+// turn's changes; LoadedNow, Total (the catalogue) and Tokens (what the
+// loaded set adds to a request over its stubs, bytes/4) are the window's state after them.
 type turnTools struct {
 	Loaded    int `json:"loaded"`
 	Evicted   int `json:"evicted"`

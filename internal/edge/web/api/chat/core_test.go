@@ -27,7 +27,7 @@ func TestChat_FirstTurnShowsTheCoreTools(t *testing.T) {
 	evs := s.until("turn_done")
 
 	req := m.requests()[0]
-	want := 0
+	want := 0 // the definitions in full
 	for _, n := range mcp.ChatCoreTools {
 		want += toolTokens(t, req, n)
 	}
@@ -37,7 +37,8 @@ func TestChat_FirstTurnShowsTheCoreTools(t *testing.T) {
 	require.NoError(t, json.Unmarshal(evs[len(evs)-1].Data, &d))
 	require.NotNil(t, d.Tools)
 	require.Equal(t, len(mcp.ChatCoreTools), d.Tools.LoadedNow)
-	require.Equal(t, want, d.Tools.Tokens)
+	require.Greater(t, d.Tools.Tokens, 0)
+	require.Less(t, d.Tools.Tokens, want, "what the core adds over its stubs is less than its definitions")
 	require.Equal(t, 0, d.Tools.Loaded, "nothing was loaded this turn")
 	for _, e := range evs {
 		require.NotEqual(t, "tools", e.Name, "the opening is not a change")

@@ -88,5 +88,6 @@ func TestCore_ObserveReportsTheOpeningState(t *testing.T) {
 	w, snap := newCoreWin(t, []string{"core_a", "core_b"}, nil, a, b, winTool("o", 10))
 	names, tokens := w.Observe(snap)
 	require.Equal(t, []string{"core_a", "core_b"}, names)
-	require.InDelta(t, 150, tokens, 2)
+	require.Equal(t, (100-w.stubBytes["core_a"]/4)+(50-w.stubBytes["core_b"]/4), tokens)
+	require.Less(t, tokens, 150)
 }

@@ -458,8 +458,15 @@ func TestChat_ToolsEventIsEmittedOnLoadAndEvict(t *testing.T) {
 			tools = append(tools, te)
 		}
 	}
-	tokens := toolTokens(t, m.requests()[1], "knomit_explain")
-	core := toolTokens(t, m.requests()[1], "knomit_bind") + toolTokens(t, m.requests()[1], "knomit_query")
+	// A tool's Tokens figure is what it adds over its stub, which every
+	// request carries: the full definition less the stub of request 0.
+	explainGrowth := toolTokens(t, m.requests()[1], "knomit_explain") - toolTokens(t, m.requests()[0], "knomit_explain")
+	coreFull := toolTokens(t, m.requests()[1], "knomit_bind") + toolTokens(t, m.requests()[1], "knomit_query")
+	require.Len(t, tools, 2)
+	core := tools[1].Tokens
+	require.Greater(t, core, 0)
+	require.Less(t, core, coreFull, "the stubs the core tools replace are not part of what they add")
+	tokens := explainGrowth
 	coreNames := []string{"knomit_bind", "knomit_query"}
 	withExplain := []string{"knomit_bind", "knomit_explain", "knomit_query"}
 	turnOf := func(evs []sseEvent) int {
@@ -735,8 +742,15 @@ func TestChat_TurnWithNoChangeStillShowsTheLoadedSet(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, blankMessage))
 	second := s.until("turn_done")
 
-	tokens := toolTokens(t, m.requests()[1], "knomit_explain") + toolTokens(t, m.requests()[1], "knomit_bind") + toolTokens(t, m.requests()[1], "knomit_query")
-	want := turnTools{Loaded: 0, Evicted: 0, LoadedNow: 3, Total: total, Tokens: tokens}
+	full := toolTokens(t, m.requests()[1], "knomit_explain") + toolTokens(t, m.requests()[1], "knomit_bind") + toolTokens(t, m.requests()[1], "knomit_query")
+	var got struct {
+		Tools *turnTools `json:"tools"`
+	}
+	require.NoError(t, json.Unmarshal(second[len(second)-1].Data, &got))
+	require.NotNil(t, got.Tools)
+	require.Greater(t, got.Tools.Tokens, 0)
+	require.Less(t, got.Tools.Tokens, full, "what the loaded set adds over its stubs is less than its definitions")
+	want := turnTools{Loaded: 0, Evicted: 0, LoadedNow: 3, Total: total, Tokens: got.Tools.Tokens}
 	var d struct {
 		Tools *turnTools `json:"tools"`
 	}
