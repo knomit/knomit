@@ -404,6 +404,24 @@ describe('the side panel: target, width clamp, errors, keys', () => {
     expect(onBrowse).toHaveBeenLastCalledWith('all', 'kb://abc123def456/kb/x/y/z.md');
   });
 
+  it('a bind result is crumbed by the target it names (name, like lens/repo), not the binding in force before it', async () => {
+    stubFleetFetch({ [`GET ${BASE}/calls/tu_b`]: { body: { name: 'knomit_bind', arguments: { name: 'B' }, result: 'ok', is_error: false, elided: false } } });
+    render(<Harness bound="A" />); // the binding in force BEFORE the call is A
+    act(() => api.open({ kind: 'result', callId: 'tu_b' }));
+    await screen.findByTestId('chat-result-text');
+    expect(crumb()).toBe('B / knomit: Knomit bind');
+  });
+
+  it('the footer items are the mockup items: keycap, word, keycap, word, count, with no extra flex items for the separators', async () => {
+    stubFleetFetch(routes());
+    render(<Harness bound="r1" />);
+    act(() => api.open(R1));
+    await screen.findByTestId('chat-result-text');
+    const f = screen.getByTestId('chat-panel-footer');
+    expect(f.children).toHaveLength(5);
+    expect(f.textContent).toBe('Esc close \u00b7 \u2318[ back \u00b7 1 of 1 opened');
+  });
+
   it('a result with neither a target nor a binding offers no Open in Browse', async () => {
     stubFleetFetch(routes());
     render(<Harness bound="" onBrowse={vi.fn()} />);

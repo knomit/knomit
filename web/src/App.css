@@ -54,13 +54,14 @@ a { color: inherit; }
    remembered width; the column narrows to fit, it is not overlaid. */
 .k-chat-body { flex: 1 1 0; min-height: 0; min-width: 0; display: flex; overflow: hidden; }
 .k-chat-main { flex: 1 1 0; min-width: 0; min-height: 0; }
-.k-chat-result { width: var(--k-panel-w, 470px); max-width: 60%; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; background: #111; }
+.k-chat-result { width: var(--k-panel-w, 470px); max-width: 60%; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; background: #111;
+  /* mockup.html .side */ border-left: 1px solid #262626; box-shadow: -18px 0 30px -24px rgba(0,0,0,.8); }
 /* At a phone width the side panel STACKS ABOVE the chat, full width, and the
    splitter goes (there is nothing to drag sideways); the page never scrolls
    sideways because of it. These come AFTER the base rule above, so they win by
    order and need no override flag. */
 @media (max-width: 640px) {
-  .k-chat-result { width: 100%; max-width: 100%; max-height: 50%; border-top: none; border-bottom: 1px solid #222; order: -1; }
+  .k-chat-result { width: 100%; max-width: 100%; max-height: 50%; border-left: none; box-shadow: none; border-top: none; border-bottom: 1px solid #222; order: -1; }
   .k-chat-body > [data-testid="chat-panel-splitter"] { display: none; }
 }
 /* The link a click opened stays marked (the design's .fp.open). In the narrowed

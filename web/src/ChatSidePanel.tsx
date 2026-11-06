@@ -4,7 +4,7 @@ import { ChatFactView } from './ChatFactView';
 import { ChatResultPanel } from './ChatResultPanel';
 import { FacetSplitter } from './FacetColumns';
 import type { ChatCall } from './chatApi';
-import { toolRowLabel } from './chatState';
+import { bindTarget, toolKind, toolRowLabel } from './chatState';
 import { crumbOf, shownEntry } from './chatPanelState';
 import type { PanelAction, PanelState } from './chatPanelState';
 import {
@@ -23,7 +23,7 @@ const ICON_EXTERNAL = svg(11, <><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V
 /** The footer's "Esc close" / "⌘[ back": the key drawn as a keycap, then its word. */
 const keyHint = (hint: string) => {
   const i = hint.indexOf(' ');
-  return <><span style={keycap}>{hint.slice(0, i)}</span>{hint.slice(i)}</>;
+  return <><span style={keycap}>{hint.slice(0, i)}</span><span>{hint.slice(i)}<span style={dot}> · </span></span></>;
 };
 
 /** A string argument of a tool call, or ''. */
@@ -87,7 +87,10 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
     // force when it ran (the handle in `binding` is opaque, so it is not read).
     const file = arg(call, 'file', 'path');
     const path = file.replace(/^kb:\/\/[^/]+\//, '');
-    const repo = arg(call, 'repo', 'lens', 'target') || boundForRef.current?.(callId) || '';
+    // A bind names its own target (bindTarget's rule: lens, repo, name, target), and it is that, not the binding in
+    // force BEFORE it ran, that the call belongs to. Other calls name a repo or lens, else the binding in force.
+    const own = toolKind(call.name) === 'bind' ? bindTarget({ id: callId, name: call.name, state: 'done', isError: call.is_error, args: call.arguments }) : arg(call, 'repo', 'lens', 'target');
+    const repo = own || boundForRef.current?.(callId) || '';
     // The mockup's "repo / path / dir" when the call names a file; otherwise the repo it ran in, then the tool.
     const crumb = path ? crumbOf(repo || toolRowLabel(call.name), path) : [repo, toolRowLabel(call.name)].filter(Boolean);
     const browse = call.name === 'knomit_materialize' && !call.is_error && repo && path ? { repo, path: file } : undefined;
@@ -148,7 +151,7 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
             : <ChatFactView repo={entry.repo} branch={entry.branch} path={entry.path} commit={entry.commit} />}
         </div>
         <div data-testid="chat-panel-footer" style={footer}>
-          {keyHint(PANEL_KEY_CLOSE)}<span style={dot}> · </span>{keyHint(PANEL_KEY_BACK)}<span style={dot}> · </span>
+          {keyHint(PANEL_KEY_CLOSE)}{keyHint(PANEL_KEY_BACK)}
           <span style={{ marginLeft: 'auto' }}>{panelOpened(panel.index + 1, panel.entries.length)}</span>
         </div>
       </div>
@@ -181,5 +184,6 @@ const footer: CSSProperties = {
 const keycap: CSSProperties = {
   fontFamily: 'var(--k-font-mono)', fontSize: 9.5, color: '#555', border: '1px solid #2a2a2a', borderRadius: 3, padding: '0 4px',
 };
-// The " · " separators stay in the text (it reads the same to a screen reader) and take no room: the keycaps are the separation.
+// The " · " separators stay in the text (it reads the same to a screen reader) but are zero-width and INSIDE the word's own
+// flex item, so they add no flex gap: the footer's items are exactly the mockup's (keycap, word, keycap, word, count).
 const dot: CSSProperties = { display: 'inline-block', width: 0, overflow: 'hidden', whiteSpace: 'pre' };
