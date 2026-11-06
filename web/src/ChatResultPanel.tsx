@@ -54,7 +54,7 @@ export function ChatResultPanel({ chatId, callId, onCall }: {
             ))}
           </div>
           {active === 'result' && (call.name === 'knomit_materialize' && !call.is_error ? (
-            <div data-testid="chat-result-fact" className="k-prose" style={{ color: '#ccc', lineHeight: 1.7, fontSize: 14 }}>
+            <div data-testid="chat-result-fact" className="k-prose" style={{ color: '#c4c4c4', lineHeight: 1.7, fontSize: 13.5 }}>
               <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>{materializedMarkdown(call.result)}</ReactMarkdown>
             </div>
           ) : (
@@ -69,14 +69,19 @@ export function ChatResultPanel({ chatId, callId, onCall }: {
   );
 }
 
-const panel: CSSProperties = { height: '100%', overflowY: 'auto', padding: '14px 18px', boxSizing: 'border-box' };
-const title: CSSProperties = { fontSize: 12, fontWeight: 600, color: '#9a9a9a', marginBottom: 10 };
-const tabs: CSSProperties = { display: 'flex', gap: 14, borderBottom: '1px solid #222', marginBottom: 12 };
+// Styling is the mockup's side-panel fact: .sfact (padding, h1, p) and .stabs.
+const panel: CSSProperties = { height: '100%', overflowY: 'auto', padding: '18px 20px', boxSizing: 'border-box' };
+const title: CSSProperties = {
+  fontFamily: 'var(--k-font-display)', fontSize: 19, fontWeight: 600, letterSpacing: '-.2px', lineHeight: 1.3,
+  color: '#eee', margin: '0 0 12px',
+};
+const tabs: CSSProperties = { display: 'flex', gap: 2, borderBottom: '1px solid #1e1e1e', marginBottom: 14 };
 const tabBtn = (on: boolean): CSSProperties => ({
-  background: 'none', border: 'none', borderBottom: `2px solid ${on ? '#6ea8fe' : 'transparent'}`, borderRadius: 0,
-  padding: '4px 0 6px', marginBottom: -1, cursor: 'pointer', fontSize: 12, color: on ? '#e4e4e4' : '#777',
+  background: 'none', border: 'none', borderRadius: 0, padding: '7px 9px', cursor: 'pointer', fontSize: 11.5,
+  color: on ? '#eee' : '#777', boxShadow: on ? 'inset 0 -2px 0 #6ea8fe' : 'none',
 });
 const pre = (error: boolean): CSSProperties => ({
-  margin: 0, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'var(--k-font-mono)',
-  color: error ? '#e0a0a0' : '#bbb',
+  margin: 0, padding: '10px 12px', fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+  fontFamily: 'var(--k-font-mono)', background: '#0c0c0c', border: '1px solid #1e1e1e', borderRadius: 6,
+  color: error ? '#e0a0a0' : '#c4c4c4',
 });

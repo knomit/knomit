@@ -238,11 +238,11 @@ export const contextNumCtx = (n: string): string => `${n} (num_ctx)`;
 /** The cloud provider's "where it runs" prefix: "cloud · ANTHROPIC_API_KEY". */
 export const PROVIDER_CLOUD = 'cloud';
 
-// ── PENDING APPROVAL ──
+// ── APPROVED 2026-11-06 ──
 // Side panel (chat UX v2, PR 3). The first six groups are the design's copy
 // table ("Side panel", "Fact links") verbatim; the last three labels are GAPS:
 // the design gives the back, forward and close buttons no accessible name, and
-// these are the shortest words that name them. They need the user's ruling.
+// these are the shortest words that name them. Approved by the user with the rest.
 
 /** Header button. Design copy table, "Fact links" row. */
 export const PANEL_OPEN_IN_BROWSE = 'Open in Browse';

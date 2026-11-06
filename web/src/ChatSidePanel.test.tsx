@@ -130,6 +130,22 @@ describe('ChatSidePanel', () => {
     expect(screen.getByTestId('chat-result-text')).toHaveTextContent('RESULT-ONE');
   });
 
+  it('draws Esc and the back key as keycaps and right-aligns the count (mockup .kbdh)', async () => {
+    stubFleetFetch(routes());
+    render(<Harness bound="r1" />);
+    act(() => api.open(R1));
+    await screen.findByTestId('chat-result-text');
+    const f = screen.getByTestId('chat-panel-footer');
+    const caps = [...f.querySelectorAll('span')].filter(e => e.style.border.includes('solid')).map(e => e.textContent);
+    expect(caps).toEqual(['Esc', '\u2318[']);
+    const count = [...f.querySelectorAll('span')].find(e => e.textContent === '1 of 1 opened')!;
+    expect(count.style.marginLeft).toBe('auto');
+    // The header arrows are the mockup's 26px buttons holding a 13px stroke icon.
+    const back = screen.getByTestId('chat-panel-back');
+    expect(back.style.width).toBe('26px');
+    expect(back.querySelector('svg')).toHaveAttribute('width', '13');
+  });
+
   it('back and forward move across a mixed history, with the footer counting N of M', async () => {
     stubFleetFetch(routes());
     render(<Harness bound="r1" />);
