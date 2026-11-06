@@ -38,6 +38,14 @@ const callsTo = (fx: ReturnType<typeof stubFleetFetch>, part: string) => fx.call
 beforeEach(() => { installFakeEventSource(); });
 afterEach(() => { cleanup(); uninstallFakeEventSource(); vi.unstubAllGlobals(); });
 
+
+/** The turn footer's parts, as the page shows them. */
+const footerOf = (scope: HTMLElement = document.body) => ({
+  cost: within(scope).getByTestId('chat-cost').textContent,
+  tokens: within(scope).getByTestId('chat-tokens').textContent,
+  cached: within(scope).getByTestId('chat-cached').textContent,
+});
+
 describe('ChatFacet', () => {
   it('puts the chat panel in the left slot and the result panel in the right slot', async () => {
     mount();
@@ -53,38 +61,35 @@ describe('ChatFacet', () => {
     const columns = screen.getByTestId('chat-columns');
     expect(columns).toContainElement(panel);
     expect(columns).toContainElement(result);
-    // Browse's order: the list, then the fact.
+    // The chat first, then the result beside it.
     expect(panel.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // And in FacetColumns' own slots: the left (index) column holds the chat.
-    expect(within(screen.getByTestId('facet-index-column')).getByTestId('chat-panel')).toBe(panel);
     expect(within(screen.getByTestId('settings-scroll')).getByTestId('chat-result-panel')).toBe(result);
   });
 
-  it('stacks below FACET_NARROW_PX, as Browse\'s columns do', async () => {
-    const desc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
-    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 375 });
-    try {
-      mount();
-      await screen.findByTestId('chat-turn-0');
-      expect(screen.getByTestId('chat-columns')).toHaveAttribute('data-layout', 'stacked');
-    } finally {
-      if (desc) Object.defineProperty(HTMLElement.prototype, 'clientWidth', desc);
-      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
-    }
+  it('the transcript and the composer share one centered 740px column', async () => {
+    mount();
+    await screen.findByTestId('chat-turn-0');
+    const col = screen.getByTestId('chat-transcript').firstElementChild as HTMLElement;
+    expect(col.style.width).toBe('740px');
+    expect(col.style.maxWidth).toBe('calc(100% - 48px)');
+    expect(screen.getByTestId('chat-composer-row').closest('[style*="740px"]')).not.toBeNull();
   });
 
   it('a group is collapsed by default and fetches a result only on select', async () => {
     const { fx } = mount();
     await screen.findByTestId('chat-turn-0');
     const toggle = screen.getByTestId('chat-tool-group-toggle');
-    expect(toggle).toHaveTextContent('Used Knomit');
+    // The activity line: the summary worded from the one knomit_repos call (no
+    // wording for it, so "used N tools"), and the step count.
+    expect(screen.getByTestId('chat-activity-summary').textContent).toBe('Used 1 tool');
+    expect(screen.getByTestId('chat-activity-steps').textContent).toBe('1 step');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByTestId('chat-tool-row-tu_1')).toBeNull();
     expect(callsTo(fx, '/calls/')).toHaveLength(0);
 
     fireEvent.click(toggle);
     const row = screen.getByTestId('chat-tool-row-tu_1');
-    expect(row).toHaveTextContent('knomit: Knomit repos ▸');
+    expect(row).toHaveTextContent('knomit: Knomit repos');
     // Opening the group is not selecting a row.
     expect(callsTo(fx, '/calls/')).toHaveLength(0);
 
@@ -143,7 +148,7 @@ describe('ChatFacet', () => {
       es.emit('turn_done', { turn: 0 });
     });
     expect(screen.getByTestId('chat-text')).toHaveTextContent('hi there');
-    expect(screen.getByTestId('chat-usage').textContent).toBe('input 11 · cache read 22 · cache write 33 · output 44 · $0.0123');
+    expect(footerOf()).toEqual({ cost: '$0.0123', tokens: '11 in · 44 out', cached: '33% cached' });
     expect(screen.getByTestId('chat-send')).toBeInTheDocument();
   });
 
@@ -151,7 +156,7 @@ describe('ChatFacet', () => {
     mount(snapshot({ items: [{ kind: 'user', text: 'q' }] }));
     await screen.findByTestId('chat-turn-0');
     act(() => { latestStream('/chats/chat-a/events')!.emit('usage', { usage: { input: 11, cache_read: 22, cache_write: 33, output: 44 }, turn: 0 }); });
-    expect(screen.getByTestId('chat-usage').textContent).toBe('input 11 · cache read 22 · cache write 33 · output 44 · cost unknown');
+    expect(footerOf().cost).toBe('–');
   });
 
   it('shows the server\'s warning and a refusal as sent, keeps the partial text and offers no retry', async () => {
@@ -167,7 +172,7 @@ describe('ChatFacet', () => {
     expect(screen.getByTestId('chat-turn-error').textContent).toBe('The model declined to answer.');
     expect(screen.getByTestId('chat-text')).toHaveTextContent('partial answer');
     // The only buttons are the group-less panel's: Send. No retry.
-    expect(screen.getAllByRole('button').map(b => b.textContent)).toEqual(['Send']);
+    expect(screen.getAllByRole('button').map(b => b.getAttribute('aria-label') ?? b.textContent)).toEqual(['Send']);
   });
 
   it('every SSE connection goes through openEventStream, and is closed on unmount', async () => {
@@ -298,7 +303,10 @@ describe('ChatFacet: turn ends and repeats', () => {
       es.emit('usage', { ...u, turn: 0 });
       es.emit('tool_call', { id: 'tu_1', name: 'knomit_repos', state: 'running', turn: 0 });
     });
-    expect(screen.getByTestId('chat-usage').textContent).toBe('input 11 · cache read 22 · cache write 33 · output 44 · $0.5000');
+    // The turn is still running: its footer waits for its end.
+    expect(screen.queryByTestId('chat-usage')).toBeNull();
+    act(() => { es.emit('turn_done', { turn: 0 }); });
+    expect(footerOf()).toEqual({ cost: '$0.5000', tokens: '11 in · 44 out', cached: '33% cached' });
     fireEvent.click(screen.getByTestId('chat-tool-group-toggle'));
     expect(screen.getByTestId('chat-tool-row-tu_1')).toHaveAttribute('data-state', 'done');
     expect(screen.getByTestId('chat-tool-select-tu_1')).toBeEnabled();
@@ -421,11 +429,10 @@ describe('ChatFacet: the snapshot is the whole truth', () => {
     ];
     mount(snapshot({ items }));
     await screen.findByTestId('chat-turn-1');
-    const lines = () => screen.getAllByTestId('chat-usage').map(e => e.textContent);
-    const expected = [
-      'input 1 · cache read 2 · cache write 3 · output 4 · $0.2500',
-      'input 5 · cache read 6 · cache write 7 · output 8 · cost unknown',
-    ];
+    const lines = () => screen.getAllByTestId('chat-usage').map(e => [
+      within(e).getByTestId('chat-cost').textContent, within(e).getByTestId('chat-tokens').textContent,
+    ]);
+    const expected = [['$0.2500', '1 in · 4 out'], ['–', '5 in · 8 out']];
     expect(lines()).toEqual(expected);
     expect(screen.getByTestId('chat-warning').textContent).toBe('The server warns here.');
 
@@ -481,7 +488,7 @@ describe('ChatFacet: events are routed by turn index', () => {
       es.emit('usage', { usage: { input: 5, cache_read: 0, cache_write: 0, output: 1 }, seq: 1, turn: 2 });
     });
     expect(within(screen.getByTestId('chat-turn-1')).getByTestId('chat-approval-tu_9')).toBeInTheDocument();
-    expect(within(screen.getByTestId('chat-turn-1')).getByTestId('chat-usage')).toHaveTextContent('input 5');
+    expect(within(screen.getByTestId('chat-turn-1')).queryByTestId('chat-usage')).toBeNull(); // still running: the footer waits
     // The previous turn is untouched: its text and (absent) usage.
     expect(within(screen.getByTestId('chat-turn-0')).queryByTestId('chat-usage')).toBeNull();
     expect(within(screen.getByTestId('chat-turn-0')).queryByTestId('chat-approval-tu_9')).toBeNull();

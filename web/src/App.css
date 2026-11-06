@@ -44,4 +44,37 @@ a { color: inherit; }
   .k-bar-tabs button { padding: 0 8px !important; flex-shrink: 0; }
   .k-bar-label { min-width: 96px !important; }
   .k-bar-name { min-width: 3ch; }
+  .k-bar-pill { display: none !important; }
+  .k-chat-body { flex-direction: column !important; }
+  .k-chat-result { width: 100% !important; max-height: 45%; border-left: none !important; border-top: 1px solid #222; order: -1; }
 }
+
+/* The chat: a centered column (ChatPanel), and the result panel beside it
+   while a tool row is selected. */
+.k-chat-body { flex: 1 1 0; min-height: 0; min-width: 0; display: flex; overflow: hidden; }
+.k-chat-main { flex: 1 1 0; min-width: 0; min-height: 0; }
+.k-chat-result { width: 420px; max-width: 50%; flex-shrink: 0; overflow-y: auto; border-left: 1px solid #222; }
+
+/* A user message: a faint strip with a 2px rule, normal weight. Not a
+   blockquote: it is the person's own words. */
+.k-chat-user { border-left: 2px solid #3a3d42; background: #18191b; padding: 8px 13px 8px 12px; border-radius: 0 6px 6px 0;
+  margin-bottom: 12px; color: #e4e4e4; font-size: 13.5px; line-height: 1.5; font-weight: 400; }
+.k-chat-user p, .k-chat-user ul, .k-chat-user ol { margin: 0 0 6px; }
+.k-chat-user > :last-child { margin-bottom: 0; }
+.k-chat-user code { background: #202225; border-color: #2c2e32; color: #c9cdd4; }
+
+/* The answer: no box. */
+.k-chat-answer { font-size: 14px; line-height: 1.65; color: #d0d0d0; margin: 6px 0; }
+.k-chat-answer h1, .k-chat-answer h2, .k-chat-answer h3, .k-chat-answer h4 {
+  font-family: var(--k-font-display); font-size: 14.5px; font-weight: 600; border-bottom: none; }
+.k-chat-answer li::marker { color: #555; }
+/* A quote in an answer must not read as a user message: no ground, italic, a
+   thin rule. */
+.k-chat-answer blockquote { background: none; font-style: italic; color: #9a9a9a; border-left: 1px solid #2c2c2c; padding: 0 0 0 12px; }
+.k-chat-answer table { display: table; width: 100%; border-collapse: separate; border-spacing: 0; border: 1px solid #262626; border-radius: 8px; overflow: hidden; }
+.k-chat-answer th { background: #171717; color: #999; font-size: 10.5px; text-transform: uppercase; border-color: #262626; padding: 8px 11px; }
+.k-chat-answer td { border-color: #262626; padding: 8px 11px; }
+
+/* The streaming caret: until the turn ends. */
+.k-chat-caret { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: text-bottom; background: #e8c27a;
+ }

@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { FacetColumns } from './FacetColumns';
+import { publishChatPill, forgetChatPill } from './chatPillStore';
 import { ChatPanel } from './ChatPanel';
 import { ChatResultPanel } from './ChatResultPanel';
 import { ChatSettings } from './ChatSettings';
 import {
-  answerChatApproval, cancelChatTurn, endChatOnPageHide, getChat, openChatEvents, sendChatTurn,
+  answerChatApproval, cancelChatTurn, endChatOnPageHide, getChat, getChatContext, openChatEvents, sendChatTurn,
 } from './chatApi';
 import type { ApprovalDecision, ChatApproval, ChatInfo } from './chatApi';
-import { chatReducer, initialChatState } from './chatState';
+import { chatReducer, initialChatState, sessionCost } from './chatState';
 import type { ToolCall, UsagePayload } from './chatState';
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -76,7 +76,8 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
     on('ready', refresh);
     on('text_delta', d => dispatch({ kind: 'text_delta', text: String(d.text ?? ''), turn: turnOf(d) }));
     on('tool_call', d => dispatch({
-      kind: 'tool_call', id: String(d.id), name: String(d.name), state: d.state === 'done' ? 'done' : 'running', is_error: d.is_error === true, turn: turnOf(d),
+      kind: 'tool_call', id: String(d.id), name: String(d.name), state: d.state === 'done' ? 'done' : 'running', is_error: d.is_error === true,
+      ...(d.arguments !== undefined ? { arguments: d.arguments } : {}), turn: turnOf(d),
     }));
     on('approval', d => dispatch({ kind: 'approval', approval: d as unknown as ChatApproval }));
     on('usage', d => dispatch({
@@ -153,11 +154,10 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
 }
 
 /**
- * ChatFacet is the body of a chat target, and it has Browse's layout: the chat
- * panel where Browse's results list sits (the left column, the same width and
- * splitter), and, once a tool row is selected, the result panel where Browse's
- * single fact sits. With no row selected there is no result panel. The Settings
- * tab shows what the chat has authorized.
+ * ChatFacet is the body of a chat target: the chat panel as a centered column,
+ * and, once a tool row is selected, the result panel beside it. With no row
+ * selected there is no result panel. The Settings tab shows what the chat has
+ * authorized.
  *
  * App keeps one mounted per live chat, so a chat's stream and transcript
  * survive the reader looking at a repository.
@@ -173,19 +173,40 @@ export function ChatFacet({ chat, facet, onGone }: {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const onSelect = useCallback((c: ToolCall) => setSelectedId(cur => (cur === c.id ? null : c.id)), []);
 
+  // The model's context window, for the composer's meter and the top bar's
+  // pill. A chat whose window cannot be read keeps 0 (no "/ window", no fill).
+  const [ctxWindow, setWindow] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    getChatContext(chat.id).then(c => { if (!cancelled) setWindow(c.window); }).catch(() => { /* no meter denominator */ });
+    return () => { cancelled = true; };
+  }, [chat.id]);
+  // The top bar sits outside this component: hand it what the pill shows.
+  const cost = sessionCost(state.turns);
+  useEffect(() => {
+    publishChatPill(chat.id, { cost, used: state.ctxTokens, window: ctxWindow });
+  }, [chat.id, cost, state.ctxTokens, ctxWindow]);
+  useEffect(() => () => forgetChatPill(chat.id), [chat.id]);
+
   // The chat stays mounted under Settings (hidden), so what was typed and
   // which row was open are still there on the way back.
   return (
     <>
       {facet === 'settings' && <ChatSettings chatId={chat.id} />}
       <div data-testid="chat-facet" style={{ flex: 1, minHeight: 0, display: facet === 'chat' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
-        <FacetColumns
-          testId="chat-columns"
-          left={<ChatPanel state={state} selectedId={selectedId} actionError={actionError}
-            onSend={send} onStop={stop} onSelect={onSelect} onAnswer={answer} />}
-        >
-          {selectedId && <ChatResultPanel chatId={chat.id} callId={selectedId} />}
-        </FacetColumns>
+        <div data-testid="chat-columns" className="k-chat-body">
+          <div className="k-chat-main">
+            <ChatPanel state={state} selectedId={selectedId} actionError={actionError} context={{ used: state.ctxTokens, window: ctxWindow }}
+              onSend={send} onStop={stop} onSelect={onSelect} onAnswer={answer} />
+          </div>
+          {/* Until the side panel (a later change) replaces it, a result opens
+              here, and only while a row is selected. */}
+          {selectedId && (
+            <div data-testid="settings-scroll" className="k-chat-result">
+              <ChatResultPanel chatId={chat.id} callId={selectedId} />
+            </div>
+          )}
+        </div>
       </div>
     </>
   );

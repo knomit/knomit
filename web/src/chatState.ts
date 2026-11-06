@@ -28,7 +28,13 @@
 // takes its local turn out outright.
 import type { ChatApproval, ChatSnapshot, ChatViewItem } from './chatApi';
 
-export interface ToolCall { id: string; name: string; state: 'running' | 'done'; isError: boolean }
+export interface ToolCall {
+  id: string; name: string; state: 'running' | 'done'; isError: boolean;
+  /** The call's arguments: in the snapshot always, and on a live event when the
+   *  server sends them (today it does not, so a live row has none until the
+   *  next snapshot). */
+  args?: unknown;
+}
 export type ChatPart = { kind: 'text'; text: string } | { kind: 'group'; calls: ToolCall[] };
 export interface TurnUsage { input: number; cacheRead: number; cacheWrite: number; output: number }
 
@@ -68,6 +74,9 @@ export interface ChatState {
   staleSeq: number;
   /** A snapshot has been applied. */
   loaded: boolean;
+  /** The size in tokens of the latest request's prompt (input + cache read +
+   *  cache write): what the context meter shows as used. */
+  ctxTokens: number;
 }
 
 /** The `usage` event's payload, as the server names the fields. */
@@ -85,7 +94,7 @@ export type ChatEvent =
    *  never started, so it is taken back out whatever it holds. */
   | { kind: 'send_failed'; sendId: number }
   | { kind: 'text_delta'; text: string; turn: number }
-  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; turn: number }
+  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; arguments?: unknown; turn: number }
   | { kind: 'approval'; approval: ChatApproval }
   | { kind: 'approval_answered'; callId: string }
   | { kind: 'usage'; usage: UsagePayload; cost_usd?: number; seq?: number; turn: number }
@@ -96,7 +105,7 @@ export type ChatEvent =
   | { kind: 'turn_error'; message: string; cancelled?: boolean; turn: number }
   | { kind: 'chat_end' };
 
-export const initialChatState: ChatState = { turns: [], running: false, approvals: {}, ended: false, lastUsageSeq: 0, staleSeq: 0, loaded: false };
+export const initialChatState: ChatState = { turns: [], running: false, approvals: {}, ended: false, lastUsageSeq: 0, staleSeq: 0, loaded: false, ctxTokens: 0 };
 
 const newTurn = (user = ''): ChatTurn => ({ user, parts: [], usage: null, costUsd: null, error: null, warning: null });
 
@@ -145,7 +154,7 @@ function addItem(turns: ChatTurn[], item: ChatViewItem, at: number): void {
   if (!turns.length) turns.push(newTurn());
   const t = turns[turns.length - 1];
   if (item.kind === 'assistant') { t.parts.push({ kind: 'text', text: item.text ?? '' }); return; }
-  const c: ToolCall = { id: item.id ?? '', name: item.name ?? '', state: item.state ?? 'done', isError: !!item.is_error };
+  const c: ToolCall = { id: item.id ?? '', name: item.name ?? '', state: item.state ?? 'done', isError: !!item.is_error, ...(item.arguments !== undefined ? { args: item.arguments } : {}) };
   const last = t.parts[t.parts.length - 1];
   if (last?.kind === 'group') last.calls.push(c); else t.parts.push({ kind: 'group', calls: [c] });
 }
@@ -162,9 +171,20 @@ export function snapshotState(snap: ChatSnapshot, prev: ChatState = initialChatS
   }
   const approvals: Record<string, ChatApproval> = {};
   for (const a of snap.pending_approvals ?? []) approvals[a.call_id] = a;
+  // The snapshot carries each turn's usage SUMMED over its requests, not the
+  // last request's prompt size. The live usage event of the latest request the
+  // snapshot includes (its seq at or below the snapshot's usage_seq) is the
+  // exact number, so it is kept. Without one (a chat the page joined mid-way),
+  // the latest turn's sum is averaged over its requests, taken as one more than
+  // its tool calls: an estimate until the server reports the last prompt's size.
+  const lastTurn = [...turns].reverse().find(t => t.usage);
+  const calls = lastTurn ? lastTurn.parts.reduce((n, p) => n + (p.kind === 'group' ? p.calls.length : 0), 0) : 0;
+  const fromSnapshot = lastTurn?.usage ? Math.round(promptTokens(lastTurn.usage) / (calls + 1)) : 0;
+  const keepLive = prev.ctxTokens > 0 && prev.lastUsageSeq >= (snap.usage_seq ?? 0);
   return {
     turns, running: snap.running, approvals, ended: false,
     lastUsageSeq: snap.usage_seq ?? prev.lastUsageSeq, staleSeq: prev.staleSeq, loaded: true,
+    ctxTokens: keepLive ? prev.ctxTokens : fromSnapshot,
   };
 }
 
@@ -212,7 +232,7 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
               : p),
           };
         }
-        const c: ToolCall = { id: e.id, name: e.name, state: e.state, isError: !!e.is_error };
+        const c: ToolCall = { id: e.id, name: e.name, state: e.state, isError: !!e.is_error, ...(e.arguments !== undefined ? { args: e.arguments } : {}) };
         const last = t.parts[t.parts.length - 1];
         const parts = last?.kind === 'group'
           ? [...t.parts.slice(0, -1), { kind: 'group' as const, calls: [...last.calls, c] }]
@@ -232,7 +252,7 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
     }
     case 'usage': {
       if (e.seq !== undefined && e.seq <= s.lastUsageSeq) return s;
-      return onTurn({ ...s, lastUsageSeq: e.seq ?? s.lastUsageSeq }, e.turn, t => {
+      return onTurn({ ...s, lastUsageSeq: e.seq ?? s.lastUsageSeq, ctxTokens: e.usage.input + e.usage.cache_read + e.usage.cache_write }, e.turn, t => {
         const u = t.usage ?? { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
         return {
           ...t,
@@ -330,4 +350,79 @@ export function usageLine(u: TurnUsage, costUsd: number | null): string {
     `input ${u.input}`, `cache read ${u.cacheRead}`, `cache write ${u.cacheWrite}`, `output ${u.output}`,
     costUsd === null ? 'cost unknown' : formatCost(costUsd),
   ].join(' · ');
+}
+
+/** promptTokens is the size of a request's prompt: uncached input plus the
+ *  cached parts. */
+export const promptTokens = (u: TurnUsage): number => u.input + u.cacheRead + u.cacheWrite;
+
+/** cachedPercent is the share of a turn's prompt served from cache:
+ *  cache_read / (input + cache_read + cache_write), rounded; 0 for no prompt. */
+export function cachedPercent(u: TurnUsage): number {
+  const total = promptTokens(u);
+  return total === 0 ? 0 : Math.round((u.cacheRead / total) * 100);
+}
+
+/** compactCount words a token count compactly: 950, 2.4K, 68K, 1.1M. */
+export function compactCount(n: number): string {
+  const f = (v: number, unit: string) => `${v >= 100 ? Math.round(v) : Math.round(v * 10) / 10}${unit}`;
+  if (n >= 1_000_000) return f(n / 1_000_000, 'M');
+  if (n >= 1_000) return f(n / 1_000, 'K');
+  return String(n);
+}
+
+/** sessionCost sums the turns' estimated costs; null when no turn was priced. */
+export function sessionCost(turns: ChatTurn[]): number | null {
+  const priced = turns.filter(t => t.costUsd !== null);
+  return priced.length ? priced.reduce((a, t) => a + (t.costUsd ?? 0), 0) : null;
+}
+
+const argOf = (args: unknown, keys: string[]): string => {
+  if (!args || typeof args !== 'object') return '';
+  for (const k of keys) {
+    const v = (args as Record<string, unknown>)[k];
+    if (typeof v === 'string' && v) return v;
+  }
+  return '';
+};
+
+/** The tools the activity line has wording for. */
+export type ToolKind = 'bind' | 'query' | 'read';
+export function toolKind(name: string): ToolKind | null {
+  switch (name) {
+    case 'knomit_bind': return 'bind';
+    case 'knomit_query': return 'query';
+    case 'knomit_materialize': case 'knomit_explain': return 'read';
+    default: return null;
+  }
+}
+
+/** bindTarget is the repo or lens a knomit_bind call names. */
+export const bindTarget = (c: ToolCall): string => argOf(c.args, ['lens', 'repo', 'name', 'target']);
+
+/** The target a call acts on: what its own arguments name, else the target of
+ *  the binding in force (`bound`). Empty when neither is known. */
+export const callTarget = (c: ToolCall, bound: string): string =>
+  (toolKind(c.name) === 'bind' ? bindTarget(c) : argOf(c.args, ['lens', 'repo'])) || bound;
+
+/** The query text of a knomit_query call. */
+export const queryText = (c: ToolCall): string => argOf(c.args, ['text']);
+
+/** keyArg is the one argument a timeline row shows in mono: the query text,
+ *  the binding's target, or what a read names. Empty when the call has none
+ *  (a live call whose arguments have not arrived). */
+export function keyArg(c: ToolCall): string {
+  switch (toolKind(c.name)) {
+    case 'bind': return bindTarget(c);
+    case 'query': return queryText(c);
+    case 'read': return argOf(c.args, ['file', 'path', 'handle', 'root']);
+    default: return '';
+  }
+}
+
+/** The target in force after `calls`: the last bind's, starting from `bound`. */
+export function boundAfter(calls: ToolCall[], bound: string): string {
+  let b = bound;
+  for (const c of calls) if (toolKind(c.name) === 'bind') b = bindTarget(c) || b;
+  return b;
 }

@@ -567,6 +567,12 @@ describe('TopBar — a chat target', () => {
     expect(screen.getByTestId('target-label')).toHaveTextContent('claude-test-x');
   });
 
+  it('the crumb shows the model display name (not its id) for a chat that also carries its id', () => {
+    render(bar({ facets: ['chat', 'settings'], facet: 'chat', label: { kind: 'chat', name: 'Test X 1.0', id: 'chat-a', provider: { name: 'prov-a', kind: 'anthropic' } } }));
+    expect(screen.getByTestId('target-label')).toHaveTextContent('Test X 1.0');
+    expect(screen.getByTestId('target-label')).not.toHaveTextContent('claude-test-x');
+  });
+
   const crumb = (name: string, kind: string) =>
     render(bar({ facets: ['chat', 'settings'], facet: 'chat', label: { kind: 'chat', name: 'model-x', provider: { name, kind } } }));
   const ANTHROPIC_PATH = 'M17.3041';

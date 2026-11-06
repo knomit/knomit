@@ -393,6 +393,8 @@ export interface TargetLabel {
   /** A chat's provider: its configured name and its kind. The crumb draws the
    *  kind's product mark, named by the name, in place of the generic glyph. */
   provider?: { name: string; kind: string };
+  /** A chat target's id: what the top bar's session pill is keyed by. */
+  id?: string;
   draft?: boolean;
 }
 
@@ -431,7 +433,7 @@ export function targetLabelFor(
       // the crumb. A kind the list does not know yet keeps the chat glyph.
       const chat = chats.find(c => c.id === target.id);
       const kind = chat ? chatProviders.find(p => p.name === chat.provider)?.kind ?? '' : '';
-      return { kind: 'chat', name: chat ? (chat.name || chat.model) : '', ...(chat ? { provider: { name: chat.provider, kind } } : {}) };
+      return { kind: 'chat', name: chat ? (chat.name || chat.model) : '', id: target.id, ...(chat ? { provider: { name: chat.provider, kind } } : {}) };
     }
     case 'archived':
       return { kind: 'repo', name: archived.find(a => a.id === target.id)?.name ?? '', chip: { text: 'archived', tone: 'archived' } };
