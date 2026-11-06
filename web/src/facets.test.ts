@@ -522,7 +522,7 @@ describe('a chat target', () => {
     const chats = [{ id: 'chat-a', provider: 'prov-a', model: 'claude-test-x' }];
     const providers = [{ name: 'prov-a', kind: 'ollama', models: [] }];
     expect(targetLabelFor({ kind: 'chat', id: 'chat-a' }, repos, [], [], null, chats, providers)).toEqual(
-      { kind: 'chat', name: 'claude-test-x', provider: { name: 'prov-a', kind: 'ollama' } });
+      { kind: 'chat', name: 'claude-test-x', id: 'chat-a', provider: { name: 'prov-a', kind: 'ollama' } });
     expect(targetLabelFor({ kind: 'chat', id: 'chat-a' }, repos, [], [], null, chats).provider).toEqual({ name: 'prov-a', kind: '' });
     expect(DRAFT_NAME.chat).toBe('New chat');
     expect(targetLabelFor({ kind: 'draft', draft: 'chat' }, repos, [], [])).toEqual({ kind: 'chat', name: 'New chat', draft: true });

@@ -7,6 +7,7 @@ import { BookIcon, FleetIcon, GearIcon, LayersIcon, ProviderIcon } from './icons
 import { noMouseFocus } from './utils';
 import { useMatFocus } from './matFocus';
 import { otherRepoFailing } from './facets';
+import { ChatPill } from './ChatPill';
 import type { Facet, ServerPage, TargetLabel } from './facets';
 
 interface Props {
@@ -317,6 +318,9 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
         )}
 
         <div style={{ flex: 1 }} />
+        {!serverOpen && target.kind === 'chat' && target.id && !target.draft && (
+          <span className="k-bar-pill" style={{ display: 'flex' }}><ChatPill chatId={target.id} /></span>
+        )}
 
         {/* One control, one anchor: the gear opens the server pages, and the
             same button in the same pixel takes you back from them. While they
