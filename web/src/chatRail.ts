@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { ChatInfo } from './chatApi';
 import {
@@ -57,20 +57,14 @@ export function recentChats(chats: ChatInfo[]): ChatInfo[] {
  *  "new"), and the chat on screen is always seen. */
 export function useSeenTurns(chats: ChatInfo[], shownId: string | null): Record<string, number> {
   const [seen, setSeen] = useState<Record<string, number>>({});
-  useEffect(() => {
-    setSeen(prev => {
-      let next = prev;
-      for (const c of chats) {
-        const done = completedTurns(c);
-        if (prev[c.id] === undefined || (c.id === shownId && prev[c.id] !== done)) {
-          if (next === prev) next = { ...prev };
-          next[c.id] = done;
-        }
-      }
-      return next;
-    });
-  }, [chats, shownId]);
-  return seen;
+  // Adjusted during render (the documented pattern for state derived from
+  // props), so the row and its colour arrive in one paint.
+  const changes = chats
+    .filter(c => seen[c.id] === undefined || (c.id === shownId && seen[c.id] !== completedTurns(c)))
+    .map(c => [c.id, completedTurns(c)] as const);
+  const next = changes.length ? { ...seen, ...Object.fromEntries(changes) } : seen;
+  if (next !== seen) setSeen(next);
+  return next;
 }
 
 // A change in what a chat is doing (a turn started or ended, an approval asked
