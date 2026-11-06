@@ -395,6 +395,8 @@ export interface TargetLabel {
   provider?: { name: string; kind: string };
   /** A chat target's id: what the top bar's session pill is keyed by. */
   id?: string;
+  /** Grey text after the name: a chat's model display name, after its title. */
+  sub?: string;
   draft?: boolean;
 }
 
@@ -429,11 +431,19 @@ export function targetLabelFor(
     case 'fleet':
       return { kind: 'fleet', name: fleet?.fleet_repo || 'fleet', chip: fleetChip(fleet) };
     case 'chat': {
-      // A chat is named by its model; its provider's mark (by kind) stands in
+      // A chat is named by its title; its provider's mark (by kind) stands in
       // the crumb. A kind the list does not know yet keeps the chat glyph.
       const chat = chats.find(c => c.id === target.id);
       const kind = chat ? chatProviders.find(p => p.name === chat.provider)?.kind ?? '' : '';
-      return { kind: 'chat', name: chat ? (chat.name || chat.model) : '', id: target.id, ...(chat ? { provider: { name: chat.provider, kind } } : {}) };
+      // The crumb is the chat's title with the model's display name in grey
+      // after it; before the first turn there is no title, so the model's name
+      // is the label and nothing follows it.
+      const model = chat ? (chat.name || chat.model) : '';
+      return {
+        kind: 'chat', name: chat?.title || model, id: target.id,
+        ...(chat?.title && model ? { sub: model } : {}),
+        ...(chat ? { provider: { name: chat.provider, kind } } : {}),
+      };
     }
     case 'archived':
       return { kind: 'repo', name: archived.find(a => a.id === target.id)?.name ?? '', chip: { text: 'archived', tone: 'archived' } };

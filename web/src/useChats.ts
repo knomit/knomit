@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listChats, listChatProviders } from './chatApi';
 import type { ChatInfo, ChatProvider } from './chatApi';
+import { onChatActivity } from './chatRail';
 
 /**
  * useChats is GET /chats: the caller's live chats, which is the BACKING LIST of
@@ -52,7 +53,11 @@ export function useChats(enabled = true): {
     // ends one nobody is attached to), so the list is read again.
     const onFocus = () => load();
     window.addEventListener('focus', onFocus);
-    return () => { cancelled = true; window.removeEventListener('focus', onFocus); };
+    // A chat's own events stream says when it started, finished or asked for
+    // an approval (ChatFacet notifies): the rail's state, title and cost
+    // follow it. There is no chats event stream; this is the live path.
+    const off = onChatActivity(load);
+    return () => { cancelled = true; off(); window.removeEventListener('focus', onFocus); };
   }, [enabled]);
 
   const add = useCallback((c: ChatInfo) => {

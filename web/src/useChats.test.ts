@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { useChats } from './useChats';
+import { notifyChatActivity } from './chatRail';
 
 const A = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
 const B = { id: 'chat-b', provider: 'local', model: 'o1' };
@@ -9,6 +10,21 @@ const listBody = (...chats: unknown[]) => new Response(JSON.stringify({ count: c
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('useChats', () => {
+  it('reads the list again, with the row fields, when a chat reports activity', async () => {
+    const row = (state: string, turns: number) => ({ ...A, title: 'hello', state, turns, last_activity: '2026-11-06T10:00:00Z', cost_usd: 0.5 });
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>()
+      .mockResolvedValueOnce(listBody(row('idle', 0)))
+      .mockResolvedValueOnce(listBody(row('running', 1)));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useChats());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.chats[0].state).toBe('idle');
+    act(() => { notifyChatActivity(); });
+    await waitFor(() => expect(result.current.chats[0].state).toBe('running'));
+    expect(result.current.chats[0]).toMatchObject({ title: 'hello', turns: 1, cost_usd: 0.5, last_activity: '2026-11-06T10:00:00Z' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('loads GET /chats and add() makes a new chat visible in the same render, with no further fetch', async () => {
     const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () => listBody(A));
     vi.stubGlobal('fetch', fetchMock);

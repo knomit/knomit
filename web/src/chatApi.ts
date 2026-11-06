@@ -10,7 +10,14 @@ import { CHAT_SEND_TIMEOUT } from './chatCopy';
 /** One live chat, as GET /chats lists it. */
 /** `name` is the model's display name; the server always sends it (the id when
  *  the config gives none), and a reader falls back to `model` when it is absent. */
-export interface ChatInfo { id: string; provider: string; model: string; name?: string }
+export interface ChatInfo {
+  id: string; provider: string; model: string; name?: string;
+  /** What GET /chats adds for the rail (absent on a chat just created). `title`
+   *  is the first message, cut; `state` is what the chat is doing now;
+   *  `turns` counts the user turns; `cost_usd` is absent when nothing was priced. */
+  title?: string; state?: ChatState; last_activity?: string; started_at?: string; turns?: number; cost_usd?: number;
+}
+export type ChatState = 'idle' | 'running' | 'awaiting_approval' | 'error';
 
 /** A model the picker offers: `name` is what a person sees (its id when the
  *  config gives none), `available` is the provider's own answer, `tools`
@@ -61,7 +68,8 @@ export async function listChatProviders(): Promise<ChatProvider[]> {
 
 export async function listChats(): Promise<ChatInfo[]> {
   const data = await fetchJSON<{ _embedded?: { chats?: ChatInfo[] } }>(chatsUrl());
-  return (data._embedded?.chats ?? []).map(({ id, provider, model, name }) => ({ id, provider, model, name }));
+  return (data._embedded?.chats ?? []).map(({ id, provider, model, name, title, state, last_activity, started_at, turns, cost_usd }) => (
+    { id, provider, model, name, title, state, last_activity, started_at, turns, cost_usd }));
 }
 
 export async function createChat(provider: string, model: string): Promise<ChatInfo> {

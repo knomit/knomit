@@ -503,13 +503,14 @@ describe('TargetRail — chats', () => {
     { id: 'chat-b', provider: 'local', model: 'o1' },
   ];
 
-  it('renders a Chats group beside repos and lenses', () => {
+  it('renders the Chats group first, before repos, lenses and fleet', () => {
     const onPin = vi.fn();
     renderRail({ chats, chatsAvailable: true, onPin });
     const group = screen.getByTestId('rail-chats');
     expect(within(group).getAllByTestId(/^rail-chat-chat-/).map(r => r.getAttribute('data-testid'))).toEqual(['rail-chat-chat-a', 'rail-chat-chat-b']);
     expect(within(group).getByTestId('rail-chat-chat-a')).toHaveTextContent('claude-test-x');
-    const order = ['rail-repos', 'rail-lenses', 'rail-chats'].map(id => screen.getByTestId(id));
+    // Chats come first (design section 6): Chats, Repositories, Lenses, Fleet.
+    const order = ['rail-chats', 'rail-repos', 'rail-lenses', 'rail-fleet'].map(id => screen.getByTestId(id));
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }

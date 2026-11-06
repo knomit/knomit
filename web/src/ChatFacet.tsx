@@ -8,6 +8,7 @@ import {
 } from './chatApi';
 import type { ApprovalDecision, ChatApproval, ChatInfo } from './chatApi';
 import { chatReducer, initialChatState, sessionCost } from './chatState';
+import { notifyChatActivity } from './chatRail';
 import type { ToolCall, UsagePayload } from './chatState';
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -181,6 +182,20 @@ export function ChatFacet({ chat, facet, onGone }: {
     getChatContext(chat.id).then(c => { if (!cancelled) setWindow(c.window); }).catch(() => { /* no meter denominator */ });
     return () => { cancelled = true; };
   }, [chat.id]);
+  // What the rail draws for this chat (state, title, cost) is read from the
+  // server; tell the list when this chat's run, approvals or turns change.
+  const pendingCalls = Object.keys(state.approvals).length;
+  const lastErr = state.turns.length ? state.turns[state.turns.length - 1].error : null;
+  const sawFirst = useRef(false);
+  useEffect(() => {
+    if (!state.loaded) return;
+    // The snapshot that first loads the chat is what the list already holds.
+    if (!sawFirst.current) { sawFirst.current = true; return; }
+    notifyChatActivity();
+    // The POST that starts a turn may land after this first read: read again.
+    const t = setTimeout(notifyChatActivity, 1000);
+    return () => clearTimeout(t);
+  }, [state.loaded, state.running, pendingCalls, state.turns.length, lastErr]);
   // The top bar sits outside this component: hand it what the pill shows.
   const cost = sessionCost(state.turns);
   useEffect(() => {

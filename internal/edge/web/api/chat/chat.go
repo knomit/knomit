@@ -129,6 +129,9 @@ type chat struct {
 	meta       map[string]callMeta
 	subs       map[*subscriber]struct{}
 	attached   int
+	title      string    // the first message, cut (see titleOf); empty until the first turn
+	startedAt  time.Time // when the chat was made
+	lastActive time.Time // the last turn start, event or answer
 	grace      *time.Timer
 
 	// Per-request flags the truncation wording needs: whether the last
@@ -307,6 +310,7 @@ func (c *chat) emit(kind string, data any) {
 	frame := []byte("event: " + kind + "\ndata: " + string(b) + "\n\n")
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.lastActive = time.Now()
 	for s := range c.subs {
 		select {
 		case s.ch <- frame:
@@ -372,6 +376,10 @@ func (c *chat) startTurn(text string) (int, error) {
 	c.turnAt = len(c.view)
 	turn := c.turnAt
 	c.view = append(c.view, viewItem{Kind: "user", Text: text})
+	if c.title == "" {
+		c.title = titleOf(text)
+	}
+	c.lastActive = time.Now()
 	c.turns.Add(1)
 	c.mu.Unlock()
 	c.store.appendTranscript(viewItem{Kind: "user", Text: text})
@@ -621,3 +629,72 @@ func (c *chat) end(reason string) {
 }
 
 func (c *chat) String() string { return fmt.Sprintf("chat %s", c.id) }
+
+// chatTitleMax is how many characters of the first message the chat's title
+// keeps.
+const chatTitleMax = 60
+
+// titleOf is the chat's title: the first message with its whitespace collapsed,
+// cut to chatTitleMax characters (runes), at a word boundary when one falls in
+// the last 15, with an ellipsis when anything was cut.
+func titleOf(text string) string {
+	t := strings.Join(strings.Fields(text), " ")
+	r := []rune(t)
+	if len(r) <= chatTitleMax {
+		return t
+	}
+	cut := r[:chatTitleMax]
+	for i := len(cut) - 1; i >= chatTitleMax-15; i-- {
+		if cut[i] == ' ' {
+			cut = cut[:i]
+			break
+		}
+	}
+	return strings.TrimRight(string(cut), " ") + "\u2026"
+}
+
+// Chat states, as GET /chats lists them.
+const (
+	stateIdle     = "idle"
+	stateRunning  = "running"
+	stateAwaiting = "awaiting_approval"
+	stateError    = "error"
+)
+
+// stateLocked is what the chat is doing now. A call waiting for the person
+// outranks a running turn (the turn is blocked on it), which outranks the last
+// turn's failure. The person's own Stop is not a failure. c.mu is held.
+func (c *chat) stateLocked() string {
+	switch {
+	case len(c.pending) > 0:
+		return stateAwaiting
+	case c.running:
+		return stateRunning
+	}
+	if c.turnAt < len(c.view) {
+		if it := c.view[c.turnAt]; it.Kind == "user" && it.Error != "" && !it.Cancelled {
+			return stateError
+		}
+	}
+	return stateIdle
+}
+
+// turnsAndCostLocked counts the user turns and sums their costs; cost is nil
+// when no turn was priced. c.mu is held.
+func (c *chat) turnsAndCostLocked() (int, *float64) {
+	n := 0
+	var usd *float64
+	for _, it := range c.view {
+		if it.Kind != "user" {
+			continue
+		}
+		n++
+		if it.CostUSD != nil {
+			if usd == nil {
+				usd = new(float64)
+			}
+			*usd += *it.CostUSD
+		}
+	}
+	return n, usd
+}

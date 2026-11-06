@@ -139,3 +139,31 @@ export const PILL_SESSION = 'session';
 export const CONTEXT_LABEL = 'context';
 export const COMPOSER_HINT = 'Enter to send';
 export const CHAT_REPLY_PLACEHOLDER = 'Reply…';
+
+// ── APPROVED (2026-11-06) ──
+// Chat UX v2, PR 4. The rail hover card's field labels, approved by the user
+// exactly as in the mockup (R2), with "1 turn" for one.
+
+export const RAIL_TIP_MODEL = 'Model';
+export const RAIL_TIP_STARTED = 'Started';
+export const RAIL_TIP_COST = 'Cost';
+export const railTurns = (n: number): string => `${n} ${n === 1 ? 'turn' : 'turns'}`;
+
+// ── PENDING APPROVAL ──
+// Chat UX v2, PR 4 (design section 6, the rail). Not yet approved by the user.
+
+/** Rail: the expander under the five most recent chats. VERBATIM from the
+ *  design's copy table ("N more"). */
+export const railMore = (n: number): string => `${n} more`;
+/** Rail: the state in words, in a row's tooltip. VERBATIM from the design's
+ *  copy table. Idle has no words in the design (the gap is listed in the PR
+ *  report), so the tooltip shows none for it. */
+export const RAIL_STATE_RUNNING = 'Running';
+export const RAIL_STATE_ATTENTION = 'Waiting for your approval';
+export const RAIL_STATE_NEW_ANSWER = 'New answer';
+export const RAIL_STATE_FAILED = 'Failed';
+/** Rail: the hover x and its confirmation when a turn is still running. The
+ *  design gives no wording for these; they need a ruling. */
+export const RAIL_END_CHAT = 'End chat';
+export const RAIL_END_CONFIRM = 'End this chat? A turn is still running and will be stopped.';
+export const RAIL_END_KEEP = 'Keep chat';

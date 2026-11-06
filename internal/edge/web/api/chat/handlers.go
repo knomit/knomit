@@ -60,6 +60,32 @@ type chatItem struct {
 	Links    hal.LinkMap `json:"_links"`
 }
 
+// listItem is a chat as GET /chats lists it: the chat plus what the rail draws.
+// Title is the first message cut (empty before the first turn), State is
+// idle | running | awaiting_approval | error, LastActivity and StartedAt are
+// RFC 3339 UTC, Turns counts the user turns, and CostUSD is their summed cost
+// (absent when no turn was priced).
+type listItem struct {
+	chatItem
+	Title        string   `json:"title"`
+	State        string   `json:"state"`
+	LastActivity string   `json:"last_activity"`
+	StartedAt    string   `json:"started_at"`
+	Turns        int      `json:"turns"`
+	CostUSD      *float64 `json:"cost_usd,omitempty"`
+}
+
+func listItemOf(c *chat) listItem {
+	it := itemOf(c)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n, usd := c.turnsAndCostLocked()
+	return listItem{
+		chatItem: it, Title: c.title, State: c.stateLocked(), Turns: n, CostUSD: usd,
+		LastActivity: c.lastActive.UTC().Format(time.RFC3339Nano), StartedAt: c.startedAt.UTC().Format(time.RFC3339Nano),
+	}
+}
+
 func chatLinks(id string) hal.LinkMap {
 	base := httpx.APIBase + "/chats/" + id
 	return hal.LinkMap{
@@ -148,19 +174,19 @@ func (m *manager) handleList(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items := []chatItem{}
+	items := []listItem{}
 	for _, c := range m.listFor(p.String()) {
-		items = append(items, itemOf(c))
+		items = append(items, listItemOf(c))
 	}
 	sortChatItems(items)
-	hal.WriteHAL(w, http.StatusOK, hal.CollectionView[chatItem]{
+	hal.WriteHAL(w, http.StatusOK, hal.CollectionView[listItem]{
 		Count:    len(items),
 		Links:    hal.LinkMap{"self": {Href: httpx.APIBase + "/chats"}},
-		Embedded: map[string][]chatItem{"chats": items},
+		Embedded: map[string][]listItem{"chats": items},
 	})
 }
 
-func sortChatItems(items []chatItem) {
+func sortChatItems(items []listItem) {
 	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
 }
 
