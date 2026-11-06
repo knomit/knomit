@@ -482,6 +482,20 @@ export function boundAfter(calls: ToolCall[], bound: string): string {
   return b;
 }
 
+/** The target the chat was bound to when call `callId` ran: the last bind
+ *  before it, across every turn. Empty when none, or the call is unknown. */
+export function boundBeforeCall(turns: ChatTurn[], callId: string): string {
+  let bound = '';
+  for (const t of turns) for (const part of t.parts) {
+    if (part.kind !== 'group') continue;
+    for (const c of part.calls) {
+      if (c.id === callId) return bound;
+      bound = boundAfter([c], bound);
+    }
+  }
+  return '';
+}
+
 /** A duration in ms, worded compactly: 840ms, 1.9s, 22s, 1m 12s. */
 export function formatDuration(ms: number): string {
   if (ms < 1000) return durationMs(Math.max(1, Math.round(ms)));

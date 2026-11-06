@@ -108,7 +108,9 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
       const el = root.current;
       if (!el || !shown(el)) return;
       const active = document.activeElement;
-      if (active && active !== document.body && !el.contains(active)) return;
+      // The chat is its column and the side panel beside it (data-chat-scope).
+      const scope = el.closest('[data-chat-scope]') ?? el;
+      if (active && active !== document.body && !scope.contains(active)) return;
       stopRef.current();
     };
     window.addEventListener('keydown', onKey);

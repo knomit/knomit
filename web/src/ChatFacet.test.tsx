@@ -47,7 +47,7 @@ const footerOf = (scope: HTMLElement = document.body) => ({
 });
 
 describe('ChatFacet', () => {
-  it('puts the chat panel in the left slot and the result panel in the right slot', async () => {
+  it('puts the chat panel in the left slot and the side panel in the right slot', async () => {
     mount();
     await screen.findByTestId('chat-turn-0');
     // No selected result: the chat panel only.
@@ -63,7 +63,7 @@ describe('ChatFacet', () => {
     expect(columns).toContainElement(result);
     // The chat first, then the result beside it.
     expect(panel.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(screen.getByTestId('settings-scroll')).getByTestId('chat-result-panel')).toBe(result);
+    expect(within(screen.getByTestId('chat-side-panel')).getByTestId('chat-result-panel')).toBe(result);
   });
 
   it('the transcript and the composer share one centered 740px column', async () => {

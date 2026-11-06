@@ -244,6 +244,27 @@ export const contextNumCtx = (n: string): string => `${n} (num_ctx)`;
 /** The cloud provider's "where it runs" prefix: "cloud · ANTHROPIC_API_KEY". */
 export const PROVIDER_CLOUD = 'cloud';
 
+// ── APPROVED 2026-11-06 ──
+// Side panel (chat UX v2, PR 3). The first six groups are the design's copy
+// table ("Side panel", "Fact links") verbatim; the last three labels are GAPS:
+// the design gives the back, forward and close buttons no accessible name, and
+// these are the shortest words that name them. Approved by the user with the rest.
+
+/** Header button. Design copy table, "Fact links" row. */
+export const PANEL_OPEN_IN_BROWSE = 'Open in Browse';
+/** The tool result's two tabs. Design copy table, "Side panel" row. */
+export const PANEL_TAB_RESULT = 'Result';
+export const PANEL_TAB_ARGUMENTS = 'Arguments';
+/** The footer: "Esc close · ⌘[ back · N of M opened". */
+export const PANEL_KEY_CLOSE = 'Esc close';
+export const PANEL_KEY_BACK = '⌘[ back';
+export const panelOpened = (n: number, m: number): string => `${n} of ${m} opened`;
+export const panelFooter = (n: number, m: number): string => [PANEL_KEY_CLOSE, PANEL_KEY_BACK, panelOpened(n, m)].join(' · ');
+// GAP (not in the design): accessible names for the header's icon buttons.
+export const PANEL_BACK_LABEL = 'Back';
+export const PANEL_FORWARD_LABEL = 'Forward';
+export const PANEL_CLOSE_LABEL = 'Close';
+
 // ── APPROVED (2026-11-06) ──
 // Chat UX v2, PR 4 (design section 6, the rail). Approved by the user on
 // 2026-11-06: the design's copy-table strings for the rail row, the hover card's
