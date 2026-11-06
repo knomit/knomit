@@ -28,43 +28,62 @@ func thinkingStream() []string {
 	}
 }
 
-func streamThinking(t *testing.T, display string) []Event {
+// streamThinking returns the sink's event kinds and the thinking pieces the
+// Thinking option received.
+func streamThinking(t *testing.T, display string) ([]EventKind, []string) {
 	srv, _ := anthropicSSEServer(t, thinkingStream()...)
 	chat := NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL, Profile: ModelProfile{ThinkingDisplay: display}})
 	b := NewBuilder()
 	require.NoError(t, b.Add(Item{ID: "turn", Hook: HookTurn, Text: "q"}))
-	var got []Event
-	_, err := chat.Stream(context.Background(), b.Snapshot(), StreamOptions{}, func(e Event) { got = append(got, e) })
+	var kinds []EventKind
+	var pieces []string
+	_, err := chat.Stream(context.Background(), b.Snapshot(), StreamOptions{Thinking: func(s string) { pieces = append(pieces, s) }},
+		func(e Event) { kinds = append(kinds, e.Kind) })
 	require.NoError(t, err)
-	return got
+	return kinds, pieces
 }
 
-func TestAnthropicChat_SummarizedThinkingStreamsAsThinkingDeltas(t *testing.T) {
-	var deltas []string
-	var order []EventKind
-	for _, e := range streamThinking(t, DisplaySummarized) {
-		order = append(order, e.Kind)
-		if e.Kind == EventThinkingDelta {
-			deltas = append(deltas, e.Text)
-		}
-	}
-	require.Equal(t, []string{"Comparing ", "blast radius"}, deltas)
-	require.Equal(t, []EventKind{EventThinkingDelta, EventThinkingDelta, EventReasoning, EventTextDelta}, order[:4],
-		"deltas precede the complete reasoning block")
+func TestAnthropicChat_SummarizedThinkingStreamsThroughTheThinkingOption(t *testing.T) {
+	kinds, pieces := streamThinking(t, DisplaySummarized)
+	require.Equal(t, []string{"Comparing ", "blast radius"}, pieces)
+	// The sink still sees ONE reasoning event and no extra kinds: a delta is not a sink event.
+	require.Equal(t, []EventKind{EventReasoning, EventTextDelta, EventDone}, kinds)
 }
 
-func TestAnthropicChat_OmittedThinkingStreamsNoDeltas(t *testing.T) {
-	for _, e := range streamThinking(t, DisplayOmitted) {
-		require.NotEqual(t, EventThinkingDelta, e.Kind)
-	}
+func TestAnthropicChat_OmittedThinkingStreamsNothing(t *testing.T) {
+	_, pieces := streamThinking(t, DisplayOmitted)
+	require.Empty(t, pieces)
+}
+
+// #775's run model: each closed thinking run is ONE reasoning event/block. The
+// live thinking pieces come through the option and add no sink event.
+func TestOllamaChat_ThinkingRunsStreamLiveWithoutDuplicateReasoning(t *testing.T) {
+	srv := newOllamaServer(t, []string{"tools", "thinking"},
+		`{"message":{"role":"assistant","content":"","thinking":"first "},"done":false}`,
+		`{"message":{"role":"assistant","content":"","thinking":"run"},"done":false}`,
+		`{"message":{"role":"assistant","content":"Answer."},"done":false}`,
+		`{"message":{"role":"assistant","content":"","thinking":"second run"},"done":false}`,
+		`{"message":{"role":"assistant","content":""},"done_reason":"stop","done":true}`,
+	)
+	c := newTestOllama(t, srv, OllamaOptions{})
+	var kinds []EventKind
+	var pieces []string
+	resp, err := c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{Thinking: func(s string) { pieces = append(pieces, s) }},
+		func(e Event) { kinds = append(kinds, e.Kind) })
+	require.NoError(t, err)
+	require.Equal(t, []string{"first ", "run", "second run"}, pieces, "every streamed thinking chunk, live, in order")
+	require.Equal(t, []EventKind{EventReasoning, EventTextDelta, EventReasoning, EventDone}, kinds, "one reasoning event per closed run, none per delta")
+	require.Len(t, resp.Blocks, 3)
+	require.JSONEq(t, `{"thinking":"first run"}`, string(resp.Blocks[0].Reasoning.Native))
+	require.JSONEq(t, `{"thinking":"second run"}`, string(resp.Blocks[2].Reasoning.Native))
 }
 
 // thinkingModel streams two thinking deltas before every reply.
 type thinkingModel struct{ *fakeModel }
 
 func (m *thinkingModel) Stream(ctx context.Context, s Snapshot, o StreamOptions, sink func(Event)) (*Response, error) {
-	sink(Event{Kind: EventThinkingDelta, Text: "hmm "})
-	sink(Event{Kind: EventThinkingDelta, Text: "ok"})
+	o.thinking("hmm ")
+	o.thinking("ok")
 	return m.fakeModel.Stream(ctx, s, o, sink)
 }
 

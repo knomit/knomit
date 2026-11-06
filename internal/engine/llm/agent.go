@@ -378,15 +378,15 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 		}
 		l.maybeWarn(int64(est), true)
 		var streamed strings.Builder
-		resp, err := l.Model.Stream(ctx, snap, l.Options, func(ev Event) {
+		opts := l.Options
+		opts.Thinking = func(text string) { l.emit(LoopEvent{Kind: LoopThinking, Text: text}) }
+		resp, err := l.Model.Stream(ctx, snap, opts, func(ev Event) {
 			switch ev.Kind {
 			case EventTextDelta:
 				streamed.WriteString(ev.Text)
 				l.emit(LoopEvent{Kind: LoopText, Text: ev.Text})
 			case EventReasoning:
 				l.emit(LoopEvent{Kind: LoopReasoning})
-			case EventThinkingDelta:
-				l.emit(LoopEvent{Kind: LoopThinking, Text: ev.Text})
 			case EventToolUse:
 				l.emit(LoopEvent{Kind: LoopToolUse, ToolUse: ev.ToolUse})
 			}

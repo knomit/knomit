@@ -59,6 +59,18 @@ type StreamOptions struct {
 	// a model that thinks for minutes before its first text is not taken for
 	// a stalled stream. It carries no data and must not block.
 	Progress func()
+	// Thinking, when set, is called with each piece of the model's reasoning
+	// as it streams (Anthropic: only with thinking display "summarized";
+	// Ollama: the thinking it streams). It is DISPLAY ONLY and deliberately not
+	// a sink Event: the complete reasoning still arrives once, as EventReasoning
+	// and BlockReasoning, and a delta never reaches the history or the trace.
+	Thinking func(text string)
+}
+
+func (o StreamOptions) thinking(text string) {
+	if o.Thinking != nil && text != "" {
+		o.Thinking(text)
+	}
 }
 
 func (o StreamOptions) progress() {
@@ -74,12 +86,7 @@ const (
 	EventTextDelta EventKind = "text_delta" // Text holds the delta
 	EventToolUse   EventKind = "tool_use"   // ToolUse is complete (args fully streamed)
 	EventReasoning EventKind = "reasoning"  // Reasoning is complete (signature included)
-	// EventThinkingDelta carries a piece of the model's reasoning as it
-	// streams (Text). Anthropic sends it only when the thinking display is
-	// "summarized"; Ollama sends the thinking it streams. It is display only:
-	// the complete block still arrives as EventReasoning.
-	EventThinkingDelta EventKind = "thinking_delta"
-	EventDone          EventKind = "done" // the response is complete
+	EventDone      EventKind = "done"       // the response is complete
 )
 
 // Event is one streamed item.

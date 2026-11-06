@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -155,7 +157,7 @@ func TestOllamaChat_ThinkingModelStreamsReasoningFirst(t *testing.T) {
 	resp, err := c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, func(e Event) { kinds = append(kinds, e.Kind) })
 	require.NoError(t, err)
 	require.Equal(t, `true`, string(srv.received()[0]["think"]))
-	require.Equal(t, []EventKind{EventThinkingDelta, EventThinkingDelta, EventReasoning, EventTextDelta, EventDone}, kinds)
+	require.Equal(t, []EventKind{EventReasoning, EventTextDelta, EventDone}, kinds)
 	require.Equal(t, StopEndTurn, resp.StopReason)
 	require.Len(t, resp.Blocks, 2)
 	r := resp.Blocks[0].Reasoning
@@ -163,6 +165,162 @@ func TestOllamaChat_ThinkingModelStreamsReasoningFirst(t *testing.T) {
 	require.Equal(t, "test-model", r.Model)
 	require.JSONEq(t, `{"thinking":"let me think"}`, string(r.Native))
 	require.Equal(t, Block{Kind: BlockText, Text: "Answer."}, resp.Blocks[1])
+}
+
+// Thinking that arrives after the first content or tool-call line used to be
+// accumulated and then dropped: the reasoning block was flushed once. Each
+// thinking run must reach the response, the sink and the trace, in stream
+// order, between the content and tool calls around it.
+func TestOllamaChat_ReasoningAfterFirstFlushIsKept(t *testing.T) {
+	srv := newOllamaServer(t, []string{"tools", "thinking"},
+		`{"message":{"role":"assistant","content":"","thinking":"first thought"},"done":false}`,
+		`{"message":{"role":"assistant","content":"Let me check. "},"done":false}`,
+		`{"message":{"role":"assistant","content":"","thinking":"second thought"},"done":false}`,
+		`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"knomit_query","arguments":{"text":"x"}}}]},"done":false}`,
+		`{"message":{"role":"assistant","content":"","thinking":"third thought"},"done":false}`,
+		`{"message":{"role":"assistant","content":""},"done_reason":"stop","done":true}`,
+	)
+	c := newTestOllama(t, srv, OllamaOptions{})
+	tracePath := filepath.Join(t.TempDir(), "trace.jsonl")
+	tc, closer, err := NewTracingChat(c, tracePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = closer.Close() })
+
+	var sunk []Event
+	resp, err := tc.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{NewID: func() string { return "tu_1" }}, func(e Event) { sunk = append(sunk, e) })
+	require.NoError(t, err)
+
+	want := []string{"first thought", "second thought", "third thought"}
+	require.Equal(t, []BlockKind{BlockReasoning, BlockText, BlockReasoning, BlockToolUse, BlockReasoning}, blockKinds(resp.Blocks))
+	require.Equal(t, want, reasoningTexts(t, resp.Blocks), "response")
+	require.Equal(t, "Let me check. ", resp.Blocks[1].Text)
+
+	var sinkKinds []EventKind
+	var sinkBlocks []Block
+	for _, e := range sunk {
+		sinkKinds = append(sinkKinds, e.Kind)
+		if e.Kind == EventReasoning {
+			sinkBlocks = append(sinkBlocks, Block{Kind: BlockReasoning, Reasoning: e.Reasoning})
+		}
+	}
+	require.Equal(t, []EventKind{EventReasoning, EventTextDelta, EventReasoning, EventToolUse, EventReasoning, EventDone}, sinkKinds)
+	require.Equal(t, want, reasoningTexts(t, sinkBlocks), "sink")
+
+	raw, err := os.ReadFile(tracePath)
+	require.NoError(t, err)
+	var line struct {
+		Blocks []Block `json:"blocks"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &line))
+	require.Equal(t, want, reasoningTexts(t, line.Blocks), "trace")
+}
+
+func blockKinds(bs []Block) []BlockKind {
+	out := make([]BlockKind, 0, len(bs))
+	for _, b := range bs {
+		out = append(out, b.Kind)
+	}
+	return out
+}
+
+// reasoningTexts returns the thinking text of each reasoning block, in order.
+func reasoningTexts(t *testing.T, bs []Block) []string {
+	t.Helper()
+	var out []string
+	for _, b := range bs {
+		if b.Kind != BlockReasoning {
+			continue
+		}
+		var n struct {
+			Thinking string `json:"thinking"`
+		}
+		require.NoError(t, json.Unmarshal(b.Reasoning.Native, &n))
+		out = append(out, n.Thinking)
+	}
+	return out
+}
+
+// ollamaStream runs one Stream over the given lines and returns the response,
+// the sink's event kinds and the error.
+func ollamaStream(t *testing.T, lines ...string) (*Response, []EventKind, error) {
+	t.Helper()
+	srv := newOllamaServer(t, []string{"tools", "thinking"}, lines...)
+	c := newTestOllama(t, srv, OllamaOptions{})
+	ids := []string{"tu_1", "tu_2", "tu_3"}
+	n := 0
+	var kinds []EventKind
+	resp, err := c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{NewID: func() string { n++; return ids[n-1] }}, func(e Event) { kinds = append(kinds, e.Kind) })
+	return resp, kinds, err
+}
+
+// describeBlocks renders each block as kind:text (or kind:tool name), so one
+// assertion pins both the kinds and the texts, in order.
+func describeBlocks(bs []Block) []string {
+	out := make([]string, 0, len(bs))
+	for _, b := range bs {
+		switch b.Kind {
+		case BlockText:
+			out = append(out, "text:"+b.Text)
+		case BlockToolUse:
+			out = append(out, "tool:"+b.ToolUse.Name)
+		case BlockReasoning:
+			var n struct {
+				Thinking string `json:"thinking"`
+			}
+			_ = json.Unmarshal(b.Reasoning.Native, &n)
+			out = append(out, "reasoning:"+n.Thinking)
+		}
+	}
+	return out
+}
+
+func TestOllamaChat_EmptyChunksDoNotSplitRuns(t *testing.T) {
+	resp, _, err := ollamaStream(t,
+		`{"message":{"role":"assistant","content":"","thinking":"a"},"done":false}`,
+		`{"message":{"role":"assistant","content":"","thinking":""},"done":false}`,
+		`{"message":{"role":"assistant","content":"","thinking":""},"done":false}`,
+		`{"message":{"role":"assistant","content":"","thinking":"b"},"done":false}`,
+		`{"message":{"role":"assistant","content":"x"},"done":false}`,
+		`{"message":{"role":"assistant","content":""},"done":false}`,
+		`{"message":{"role":"assistant","content":"y"},"done":false}`,
+		`{"message":{"role":"assistant","content":""},"done_reason":"stop","done":true}`,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"reasoning:ab", "text:xy"}, describeBlocks(resp.Blocks))
+}
+
+func TestOllamaChat_TextToolText(t *testing.T) {
+	resp, _, err := ollamaStream(t,
+		`{"message":{"role":"assistant","content":"A"},"done":false}`,
+		`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"knomit_query","arguments":{"text":"x"}}}]},"done":false}`,
+		`{"message":{"role":"assistant","content":"B"},"done":false}`,
+		`{"message":{"role":"assistant","content":""},"done_reason":"stop","done":true}`,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"text:A", "tool:knomit_query", "text:B"}, describeBlocks(resp.Blocks))
+	require.Equal(t, StopToolUse, resp.StopReason)
+}
+
+func TestOllamaChat_TwoToolCallLinesInARow(t *testing.T) {
+	resp, _, err := ollamaStream(t,
+		`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"knomit_repos","arguments":{}}}]},"done":false}`,
+		`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"knomit_query","arguments":{"text":"x"}}}]},"done":false}`,
+		`{"message":{"role":"assistant","content":""},"done_reason":"stop","done":true}`,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"tool:knomit_repos", "tool:knomit_query"}, describeBlocks(resp.Blocks))
+	require.Equal(t, StopToolUse, resp.StopReason)
+}
+
+// A stream that ends with no done line is an error: no response is returned,
+// so the thinking run still open at the cut is not emitted to the sink.
+func TestOllamaChat_StreamEndsWhileThinkingRunIsOpen(t *testing.T) {
+	resp, kinds, err := ollamaStream(t,
+		`{"message":{"role":"assistant","content":"","thinking":"unfinished"},"done":false}`,
+	)
+	require.ErrorContains(t, err, "stream ended before the done line")
+	require.Nil(t, resp)
+	require.NotContains(t, kinds, EventReasoning)
 }
 
 func TestRenderOllama_ReasoningReplay(t *testing.T) {
@@ -184,6 +342,23 @@ func TestRenderOllama_ReasoningReplay(t *testing.T) {
 	own := renderOllama(mk("ollama"), "m", OllamaOptions{})
 	require.Equal(t, "hello", own.Messages[0].Content)
 	require.Equal(t, "SECRET", own.Messages[0].Thinking, "Ollama's own reasoning goes back in the thinking field")
+}
+
+// Several reasoning runs in one assistant entry replay as one thinking field,
+// joined by a newline so the run boundary does not glue words together.
+func TestRenderOllama_TwoReasoningRunsJoinWithNewline(t *testing.T) {
+	b := NewBuilder()
+	reason := func(s string) Block {
+		return Block{Kind: BlockReasoning, Reasoning: &Reasoning{Provider: "ollama", Model: "m", Native: json.RawMessage(`{"thinking":"` + s + `"}`)}}
+	}
+	require.NoError(t, b.Add(Item{ID: "c1", Hook: HookConversation, Entry: &Entry{ID: "c1", Role: RoleAssistant, Blocks: []Block{
+		reason("Plan the query."),
+		{Kind: BlockText, Text: "Looking."},
+		reason("Check the result."),
+	}}}))
+	out := renderOllama(b.Snapshot(), "m", OllamaOptions{})
+	require.Equal(t, "Looking.", out.Messages[0].Content)
+	require.Equal(t, "Plan the query.\nCheck the result.", out.Messages[0].Thinking)
 }
 
 func TestOllamaChat_ToolArgumentsAreObjects(t *testing.T) {

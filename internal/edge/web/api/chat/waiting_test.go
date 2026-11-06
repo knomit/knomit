@@ -208,10 +208,7 @@ func TestChat_DeclinedCallCarriesNoDuration(t *testing.T) {
 func TestChat_ThinkingDeltasAreStreamed(t *testing.T) {
 	h := newHarness(t)
 	st := textStep("answer", usage)
-	st.events = []llm.Event{
-		{Kind: llm.EventThinkingDelta, Text: "Comparing "},
-		{Kind: llm.EventThinkingDelta, Text: "blast radius"},
-	}
+	st.thinking = []string{"Comparing ", "blast radius"}
 	h.queue("a1", st)
 	id := h.create("uid:501", "a1")
 	s := h.attach("uid:501", id)

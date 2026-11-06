@@ -60,6 +60,8 @@ type step struct {
 	err    error
 	block  bool // wait for ctx to end, then return its error
 	events []llm.Event
+	// thinking is streamed through StreamOptions.Thinking before the events.
+	thinking []string
 	// fn, when set, chooses the step from the request (a model reading the
 	// handle a previous tool call returned).
 	fn func(llm.Snapshot) step
@@ -80,7 +82,7 @@ func (m *scripted) Caps() llm.Caps {
 	return llm.Caps{Tools: true, ContextWindow: 1_000_000, MaxOutput: 1000}
 }
 
-func (m *scripted) Stream(ctx context.Context, s llm.Snapshot, _ llm.StreamOptions, sink func(llm.Event)) (*llm.Response, error) {
+func (m *scripted) Stream(ctx context.Context, s llm.Snapshot, o llm.StreamOptions, sink func(llm.Event)) (*llm.Response, error) {
 	m.mu.Lock()
 	m.snaps = append(m.snaps, s)
 	if len(m.steps) == 0 {
@@ -92,6 +94,11 @@ func (m *scripted) Stream(ctx context.Context, s llm.Snapshot, _ llm.StreamOptio
 	m.mu.Unlock()
 	if st.fn != nil {
 		st = st.fn(s)
+	}
+	for _, t := range st.thinking {
+		if o.Thinking != nil {
+			o.Thinking(t)
+		}
 	}
 	for _, ev := range st.events {
 		sink(ev)
