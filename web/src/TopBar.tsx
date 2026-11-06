@@ -6,7 +6,7 @@ import type { RepoInfo } from './api';
 import { BookIcon, FleetIcon, GearIcon, LayersIcon, ProviderIcon } from './icons';
 import { noMouseFocus } from './utils';
 import { useMatFocus } from './matFocus';
-import { otherRepoFailing } from './facets';
+import { CHAT_ACCENT, FLEET_ACCENT, otherRepoFailing } from './facets';
 import { ChatPill } from './ChatPill';
 import type { Facet, ServerPage, TargetLabel } from './facets';
 
@@ -372,9 +372,6 @@ const tabBadge: CSSProperties = {
 
 // The spec's lens accent, for the label.
 const LENS_ACCENT = '#b9a6f0';
-// The fleet's teal (Q5): its row, its crumb and the master chip.
-const FLEET_ACCENT = '#8ad6c8';
-const CHAT_ACCENT = '#e8c27a';
 
 // The label's state chip: the rail's chip geometry, in the spec's tones —
 // archive warm, error red, creating blue.

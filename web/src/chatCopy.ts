@@ -140,11 +140,13 @@ export const CONTEXT_LABEL = 'context';
 export const COMPOSER_HINT = 'Enter to send';
 export const CHAT_REPLY_PLACEHOLDER = 'Reply…';
 
-// ── PENDING APPROVAL ──
-// Chat UX v2, PR 5 (design section 1, the start screen). Awaiting the user's
-// approval before it ships. The strings the design gives are marked "design";
-// the rest are the mockup's wording (P1-new-chat.png) for what the design names
-// but does not word, and need a ruling.
+// ── APPROVED (2026-11-06) ──
+// Chat UX v2, PR 5 (design section 1, the start screen). Approved by the user
+// on 2026-11-06: every section 1 string of the design's copy table, "free" on
+// Ollama cards, the labels Context, Effort, Cost, Size, Keep alive, "none" and
+// "cloud ·", and the formats "$x / MTok", "N tokens" and "N (num_ctx)". The
+// strings the design gives are marked "design"; the rest are the mockup's
+// wording (P1-new-chat.png).
 
 /** design: the heading and the line under it. */
 export const START_HEADING = 'Start a chat';
@@ -171,7 +173,7 @@ export const suggestReview = (repo: string): string => `Review open items in ${r
 export const suggestContradictions = (repo: string): string => `Find contradictions in ${repo}`;
 
 /** Reused from approved PR 1 copy: "Input", "Output" and "Cache read" are
- *  COST_ROW_INPUT, COST_ROW_OUTPUT and COST_ROW_CACHE_READ. NEW, from the mockup: */
+ *  COST_ROW_INPUT, COST_ROW_OUTPUT and COST_ROW_CACHE_READ. From the mockup: */
 export const STAT_CONTEXT = 'Context';
 export const STAT_EFFORT = 'Effort';
 export const STAT_COST = 'Cost';

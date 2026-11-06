@@ -326,6 +326,7 @@ func TestRegistry_ListCarriesStartScreenDetails(t *testing.T) {
 // case shows the key.
 func TestRegistry_KeySourceIsNeverTheKey(t *testing.T) {
 	const pasted = "sk-ant-api03-Zq9xT7mK2vLpR4wB"
+	t.Setenv("SOME_NAME", "a-key-value")
 	an, _ := fakeAnthropicModels(t, "a1")
 	keyFile := filepath.Join(t.TempDir(), "key")
 	require.NoError(t, os.WriteFile(keyFile, []byte("sk-test-file\n"), 0o600))
@@ -341,6 +342,7 @@ func TestRegistry_KeySourceIsNeverTheKey(t *testing.T) {
 		sources = append(sources, p.KeySource)
 	}
 	require.Equal(t, []string{"SOME_NAME", "", "", ""}, sources)
+	require.NotContains(t, sources, "a-key-value")
 	all, err := json.Marshal(got)
 	require.NoError(t, err)
 	for _, secret := range []string{pasted, "sk-test-file", "sk-test-plain", keyFile} {
@@ -348,10 +350,47 @@ func TestRegistry_KeySourceIsNeverTheKey(t *testing.T) {
 	}
 }
 
-// An Ollama host with credentials in it is shown without them.
+// A key pasted into api_key_env that happens to be made only of letters, digits
+// and underscores looks like a variable name; it is reported only if such a
+// variable is set, and an unset name is not the key in effect.
+//
+// SABOTAGE: keySource drops the os.Getenv check -> the pasted key and the unset
+// name are reported.
+func TestRegistry_KeySourceNeedsTheVariableToBeSet(t *testing.T) {
+	const pasted = "skantapi03abcDEF123"
+	an, _ := fakeAnthropicModels(t, "a1")
+	t.Setenv("KNOMIT_TEST_SET_VAR", "value")
+	r := NewRegistry(map[string]config.LLMProviderConfig{
+		"a-set":    {Kind: "anthropic", BaseURL: an.URL, APIKeyEnv: "KNOMIT_TEST_SET_VAR", Models: []string{"a1"}},
+		"b-unset":  {Kind: "anthropic", BaseURL: an.URL, APIKeyEnv: "KNOMIT_TEST_NOT_SET_VAR", Models: []string{"a1"}},
+		"c-pasted": {Kind: "anthropic", BaseURL: an.URL, APIKeyEnv: pasted, Models: []string{"a1"}},
+	})
+	var sources []string
+	for _, p := range r.List(context.Background()) {
+		sources = append(sources, p.KeySource)
+	}
+	require.Equal(t, []string{"KNOMIT_TEST_SET_VAR", "", ""}, sources)
+}
+
+// An Ollama host is shown as scheme, host and port: no credentials, no query
+// and no fragment.
+//
+// SABOTAGE: displayHost keeps RawQuery and Fragment -> the token cases fail.
 func TestRegistry_HostDropsCredentials(t *testing.T) {
-	require.Equal(t, "http://box:11434", displayHost("http://user:secret@box:11434/"))
-	require.Equal(t, "http://box:11434", displayHost("box:11434"))
+	for in, want := range map[string]string{
+		"http://user:secret@box:11434/":        "http://box:11434",
+		"box:11434":                            "http://box:11434",
+		"http://box:11434?token=SECRET":        "http://box:11434",
+		"http://box:11434/#x":                  "http://box:11434",
+		"http://box:11434#SECRET":              "http://box:11434",
+		"http://box:11434/v1?api_key=SECRET":   "http://box:11434/v1",
+		"http://u:p@box:11434/v1?a=b&c=d#frag": "http://box:11434/v1",
+		"http://box:11434?":                    "http://box:11434",
+	} {
+		got := displayHost(in)
+		require.Equal(t, want, got, in)
+		require.NotContains(t, got, "SECRET")
+	}
 }
 
 // A provider that cannot be reached is not reachable, and says why per model.
@@ -364,6 +403,6 @@ func TestRegistry_UnreachableProvider(t *testing.T) {
 	require.False(t, got[0].Reachable)
 	require.Contains(t, got[0].Models[0].Reason, "ollama unreachable")
 	require.False(t, got[1].Reachable)
-	require.Equal(t, "KNOMIT_TEST_UNSET_KEY_VAR", got[1].KeySource)
+	require.Equal(t, "", got[1].KeySource, "an unset variable is not the key in effect")
 	require.Equal(t, "no API key configured", got[1].Models[0].Reason)
 }

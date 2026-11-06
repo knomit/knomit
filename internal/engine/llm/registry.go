@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -188,16 +189,24 @@ func allUnavailable(p config.LLMProviderConfig, reason string) []ModelStatus {
 }
 
 // keySource is the name of the env var the provider's key is read from, when
-// that is the source in effect: api_key_file and a plaintext api_key win over
-// it, and a value that is not a variable name (a pasted key) is never shown.
+// that variable is the key in effect: it must be SET, api_key_file and a
+// plaintext api_key win over it, and a value that is not a variable name is
+// never shown. A key pasted into api_key_env whose characters are all letters,
+// digits and underscores looks like a name, so a name that is not set in the
+// environment is not reported either: a pasted key is not an environment
+// variable, and an unset name is not the key in effect.
 func keySource(p config.LLMProviderConfig) string {
-	if p.APIKeyFile != "" || p.APIKey != "" || p.APIKeyEnvProblem("") != "" {
+	if p.APIKeyFile != "" || p.APIKey != "" || p.APIKeyEnv == "" || p.APIKeyEnvProblem("") != "" {
+		return ""
+	}
+	if os.Getenv(p.APIKeyEnv) == "" {
 		return ""
 	}
 	return p.APIKeyEnv
 }
 
-// displayHost is host without any credentials in it.
+// displayHost is host as a scheme, host and port (and path): no credentials, no
+// query and no fragment, any of which can carry a secret.
 func displayHost(host string) string {
 	o := OllamaOptions{Host: host}.withDefaults()
 	u, err := url.Parse(o.Host)
@@ -205,7 +214,9 @@ func displayHost(host string) string {
 		return ""
 	}
 	u.User = nil
-	return u.String()
+	u.RawQuery, u.ForceQuery = "", false
+	u.Fragment, u.RawFragment = "", ""
+	return strings.TrimRight(u.String(), "/")
 }
 
 func (r *Registry) anthropicStatus(ctx context.Context, p config.LLMProviderConfig) ([]ModelStatus, bool) {

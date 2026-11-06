@@ -433,3 +433,51 @@ func TestChat_BusyTurnIs409AndCancelUnwinds(t *testing.T) {
 	h.mgr.find(id, writer.String()).mu.Unlock()
 	require.False(t, running)
 }
+
+// A message of only whitespace is no message: the chat is created empty, with
+// no turn. A message with whitespace around it starts the turn with the
+// trimmed text.
+//
+// SABOTAGE: handleCreate tests req.Message != "" without trimming -> the
+// whitespace-only message starts a turn.
+func TestChat_CreateTrimsTheMessage(t *testing.T) {
+	h := newHarness(t)
+	h.queue("a1", textStep("ok", usage))
+	code, body := h.do("uid:501", http.MethodPost, "/chats", map[string]string{"provider": "anthropic", "model": "a1", "message": " \n\t "})
+	require.Equal(t, http.StatusCreated, code, string(body))
+	require.NotContains(t, string(body), `"turn"`)
+	var v struct{ ID string }
+	require.NoError(t, json.Unmarshal(body, &v))
+	_, snap := h.do("uid:501", http.MethodGet, "/chats/"+v.ID, nil)
+	require.Contains(t, string(snap), `"items":[]`)
+	h.do("uid:501", http.MethodDelete, "/chats/"+v.ID, nil)
+
+	code, body = h.do("uid:501", http.MethodPost, "/chats", map[string]string{"provider": "anthropic", "model": "a1", "message": "  padded words \n"})
+	require.Equal(t, http.StatusCreated, code, string(body))
+	require.NoError(t, json.Unmarshal(body, &v))
+	_, snap = h.do("uid:501", http.MethodGet, "/chats/"+v.ID, nil)
+	var chat struct {
+		Items []struct{ Kind, Text string } `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(snap, &chat))
+	require.Equal(t, "padded words", chat.Items[0].Text)
+	h.do("uid:501", http.MethodDelete, "/chats/"+v.ID, nil)
+}
+
+// A first turn that is refused leaves no chat behind and answers 503: the
+// caller was told nothing was created.
+//
+// SABOTAGE: handleCreate does not end the chat on a refused first turn -> the
+// chat is still listed.
+func TestChat_CreateWithRefusedFirstTurnLeavesNoChat(t *testing.T) {
+	h := newHarness(t)
+	old := startFirstTurn
+	startFirstTurn = func(*chat, string) (int, error) { return 0, errEnded }
+	t.Cleanup(func() { startFirstTurn = old })
+
+	code, body := h.do("uid:501", http.MethodPost, "/chats", map[string]string{"provider": "anthropic", "model": "a1", "message": "hello"})
+	require.Equal(t, http.StatusServiceUnavailable, code, string(body))
+	require.Contains(t, string(body), "Chat unavailable")
+	_, list := h.do("uid:501", http.MethodGet, "/chats", nil)
+	require.Contains(t, string(list), `"count":0`)
+}

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -209,6 +210,11 @@ func sortChatItems(items []chatItem) {
 	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
 }
 
+// startFirstTurn starts a new chat's first turn, as POST /turns starts one. A
+// variable so a test can refuse it (a real refusal needs the chat to end in
+// the instant between its creation and this call).
+var startFirstTurn = func(c *chat, text string) (int, error) { return c.startTurn(text) }
+
 type createRequest struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
@@ -263,11 +269,14 @@ func (m *manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := createdView{chatItem: itemOf(c)}
-	if req.Message != "" {
-		turn, err := c.startTurn(req.Message)
+	// A message of only whitespace is no message: the chat is created empty.
+	if message := strings.TrimSpace(req.Message); message != "" {
+		turn, err := startFirstTurn(c, message)
 		if err != nil {
-			// The chat was made but cannot take its first turn (it ended).
-			hal.WriteProblem(w, http.StatusNotFound, "Not Found", "no such chat", r.URL.Path)
+			// The chat cannot take its first turn (it ended). Do not leave it
+			// behind: the caller was told nothing was created.
+			c.end("first turn refused")
+			hal.WriteProblem(w, http.StatusServiceUnavailable, "Chat unavailable", "the chat ended before its first message could start", r.URL.Path)
 			return
 		}
 		out.Turn = &turn
