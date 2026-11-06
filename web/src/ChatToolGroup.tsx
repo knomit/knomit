@@ -225,7 +225,7 @@ const rowBtn = (selected: boolean): CSSProperties => ({
 });
 // The row's text: label, argument and meta on one baseline, red for a failed call.
 const line = (isError: boolean): CSSProperties => ({
-  display: 'flex', alignItems: 'baseline', gap: 10, flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 400,
+  display: 'flex', alignItems: 'baseline', gap: 10, flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 400, lineHeight: 'normal',
   color: isError ? '#e0a0a0' : '#c8c8c8',
 });
 // The heading: the row's dot beside the row's line, with the rail's gap (19px from dot to text, less the 7px dot).
