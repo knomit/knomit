@@ -76,10 +76,8 @@ type viewItem struct {
 	// snapshot is the whole truth about the turn and the page patches nothing.
 	Usage   *turnUsage `json:"usage,omitempty"`    // summed over the turn's requests
 	CostUSD *float64   `json:"cost_usd,omitempty"` // summed; absent without a price card
-	// CostRows is CostUSD by token kind (each request at its own tier), and
-	// HighTier is set when any request of the turn fell in the higher tier.
+	// CostRows is CostUSD by token kind, each request priced at its own tier.
 	CostRows *costRows `json:"cost_rows,omitempty"`
-	HighTier bool      `json:"high_tier,omitempty"`
 	Warning  string    `json:"warning,omitempty"` // the price-tier warning, worded
 	// WarningInfo is the same warning, structured, for the page to word its own line.
 	WarningInfo *noticeView `json:"warning_info,omitempty"`
@@ -874,7 +872,6 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 					sum.Rows = llm.CostRows(*it.CostRows)
 				}
 				it.CostRows = costRowsOf(sum.Add(llm.Cost{Rows: ev.Cost.Rows}).Rows)
-				it.HighTier = it.HighTier || ev.Cost.High
 			}
 		}
 		turn := c.turnAt
@@ -885,9 +882,6 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		if ev.Cost != nil {
 			out["cost_usd"] = ev.Cost.USD
 			out["cost_rows"] = costRowsOf(ev.Cost.Rows)
-			if ev.Cost.High {
-				out["high_tier"] = true
-			}
 		}
 		c.emit("usage", out)
 		c.noteState()

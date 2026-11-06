@@ -10,23 +10,6 @@ import (
 	"knomit/internal/engine/llm"
 )
 
-// The context endpoint names the model's price-tier boundary (from its price
-// card), so the page words "tier ≤100K" from the card; a model with one tier
-// or no card has none.
-func TestChat_ContextEndpointNamesThePriceTierBoundary(t *testing.T) {
-	h := newHarness(t)
-	for model, want := range map[string]int{"a1": 100_000, "a2": 0} { // a2 has no price card
-		id := h.create("uid:501", model)
-		code, body := h.do("uid:501", http.MethodGet, "/chats/"+id+"/context", nil)
-		require.Equal(t, http.StatusOK, code, string(body))
-		var got struct {
-			TierTokens int `json:"tier_tokens"`
-		}
-		require.NoError(t, json.Unmarshal(body, &got))
-		require.Equal(t, want, got.TierTokens, model)
-	}
-}
-
 type costRowsView struct {
 	Input      float64 `json:"input"`
 	CacheRead  float64 `json:"cache_read"`
@@ -38,8 +21,8 @@ func (r costRowsView) sum() float64 { return r.Input + r.CacheRead + r.CacheWrit
 
 // A turn's cost is also split by token kind, each request at its own price tier,
 // so the page can show a row's dollars without a price list: the rows add up to
-// the turn's cost, in the snapshot and in the live usage events, and the turn
-// says it reached the higher tier when any request did.
+// the turn's cost, in the snapshot and in the live usage events,
+// and a request past the tier boundary is priced at the higher tier's rates.
 //
 // SABOTAGE: chat.go onLoopEvent LoopUsage, drop the `it.CostRows = ` assignment
 // or the `"cost_rows"` key -> the matching assertion fails.
@@ -63,7 +46,6 @@ func TestChat_CostIsSplitByRowAndAddsUpToTheTurn(t *testing.T) {
 	var first struct {
 		Cost *float64      `json:"cost_usd"`
 		Rows *costRowsView `json:"cost_rows"`
-		High bool          `json:"high_tier"`
 	}
 	require.NoError(t, json.Unmarshal(live[0].Data, &first))
 	require.NotNil(t, first.Rows)
@@ -71,14 +53,7 @@ func TestChat_CostIsSplitByRowAndAddsUpToTheTurn(t *testing.T) {
 	require.InDelta(t, 0.0002, first.Rows.CacheRead, 1e-12)
 	require.InDelta(t, 0.00375, first.Rows.CacheWrite, 1e-12)
 	require.InDelta(t, 0.002, first.Rows.Output, 1e-12)
-	require.False(t, first.High)
 	require.InDelta(t, *first.Cost, first.Rows.sum(), 1e-12)
-	var second struct {
-		High bool `json:"high_tier"`
-	}
-	require.NoError(t, json.Unmarshal(live[1].Data, &second))
-	require.True(t, second.High)
-
 	code, body := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
 	require.Equal(t, http.StatusOK, code, string(body))
 	var snap struct {
@@ -86,7 +61,6 @@ func TestChat_CostIsSplitByRowAndAddsUpToTheTurn(t *testing.T) {
 			Kind string        `json:"kind"`
 			Cost *float64      `json:"cost_usd"`
 			Rows *costRowsView `json:"cost_rows"`
-			High bool          `json:"high_tier"`
 		} `json:"items"`
 	}
 	require.NoError(t, json.Unmarshal(body, &snap))
@@ -97,7 +71,6 @@ func TestChat_CostIsSplitByRowAndAddsUpToTheTurn(t *testing.T) {
 	require.InDelta(t, 0.0027, turn.Rows.CacheRead, 1e-12)
 	require.InDelta(t, 0.01, turn.Rows.CacheWrite, 1e-12)
 	require.InDelta(t, 0.007, turn.Rows.Output, 1e-12)
-	require.True(t, turn.High, "the second request was past the tier boundary")
 	require.InDelta(t, 0.0707, *turn.Cost, 1e-12)
 	require.InDelta(t, *turn.Cost, turn.Rows.sum(), 1e-12)
 }

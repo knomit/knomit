@@ -133,13 +133,8 @@ export const COST_ROW_OUTPUT = 'Output';
 export const COST_THIS_TURN = 'This turn';
 /** Shown for a cost when the model has no price card. */
 export const COST_UNPRICED = '–';
-/** The cost card's first line: "Turn N · <model> · tier ≤100K". The boundary is the
- *  model's price card's (0 with one tier or no card: the tier part is left out); a turn
- *  that reached the higher tier reads ">" instead. */
-export function costCardHeader(turn: number, model: string, tierAt: number, high: boolean): string {
-  const head = `Turn ${turn} · ${model}`;
-  return tierAt > 0 ? `${head} · tier ${high ? '>' : '≤'}${+(tierAt / 1000).toFixed(1)}K` : head;
-}
+/** The cost card's first line: "Turn N · <model>". */
+export const costCardHeader = (turn: number, model: string): string => `Turn ${turn} · ${model}`;
 export const costSession = (turns: number): string => `Session (${turns} ${turns === 1 ? 'turn' : 'turns'})`;
 
 /** The verb of a timeline row for the tools that have wording; every other tool

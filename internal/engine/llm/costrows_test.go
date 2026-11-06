@@ -16,21 +16,17 @@ func TestEstimate_RowsAddUpToTotalAtTheTierInEffect(t *testing.T) {
 		name string
 		u    Usage
 		want CostRows
-		high bool
 	}{
 		{"low tier", Usage{Input: 100, Output: 1_000_000},
-			CostRows{Input: 100e-6, Output: 5}, false},
+			CostRows{Input: 100e-6, Output: 5}},
 		// a 3-token prompt is far below 100: the low rates, cache write at the 5m multiplier.
 		{"cache rows at the low rate", Usage{Input: 1, CacheRead: 1, CacheWrite: 1, CacheWrite5m: 1},
-			CostRows{Input: 1e-6, CacheRead: 0.1e-6, CacheWrite: 1.25e-6}, false},
+			CostRows{Input: 1e-6, CacheRead: 0.1e-6, CacheWrite: 1.25e-6}},
 		{"high tier", Usage{Input: 1_000_000, CacheRead: 1_000_000, CacheWrite: 1_000_000, CacheWrite5m: 600_000, CacheWrite1h: 400_000, Output: 1_000_000},
-			CostRows{Input: 2, CacheRead: 0.2, CacheWrite: 2*1.25*0.6 + 2*2*0.4, Output: 10}, true},
+			CostRows{Input: 2, CacheRead: 0.2, CacheWrite: 2*1.25*0.6 + 2*2*0.4, Output: 10}},
 	}
 	for _, c := range cases {
 		got := card.Estimate(c.u)
-		if got.High != c.high {
-			t.Errorf("%s: High = %v, want %v", c.name, got.High, c.high)
-		}
 		for _, p := range []struct {
 			n         string
 			got, want float64
@@ -53,11 +49,11 @@ func TestEstimate_NilCardHasNoRows(t *testing.T) {
 	}
 }
 
-func TestCost_AddKeepsRowsAndHighTier(t *testing.T) {
+func TestCost_AddKeepsRows(t *testing.T) {
 	a := Cost{USD: 3, Rows: CostRows{Input: 1, Output: 2}}
-	b := Cost{USD: 7, High: true, Rows: CostRows{Input: 3, CacheRead: 1, Output: 3}}
+	b := Cost{USD: 7, Rows: CostRows{Input: 3, CacheRead: 1, Output: 3}}
 	got := a.Add(b)
-	want := Cost{USD: 10, High: true, Rows: CostRows{Input: 4, CacheRead: 1, Output: 5}}
+	want := Cost{USD: 10, Rows: CostRows{Input: 4, CacheRead: 1, Output: 5}}
 	if got != want {
 		t.Errorf("Add = %+v, want %+v", got, want)
 	}

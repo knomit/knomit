@@ -170,12 +170,10 @@ type PriceCard struct {
 // priced at the 5m multiplier, the API's default TTL.
 //
 // Rows is the same figure split by token kind, and USD is exactly their sum, so
-// a page that shows the rows and the total cannot disagree. High is set when
-// the request fell in the higher price tier (a summed Cost: when any did).
+// a page that shows the rows and the total cannot disagree.
 type Cost struct {
 	USD  float64
 	Rows CostRows
-	High bool
 }
 
 // CostRows is a cost in USD by token kind. CacheWrite covers both TTLs.
@@ -186,7 +184,7 @@ type CostRows struct {
 // Add sums two costs; the rows add by kind.
 func (c Cost) Add(o Cost) Cost {
 	return Cost{
-		USD: c.USD + o.USD, High: c.High || o.High,
+		USD: c.USD + o.USD,
 		Rows: CostRows{
 			Input: c.Rows.Input + o.Rows.Input, CacheRead: c.Rows.CacheRead + o.Rows.CacheRead,
 			CacheWrite: c.Rows.CacheWrite + o.Rows.CacheWrite, Output: c.Rows.Output + o.Rows.Output,
@@ -200,8 +198,7 @@ func (c *PriceCard) Estimate(u Usage) Cost {
 		return Cost{}
 	}
 	in, out := c.InputPerMTok, c.OutputPerMTok
-	high := c.TierTokens > 0 && promptTokens(u) > int64(c.TierTokens)
-	if high {
+	if c.TierTokens > 0 && promptTokens(u) > int64(c.TierTokens) {
 		in, out = c.HighInputPerMTok, c.HighOutputPerMTok
 	}
 	unsplit := max(u.CacheWrite-u.CacheWrite5m-u.CacheWrite1h, 0)
@@ -211,7 +208,7 @@ func (c *PriceCard) Estimate(u Usage) Cost {
 		CacheWrite: (float64(u.CacheWrite5m+unsplit)*in*c.CacheWrite5mMult + float64(u.CacheWrite1h)*in*c.CacheWrite1hMult) / 1e6,
 		Output:     float64(u.Output) * out / 1e6,
 	}
-	return Cost{USD: rows.Input + rows.CacheRead + rows.CacheWrite + rows.Output, Rows: rows, High: high}
+	return Cost{USD: rows.Input + rows.CacheRead + rows.CacheWrite + rows.Output, Rows: rows}
 }
 
 // promptTokens is everything the request sent as input.

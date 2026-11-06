@@ -15,23 +15,19 @@ import {
  * (cache_read / (input + cache_read + cache_write)). Hovering (or focusing) it
  * opens a card with the four token counts, this turn's cost and the session's.
  *
- * The card opens with "Turn N · <model> · tier ≤100K" and each of the four rows
- * shows its own cost. The server computes the rows (each request at its own price
- * tier) and they add up to the turn's cost; the page does no pricing of its own.
+ * The card opens with "Turn N · <model>" and each of the four rows shows its own
+ * cost. The server computes the rows (each request at its own price tier) and they
+ * add up to the turn's cost; the page does no pricing of its own.
  */
-export function ChatTurnFooter({ usage, costUsd, costRows, highTier, turnNumber, modelName, tierAt, answer, sessionCostUsd, sessionTurns }: {
+export function ChatTurnFooter({ usage, costUsd, costRows, turnNumber, modelName, answer, sessionCostUsd, sessionTurns }: {
   usage: TurnUsage;
   costUsd: number | null;
   /** The cost by token kind; null without a price card. */
   costRows: CostRows | null;
-  /** A request of this turn fell in the higher price tier. */
-  highTier: boolean;
   /** 1-based number of this turn in the chat. */
   turnNumber: number;
   /** The model's display name (its configured label, else its id). */
   modelName: string;
-  /** The price card's first-tier boundary in prompt tokens; 0 with one tier or no card. */
-  tierAt: number;
   /** The answer's text, which the copy icon copies. */
   answer: string;
   sessionCostUsd: number | null;
@@ -71,7 +67,7 @@ export function ChatTurnFooter({ usage, costUsd, costRows, highTier, turnNumber,
         {hover && (
           <div ref={card} data-testid="chat-cost-card" data-side={side} role="tooltip" style={side === 'above' ? cardStyle : { ...cardStyle, bottom: 'auto', top: 'calc(100% + 8px)' }}>
             <div data-testid="chat-cost-header" style={{ fontFamily: 'var(--k-font-body)', fontSize: 11, color: '#888', marginBottom: 8 }}>
-              {costCardHeader(turnNumber, modelName, tierAt, highTier)}
+              {costCardHeader(turnNumber, modelName)}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: '5px 14px' }}>
               <Row label={COST_ROW_INPUT} tokens={usage.input} usd={costRows?.input} testid="input" />

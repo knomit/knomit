@@ -499,11 +499,8 @@ type contextView struct {
 	How    string `json:"how,omitempty"`
 	Spill  bool   `json:"spill"`
 	// PromptTokens: see chatView.
-	PromptTokens int64 `json:"prompt_tokens"`
-	// TierTokens is the model's price-tier boundary from its price card: the
-	// prompt size up to which the first tier applies. 0 with one tier or no card.
-	TierTokens int         `json:"tier_tokens,omitempty"`
-	Links      hal.LinkMap `json:"_links"`
+	PromptTokens int64       `json:"prompt_tokens"`
+	Links        hal.LinkMap `json:"_links"`
 }
 
 // contextOf is the model's ContextInfo, or its Caps window with no "how" when
@@ -524,12 +521,8 @@ func (m *manager) handleContext(w http.ResponseWriter, r *http.Request) {
 	c.mu.Lock()
 	prompt := c.lastPrompt
 	c.mu.Unlock()
-	tier := 0
-	if c.loop.Price != nil {
-		tier = c.loop.Price.TierTokens
-	}
 	hal.WriteHAL(w, http.StatusOK, contextView{
-		Window: window, How: how, Spill: spill, PromptTokens: prompt, TierTokens: tier,
+		Window: window, How: how, Spill: spill, PromptTokens: prompt,
 		Links: hal.LinkMap{"self": {Href: httpx.APIBase + "/chats/" + c.id + "/context"}},
 	})
 }
