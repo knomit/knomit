@@ -34,5 +34,5 @@ func TestChat_RepeatedSuccessfulCallEndsTheTurn(t *testing.T) {
 		Message string `json:"message"`
 	}
 	require.NoError(t, json.Unmarshal(evs[len(evs)-1].Data, &e))
-	require.Equal(t, fmt.Sprintf(llm.NoProgressMessage_DRAFT, "knomit_repos", 3), e.Message)
+	require.Equal(t, fmt.Sprintf(llm.NoProgressMessage, "knomit_repos", 3), e.Message)
 }

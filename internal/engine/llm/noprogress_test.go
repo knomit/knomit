@@ -29,7 +29,8 @@ func sameCallSteps(n int, tool, args string) []fakeStep {
 // the earlier result and the note, the third ends the turn. Every tool_use is
 // paired and the turn is flushed.
 //
-// SABOTAGE: agent.go runCalls, delete the `guard.repeatOf` block -> fails.
+// SABOTAGE: agent.go runCalls, make `guard.sameAsLastSuccess(c)` return false
+// (or delete the block it guards) -> fails.
 func TestLoop_IdenticalSuccessfulCallIsShortCircuitedThenEndsTheTurn(t *testing.T) {
 	m := &fakeModel{steps: sameCallSteps(23, "knomit_bind", `{}`)}
 	h := okHost("bound: h1")
@@ -45,7 +46,7 @@ func TestLoop_IdenticalSuccessfulCallIsShortCircuitedThenEndsTheTurn(t *testing.
 	if len(m.snaps) != 3 || res.ToolCalls != 3 {
 		t.Fatalf("requests %d, tool calls %d; want 3 each", len(m.snaps), res.ToolCalls)
 	}
-	want := fmt.Sprintf(NoProgressMessage_DRAFT, "knomit_bind", 3)
+	want := fmt.Sprintf(NoProgressMessage, "knomit_bind", 3)
 	if err.Error() != want {
 		t.Fatalf("message = %q, want %q", err.Error(), want)
 	}
@@ -64,7 +65,7 @@ func TestLoop_IdenticalSuccessfulCallIsShortCircuitedThenEndsTheTurn(t *testing.
 	if results[0].Content != "bound: h1" || results[0].IsError {
 		t.Fatalf("first result = %+v, want the real one", results[0])
 	}
-	if results[1].Content != "bound: h1"+NoProgressNote_DRAFT || results[1].IsError {
+	if results[1].Content != "bound: h1"+NoProgressNote || results[1].IsError {
 		t.Fatalf("second result = %q, want the earlier result plus the note", results[1].Content)
 	}
 	if results[2].ToolUseID != "tu_3" {
@@ -183,5 +184,19 @@ func TestLoop_NoProgressGuardWithinOneReply(t *testing.T) {
 	}
 	if !strings.Contains(history(b)[len(history(b))-1].Blocks[3].ToolResult.Content, SkippedResult) {
 		t.Fatalf("the call after the ending one should be skipped")
+	}
+}
+
+// The user approved this wording; a change to it is a change to approved copy.
+//
+// SABOTAGE: agent.go, edit a word of NoProgressNote or NoProgressMessage ->
+// fails.
+func TestNoProgressCopyIsTheApprovedText(t *testing.T) {
+	const note = "\n\n[This is the same call, with the same arguments, as one that already succeeded in this turn. It was not run again; the result above is the earlier one. If you need something different, change the arguments or answer the person.]"
+	if NoProgressNote != note {
+		t.Fatalf("NoProgressNote = %q", NoProgressNote)
+	}
+	if got := fmt.Sprintf(NoProgressMessage, "knomit_bind", 3); got != "Stopped: the model repeated knomit_bind 3 times." {
+		t.Fatalf("NoProgressMessage = %q", got)
 	}
 }

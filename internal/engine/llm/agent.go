@@ -105,17 +105,16 @@ const RepeatFailureLimit = 3
 // is ended by the repeat guard.
 const RepeatedFailureMessage = "The model kept making the same failing tool call (%s, %d times with the same error), so the turn was stopped. The last error was: %s"
 
-// NoProgressNote_DRAFT and NoProgressMessage_DRAFT are NEW model-visible and
-// user-visible copy, NOT yet approved by the user. Change them only on the
-// user's word.
+// NoProgressNote and NoProgressMessage are model-visible and user-visible
+// copy, both approved by the user. Change them only on the user's word.
 const (
-	// NoProgressNote_DRAFT is appended (model-visible) to the earlier result a
+	// NoProgressNote is appended (model-visible) to the earlier result a
 	// repeated, already successful call is answered with. It starts with a
 	// blank line.
-	NoProgressNote_DRAFT = "\n\n[This is the same call as your previous step, with the same arguments, and it had already succeeded. It was not run again; the result above is the earlier one. If you need something different, change the arguments or answer the person.]"
-	// NoProgressMessage_DRAFT is the sentence the user is shown when the turn
+	NoProgressNote = "\n\n[This is the same call, with the same arguments, as one that already succeeded in this turn. It was not run again; the result above is the earlier one. If you need something different, change the arguments or answer the person.]"
+	// NoProgressMessage is the sentence the user is shown when the turn
 	// is ended for repeating a successful call. Arguments: the tool, the count.
-	NoProgressMessage_DRAFT = "The model kept making the same tool call (%s, %d times with the same arguments) without getting anywhere, so the turn was stopped."
+	NoProgressMessage = "Stopped: the model repeated %s %d times."
 )
 
 var (
@@ -581,10 +580,13 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 		if l.ShortCircuit != nil && guard.sameAsLastSuccess(c) {
 			if n := guard.okRepeats + 1; n > NoProgressRepeats {
 				abort(i, SkippedResult)
+				// n counts this repeat (the earlier ones answered, plus this
+				// one); the original call that ran is not in it. The message
+				// states how many times the model made the call: n + 1.
 				return results, approvals, noProgress(c.Name, n+1)
 			}
 			guard.okRepeats++
-			msg := guard.okContent + NoProgressNote_DRAFT
+			msg := guard.okContent + NoProgressNote
 			answer(c, msg, false)
 			l.logCall(c, msg, false)
 			continue
@@ -686,7 +688,7 @@ func (g *repeatGuard) sameAsLastSuccess(c ToolUse) bool {
 }
 
 func noProgress(tool string, n int) error {
-	return &turnError{msg: fmt.Sprintf(NoProgressMessage_DRAFT, tool, n), err: ErrNoProgress}
+	return &turnError{msg: fmt.Sprintf(NoProgressMessage, tool, n), err: ErrNoProgress}
 }
 
 // observe records an executed call's outcome and returns the current streak.
