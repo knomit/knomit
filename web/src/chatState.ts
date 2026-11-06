@@ -29,6 +29,9 @@
 import { durationMinutes, durationMs, durationSeconds } from './chatCopy';
 import type { ChatApproval, ChatCallSummary, ChatNotice, ChatSnapshot, ChatViewItem } from './chatApi';
 
+/** The loader tool's name (llm.LoadToolsName): its calls get their own row. */
+export const LOADER_TOOL = 'load_tools';
+
 export interface ToolCall {
   id: string; name: string; state: 'running' | 'done'; isError: boolean;
   /** The call's arguments: in the snapshot always, and on a live `running` event. */
@@ -37,10 +40,11 @@ export interface ToolCall {
    *  call (the done event and the snapshot); absent for a call that did not run. */
   durationMs?: number;
   summary?: ChatCallSummary;
+  /** The tools a call to the loader loaded (only on that call). */
+  loaded?: string[];
 }
 export type ChatPart = { kind: 'text'; text: string } | { kind: 'group'; calls: ToolCall[] };
 export interface TurnUsage { input: number; cacheRead: number; cacheWrite: number; output: number }
-
 export interface ChatTurn {
   /** The person's message; empty for a turn the page joined mid-way. */
   user: string;
@@ -114,7 +118,7 @@ export type ChatEvent =
   | { kind: 'send_failed'; sendId: number }
   | { kind: 'text_delta'; text: string; turn: number }
   | { kind: 'thinking_delta'; text: string; turn: number }
-  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; arguments?: unknown; duration_ms?: number; summary?: ChatCallSummary; turn: number }
+  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; arguments?: unknown; duration_ms?: number; summary?: ChatCallSummary; loaded?: string[]; turn: number }
   | { kind: 'approval'; approval: ChatApproval }
   | { kind: 'approval_answered'; callId: string }
   | { kind: 'usage'; usage: UsagePayload; cost_usd?: number; seq?: number; turn: number }
@@ -178,7 +182,7 @@ function addItem(turns: ChatTurn[], item: ChatViewItem, at: number): void {
   const t = turns[turns.length - 1];
   if (item.kind === 'assistant') { t.parts.push({ kind: 'text', text: item.text ?? '' }); return; }
   const c: ToolCall = { id: item.id ?? '', name: item.name ?? '', state: item.state ?? 'done', isError: !!item.is_error, ...(item.arguments !== undefined ? { args: item.arguments } : {}),
-    ...(item.duration_ms ? { durationMs: item.duration_ms } : {}), ...(item.summary ? { summary: item.summary } : {}) };
+    ...(item.duration_ms ? { durationMs: item.duration_ms } : {}), ...(item.summary ? { summary: item.summary } : {}), ...(item.loaded?.length ? { loaded: item.loaded } : {}) };
   const last = t.parts[t.parts.length - 1];
   if (last?.kind === 'group') last.calls.push(c); else t.parts.push({ kind: 'group', calls: [c] });
 }
@@ -260,6 +264,7 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
                   ...c, state: e.state, isError: !!e.is_error,
                   ...(e.arguments !== undefined && c.args === undefined ? { args: e.arguments } : {}),
                   ...(e.duration_ms ? { durationMs: e.duration_ms } : {}), ...(e.summary ? { summary: e.summary } : {}),
+                  ...(e.loaded?.length ? { loaded: e.loaded } : {}),
                 }),
               }
               : p),
@@ -267,7 +272,7 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
         }
         const c: ToolCall = {
           id: e.id, name: e.name, state: e.state, isError: !!e.is_error, ...(e.arguments !== undefined ? { args: e.arguments } : {}),
-          ...(e.duration_ms ? { durationMs: e.duration_ms } : {}), ...(e.summary ? { summary: e.summary } : {}),
+          ...(e.duration_ms ? { durationMs: e.duration_ms } : {}), ...(e.summary ? { summary: e.summary } : {}), ...(e.loaded?.length ? { loaded: e.loaded } : {}),
         };
         const last = t.parts[t.parts.length - 1];
         const parts = last?.kind === 'group'

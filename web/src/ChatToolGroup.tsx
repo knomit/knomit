@@ -4,10 +4,10 @@ import ReactMarkdown from 'react-markdown';
 import { markdownPlugins, markdownComponents } from './markdown';
 import type { ChatApproval, ApprovalDecision } from './chatApi';
 import type { ToolCall } from './chatState';
-import { toolRowLabel, toolKind, callTarget, boundAfter, keyArg, queryText, formatDuration, totalDurationMs } from './chatState';
+import { LOADER_TOOL, toolRowLabel, toolKind, callTarget, boundAfter, keyArg, queryText, formatDuration, totalDurationMs } from './chatState';
 import {
   APPROVAL_ALLOW, APPROVAL_DECLINE, APPROVAL_ALLOW_SESSION, APPROVAL_TARGET_UNRESOLVED, CHAT_STOP,
-  activitySummary, activitySteps, liveStep, toolVerb, resultCount,
+  loadedToolsRow, activitySummary, activitySteps, liveStep, toolVerb, resultCount,
 } from './chatCopy';
 import type { SummarySeg } from './chatCopy';
 
@@ -120,7 +120,7 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
                 <span aria-hidden="true" data-testid={`chat-tool-dot-${c.id}`} style={dot(c.state, c.isError)} />
                 <button type="button" data-testid={`chat-tool-select-${c.id}`} disabled={!canOpen}
                   aria-pressed={selected} onClick={() => onSelect(c)} style={rowBtn(selected, c.isError)}>
-                  <span style={{ color: c.state === 'running' ? AMBER : undefined }}>{toolVerb(toolKind(c.name), c.state === 'running') ?? toolRowLabel(c.name)}</span>
+                  <span style={{ color: c.state === 'running' ? AMBER : undefined }}>{c.name === LOADER_TOOL && c.loaded?.length ? loadedToolsRow(c.loaded) : (toolVerb(toolKind(c.name), c.state === 'running') ?? toolRowLabel(c.name))}</span>
                   {arg && <span data-testid={`chat-tool-arg-${c.id}`} style={argMono}>{arg}</span>}
                   {(c.summary || c.durationMs) && (
                     <span data-testid={`chat-tool-meta-${c.id}`} style={metaMono}>

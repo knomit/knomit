@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -33,10 +34,13 @@ var ErrWindowWithStablePrefix = errors.New("llm: Loop.Window is set for a model 
 // cache to protect). The loop still edits nothing: the Builder keeps every
 // tool and the whole history. What changes is the SENT view. The loop sends
 // Window.Project(Builder.Snapshot()), a copy whose tools block is the loader
-// (load_tools) plus the tools loaded so far, and estimates, budgets and logs
+// (load_tools), the tools loaded so far in full and a stub for every other
+// catalogue tool, and estimates, budgets and logs
 // that same copy. The loader and a call to a tool that is not loaded are
 // answered in the loop before the approval gate (they run nothing); every call
-// to a loaded tool still goes through CallGate.Decide. Loaded tools are evicted
+// to a loaded tool that is run still goes through CallGate.Decide (an identical
+// repeat of a call that just succeeded is answered from the earlier result and
+// is not run: see NoProgressNote). Loaded tools are evicted
 // only between requests and only when the request would not fit, never a tool
 // called or loaded in the current turn, so a pending call never meets an
 // eviction. With Window nil the snapshot sent is Builder.Snapshot(), byte for
@@ -106,7 +110,21 @@ const RepeatFailureLimit = 3
 // is ended by the repeat guard.
 const RepeatedFailureMessage = "The model kept making the same failing tool call (%s, %d times with the same error), so the turn was stopped. The last error was: %s"
 
+// NoProgressNote and NoProgressMessage are model-visible and user-visible
+// copy, both approved by the user. Change them only on the user's word.
+const (
+	// NoProgressNote is appended (model-visible) to the earlier result a
+	// repeated, already successful call is answered with. It starts with a
+	// blank line.
+	NoProgressNote = "\n\n[This is the same call, with the same arguments, as one that already succeeded in this turn. It was not run again; the result above is the earlier one. If you need something different, change the arguments or answer the person.]"
+	// NoProgressMessage is the sentence the user is shown when the turn
+	// is ended for repeating a successful call. Arguments: the tool, the count.
+	NoProgressMessage = "Stopped: the model repeated %s %d times."
+)
+
 var (
+	// ErrNoProgress: the model made a call that had just succeeded again, and again after it was told.
+	ErrNoProgress = errors.New("llm: the model repeated the same successful tool call")
 	// ErrRepeatedFailure: the model repeated one failing call RepeatFailureLimit times in a row.
 	ErrRepeatedFailure = errors.New("llm: the model repeated the same failing tool call")
 	// ErrTooManyCalls: the turn asked for more tool calls than Loop.MaxCalls.
@@ -238,6 +256,22 @@ type RequestLog struct {
 	Provider, Model string
 	RequestRecord
 	Usage Usage
+	// Projection is set for an adaptive chat only: what the projection did to
+	// this request.
+	Projection *ProjectionLog
+	// RepeatStopped is set when the generation was cancelled because the
+	// response repeated a call it already held (see repeatStop); Usage is then
+	// an estimate.
+	RepeatStopped bool
+}
+
+// ProjectionLog is what the projection of an adaptive chat did to one request:
+// the tool results of ended turns it sent as stubs, and the tokens (bytes/4)
+// the sent view is smaller than the stored one by, tool definitions and stubs
+// together and net of the loader's own definition.
+type ProjectionLog struct {
+	StubbedResults int
+	SavedTokensEst int
 }
 
 // ToolCallLog is one tool call and its outcome.
@@ -279,8 +313,9 @@ type Loop struct {
 	// ArgsHook returns the arguments to SEND for a call (trace injection,
 	// plan P17). The history keeps the arguments the model emitted. Nil sends
 	// the model's own.
-	ArgsHook func(ToolUse) json.RawMessage
-	Log      SessionLog
+	ArgsHook       func(ToolUse) json.RawMessage
+	Log            SessionLog
+	repeatsDropped bool // the last response was cut at a repeated call (read once by account)
 	// Options are the per-request knobs, passed to the model untouched
 	// (Progress feeds WrapChat's stall timer).
 	Options StreamOptions
@@ -292,6 +327,14 @@ type Loop struct {
 	// static path: every tool, every request. Set it only for a model whose
 	// Caps().StablePrefix is false.
 	Window *ToolWindow
+	// ShortCircuit says whether a call may be answered from the result of the
+	// call just before it, when that call was byte-identical and succeeded:
+	// true when running it again would add nothing (a read, a bind with the
+	// same arguments, a write that already happened). It must be false for a
+	// call whose repeat can legitimately return something new (a page cursor,
+	// a session step). Nil: no call is short-circuited and the no-progress
+	// guard is off. The edge passes mcp.RepeatAnswerable.
+	ShortCircuit func(tool string, args json.RawMessage) bool
 
 	warned     bool
 	haveUsage  bool
@@ -378,19 +421,43 @@ func (l *Loop) RunTurn(ctx context.Context, text string) (*TurnResult, error) {
 		}
 		l.maybeWarn(int64(est), true)
 		var streamed strings.Builder
+		rs := newRepeatStop(ctx, l.Model.Caps().StreamStoppable)
 		opts := l.Options
-		opts.Thinking = func(text string) { l.emit(LoopEvent{Kind: LoopThinking, Text: text}) }
-		resp, err := l.Model.Stream(ctx, snap, opts, func(ev Event) {
+		opts.Thinking = func(text string) {
+			if rs.stopped {
+				return // the request is being cancelled: nothing after the repeat counts
+			}
+			l.emit(LoopEvent{Kind: LoopThinking, Text: text})
+		}
+		resp, err := l.Model.Stream(rs.ctx, snap, opts, func(ev Event) {
+			if rs.stopped {
+				return // the request is being cancelled: nothing after the repeat counts
+			}
 			switch ev.Kind {
 			case EventTextDelta:
 				streamed.WriteString(ev.Text)
+				rs.text(ev.Text)
 				l.emit(LoopEvent{Kind: LoopText, Text: ev.Text})
 			case EventReasoning:
+				if ev.Reasoning != nil {
+					rs.addReasoning(ev.Reasoning)
+				}
 				l.emit(LoopEvent{Kind: LoopReasoning})
 			case EventToolUse:
+				if rs.repeat(ev.ToolUse) {
+					return
+				}
 				l.emit(LoopEvent{Kind: LoopToolUse, ToolUse: ev.ToolUse})
 			}
 		})
+		if rs.stopped && ctx.Err() == nil {
+			// The generation was cancelled at a repeated call. Whatever the
+			// provider then returned (the cancellation, or a response that was
+			// already complete) is replaced by what streamed before the repeat.
+			resp, err = rs.response(resp, est), nil
+			l.repeatsDropped = true
+		}
+		rs.release()
 		var stop *StopError
 		switch {
 		case errors.As(err, &stop):
@@ -498,6 +565,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 	}
 	var results []Block
 	var approvals []Approval
+	stubSeen := map[string]bool{} // stub calls answered "call it again" in this response, by name and arguments
 	// took is how long the call being answered ran; 0 until a tool really ran.
 	var took time.Duration
 	answer := func(c ToolUse, content string, isErr bool) {
@@ -532,6 +600,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 			l.logCall(c, msg, true)
 			// Malformed JSON repeated byte for byte is the same runaway as a
 			// failing call: keyed by the raw bytes and a fixed error.
+			guard.forget()
 			if n := guard.observeKey(c.Name+"\x00"+string(c.RawArgs)+"\x00invalid JSON", true); n >= RepeatFailureLimit {
 				abort(i+1, SkippedResult)
 				return results, approvals, repeatedFailure(c.Name, n, "the arguments are not valid JSON")
@@ -541,11 +610,25 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 
 		if l.Window != nil {
 			if l.Window.Handles(c.Name) {
+				guard.forget() // the window's answer changes what a repeat would return
 				// The loader, or a call to a tool the model had not loaded:
 				// answered here, run by nobody, so it needs no approval. The
 				// loader's decision is recorded as auto; a not-run call has none.
-				out := l.Window.Run(c, l.Builder.Snapshot(), l.roomLeft, l.pinnedTools())
-				l.emitToolChanges(res)
+				stub := c.Name != LoadToolsName
+				skey := callKey(c)
+				var out ToolOutcome
+				if stub && stubSeen[skey] {
+					// An identical stub call already in this response: one
+					// episode. The tool is loaded; the instruction to call
+					// again was given once, with the first.
+					out = ToolOutcome{Content: fmt.Sprintf(AlreadyLoadedResult, c.Name), IsError: true}
+				} else {
+					out = l.Window.Run(c, l.Builder.Snapshot(), l.roomLeft, l.pinnedTools())
+					l.emitToolChanges(res)
+					if stub && out.Content == fmt.Sprintf(NotLoadedCallResult, c.Name) {
+						stubSeen[skey] = true
+					}
+				}
 				if c.Name == LoadToolsName {
 					approvals = append(approvals, Approval{ToolUseID: c.ID, Decision: "auto"})
 					if l.Log != nil {
@@ -554,6 +637,12 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 				}
 				answer(c, out.Content, out.IsError)
 				l.logCall(c, out.Content, out.IsError)
+				if stubSeen[skey] {
+					// A call that took the not-loaded path is not a failure of
+					// the model's: the tool is loaded and the call is to be
+					// made again. It neither extends a streak nor breaks one.
+					continue
+				}
 				if n := guard.observe(c, out); n >= RepeatFailureLimit {
 					abort(i+1, SkippedResult)
 					return results, approvals, repeatedFailure(c.Name, n, truncateForMessage(out.Content, 300))
@@ -561,6 +650,25 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 				continue
 			}
 			l.Window.Touch(c.Name)
+		}
+
+		// No-progress guard: the call just before this one was identical and
+		// succeeded. Do not run it again and do not ask for approval for a
+		// call that is not run: answer with the earlier result and a note; the
+		// next identical call ends the turn. Paired either way.
+		if l.ShortCircuit != nil && guard.sameAsLastSuccess(c) {
+			if n := guard.okRepeats + 1; n > NoProgressRepeats {
+				abort(i, SkippedResult)
+				// n counts this repeat (the earlier ones answered, plus this
+				// one); the original call that ran is not in it. The message
+				// states how many times the model made the call: n + 1.
+				return results, approvals, noProgress(c.Name, n+1)
+			}
+			guard.okRepeats++
+			msg := guard.okContent + NoProgressNote
+			answer(c, msg, false)
+			l.logCall(c, msg, false)
+			continue
 		}
 
 		if l.Gate != nil {
@@ -583,6 +691,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 			}
 			if !d.Allow {
 				guard.reset() // a decline is new information: the model was told no
+				guard.forget()
 				answer(c, DeclinedResult, true)
 				l.logCall(c, DeclinedResult, true)
 				continue
@@ -606,6 +715,11 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 		}
 		answer(c, out.Content, out.IsError)
 		l.logCall(c, out.Content, out.IsError)
+		if !out.IsError && l.ShortCircuit != nil && l.ShortCircuit(c.Name, c.Args) {
+			guard.remember(c, out.Content)
+		} else {
+			guard.forget()
+		}
 		if n := guard.observe(c, out); n >= RepeatFailureLimit {
 			// End the turn the way the call limit does: answer the rest of
 			// this reply's calls so every tool_use stays paired (settle then
@@ -623,6 +737,39 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 type repeatGuard struct {
 	key string
 	n   int
+
+	// The no-progress guard: the last call that ran and succeeded, when its
+	// repeat may be answered from it (Loop.ShortCircuit), and how many repeats
+	// it has been answered for. Any other call, a failure or a decline forgets
+	// it, because the state a repeat would see may have changed.
+	okKey     string
+	okContent string
+	okRepeats int
+}
+
+// NoProgressRepeats is how many repeats of a successful call are answered from
+// its earlier result; the next one ends the turn. A policy, not a measurement:
+// one answered repeat tells a model that did not read the result that it got
+// it already, a second identical call shows it is not acting on that.
+const NoProgressRepeats = 1
+
+func callKey(c ToolUse) string { return c.Name + "\x00" + string(c.Args) }
+
+func (g *repeatGuard) remember(c ToolUse, content string) {
+	k := callKey(c)
+	if k != g.okKey {
+		g.okKey, g.okContent, g.okRepeats = k, content, 0
+	}
+}
+
+func (g *repeatGuard) forget() { g.okKey, g.okContent, g.okRepeats = "", "", 0 }
+
+func (g *repeatGuard) sameAsLastSuccess(c ToolUse) bool {
+	return g.okKey != "" && g.okKey == callKey(c)
+}
+
+func noProgress(tool string, n int) error {
+	return &turnError{msg: fmt.Sprintf(NoProgressMessage, tool, n), err: ErrNoProgress}
 }
 
 // observe records an executed call's outcome and returns the current streak.
@@ -703,6 +850,7 @@ func (l *Loop) account(res *TurnResult, snap Snapshot, resp *Response) {
 	res.Usage.PromptEval += u.PromptEval
 	res.Usage.Estimated = res.Usage.Estimated || u.Estimated
 
+	defer func() { l.repeatsDropped = false }()
 	ev := LoopEvent{Kind: LoopUsage, Usage: &u}
 	res.Usage.CacheWrite5m += u.CacheWrite5m
 	res.Usage.CacheWrite1h += u.CacheWrite1h
@@ -712,7 +860,11 @@ func (l *Loop) account(res *TurnResult, snap Snapshot, resp *Response) {
 		ev.Cost = &c
 	}
 	if l.Log != nil {
-		l.Log.Request(RequestLog{Provider: l.Model.Provider(), Model: l.Model.Model(), RequestRecord: snap.Record(), Usage: u})
+		rl := RequestLog{Provider: l.Model.Provider(), Model: l.Model.Model(), RequestRecord: snap.Record(), Usage: u, RepeatStopped: l.repeatsDropped}
+		if l.Window != nil {
+			rl.Projection = projectionOf(l.Builder.Snapshot(), snap)
+		}
+		l.Log.Request(rl)
 	}
 	l.emit(ev)
 
@@ -834,7 +986,8 @@ func (l *Loop) view() Snapshot {
 		// Ended turns shrink to stubs; the running turn is sent whole. With no
 		// known window there is no room to derive the excerpt from: no stubs.
 		reserve, window := l.budget()
-		return l.Window.StubEnded(p, window-reserve)
+		// Reasoning of ended turns is not sent either (DropEndedReasoning).
+		return l.Window.DropEndedReasoning(l.Window.StubEnded(p, window-reserve))
 	}
 	return snap
 }
@@ -947,6 +1100,11 @@ func (l *Loop) emitToolChanges(res *TurnResult) {
 // the window, the reply reserve and the room left after it.
 const OpeningTooBigMessage = "The opening of this chat (the tool definitions, the repo instructions and your message) needs about %d tokens, but the context window of %s is %d and %d of it is reserved for the reply, which leaves %d. Use a model with a larger window%s."
 
+// OpeningTooBigAdaptiveMessage is OpeningTooBigMessage for an adaptive chat,
+// whose opening holds the tool catalogue and the loader instead of every tool
+// definition (approved: design C7). Same arguments.
+const OpeningTooBigAdaptiveMessage = "The opening of this chat (the tool catalogue, the repo instructions and your message) needs about %d tokens, but the context window of %s is %d and %d of it is reserved for the reply, which leaves %d. Use a model with a larger window%s."
+
 // OllamaRaiseNumCtxHint is appended for an Ollama provider.
 const OllamaRaiseNumCtxHint = ", or raise num_ctx for this provider in knomit.toml"
 
@@ -961,16 +1119,33 @@ func isOpening(snap Snapshot) bool {
 // to change; it never suggests a number, because the toolset's size varies
 // with the repos and the permissions.
 func (l *Loop) openingTooBig(est, reserve, window int) error {
+	return OpeningTooBigError(l.Window != nil, l.Model.Provider(), l.Model.Model(), est, reserve, window)
+}
+
+// OpeningTooBigError is the refusal of an opening of est tokens that cannot fit
+// window less reserve. adaptive selects the sentence that names the catalogue
+// instead of the tool definitions. The chat uses it too, when the catalogue
+// alone cannot fit at open.
+func OpeningTooBigError(adaptive bool, provider, model string, est, reserve, window int) error {
 	hint := ""
-	if l.Model.Provider() == "ollama" {
+	if provider == "ollama" {
 		hint = OllamaRaiseNumCtxHint
+	}
+	format := OpeningTooBigMessage
+	if adaptive {
+		format = OpeningTooBigAdaptiveMessage
 	}
 	left := max(window-reserve, 0)
 	return &turnError{
-		msg: fmt.Sprintf(OpeningTooBigMessage, est, l.Model.Model(), window, reserve, left, hint),
+		msg: fmt.Sprintf(format, est, model, window, reserve, left, hint),
 		err: ErrContextFull, needed: est + reserve, window: window,
 	}
 }
+
+// ReplyReserve is the tokens the loop keeps free for the reply of a model with
+// these capabilities (the loop's own rule, for a caller that sizes something
+// to the usable room).
+func ReplyReserve(c Caps) int { return replyReserve(c) }
 
 // OpeningRefusedByServerMessage is shown when the server refused an
 // opening that the local estimate says fits the window the model reports: the
@@ -1124,4 +1299,121 @@ func toolUses(bs []Block) []ToolUse {
 		}
 	}
 	return out
+}
+
+// repeatStop watches one streaming response for a tool call identical (same
+// name, same canonical arguments) to one it already holds. An identical call in
+// the same response is never useful, and a model that starts repeating one does
+// not stop until the context window is full, so the first repeat cancels the
+// generation. The calls received before it are kept; the repeat and anything
+// after it are dropped, so no tool_use is left unanswered. It is armed only for
+// a provider whose cancelled stream leaves a coherent partial (Caps.StreamStoppable).
+//
+// blocks are kept in the order the stream delivered them: a provider that
+// builds its blocks in stream order (Ollama: a thinking run and a content run
+// each close when the stream switches kind or a call arrives) interleaves
+// reasoning, text and calls, and the partial response must keep that order.
+// Text arrives as deltas, so pending holds the open text run; it becomes a
+// block when a reasoning block or a call arrives, or when the response is made.
+type repeatStop struct {
+	ctx     context.Context
+	cancel  context.CancelFunc
+	armed   bool
+	stopped bool
+	seen    map[string]bool
+	blocks  []Block
+	pending strings.Builder
+}
+
+func newRepeatStop(parent context.Context, armed bool) *repeatStop {
+	r := &repeatStop{ctx: parent, armed: armed}
+	if armed {
+		r.ctx, r.cancel = context.WithCancel(parent)
+		r.seen = map[string]bool{}
+	}
+	return r
+}
+
+// text records a streamed content delta into the open text run.
+func (r *repeatStop) text(s string) { r.pending.WriteString(s) }
+
+func (r *repeatStop) closeText() {
+	if r.pending.Len() == 0 {
+		return
+	}
+	r.blocks = append(r.blocks, Block{Kind: BlockText, Text: r.pending.String()})
+	r.pending.Reset()
+}
+
+// addReasoning records a closed reasoning run; the text before it is closed.
+func (r *repeatStop) addReasoning(re *Reasoning) {
+	r.closeText()
+	r.blocks = append(r.blocks, Block{Kind: BlockReasoning, Reasoning: re})
+}
+
+// repeat records tu and reports whether it repeats an earlier call of the
+// response, in which case the generation is cancelled.
+func (r *repeatStop) repeat(tu *ToolUse) bool {
+	if !r.armed || tu == nil {
+		return false
+	}
+	key := tu.Name + "\x00" + canonicalArgs(tu.Args)
+	if r.seen[key] {
+		r.stopped = true
+		r.cancel()
+		return true
+	}
+	r.seen[key] = true
+	r.closeText()
+	r.blocks = append(r.blocks, Block{Kind: BlockToolUse, ToolUse: tu})
+	return false
+}
+
+func (r *repeatStop) release() {
+	if r.cancel != nil {
+		r.cancel()
+	}
+}
+
+// response is the response up to the repeat: the reasoning, text and distinct
+// calls that streamed, in stream order. Its usage is the provider's when it
+// returned a complete one, otherwise an estimate: the prompt as the loop
+// estimated it and the bytes that streamed as output (bytes/4), counting text,
+// reasoning and the kept calls.
+func (r *repeatStop) response(got *Response, est int) *Response {
+	r.closeText()
+	blocks := append([]Block(nil), r.blocks...)
+	out := 0
+	for _, b := range blocks {
+		switch b.Kind {
+		case BlockText:
+			out += len(b.Text)
+		case BlockReasoning:
+			out += len(b.Reasoning.Native)
+		case BlockToolUse:
+			out += len(b.ToolUse.Name) + len(b.ToolUse.Args)
+		}
+	}
+	u := Usage{Input: int64(est), Output: int64(out / 4), Estimated: true, EstimatedFields: []string{"input", "output"}}
+	if got != nil && (got.Usage.Input != 0 || got.Usage.Output != 0) {
+		u = got.Usage
+	}
+	return &Response{Blocks: blocks, StopReason: StopToolUse, Usage: u}
+}
+
+// canonicalArgs is args with object keys in sorted order and no insignificant
+// space, so two spellings of the same arguments compare equal. Arguments that
+// are not JSON compare by their bytes.
+func canonicalArgs(args json.RawMessage) string {
+	var v any
+	dec := json.NewDecoder(bytes.NewReader(args))
+	dec.UseNumber() // an integer above 2^53 stays itself
+	if err := dec.Decode(&v); err != nil {
+		return string(args)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return string(args)
+	}
+	return string(b)
 }

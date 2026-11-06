@@ -111,11 +111,41 @@ func (l *sessionLog) Request(r llm.RequestLog) {
 		items[hookNames[h]] = nonNilStrings(r.Items[h])
 		tokens[hookNames[h]] = r.Tokens[h]
 	}
-	l.write("request", map[string]any{
+	rec := map[string]any{
 		"provider": r.Provider, "model": r.Model, "items": items, "tokens": tokens,
 		"estimated": r.Estimated, "usage": usageFields(r.Usage),
-	})
+	}
+	if p := r.Projection; p != nil {
+		// An adaptive chat's request is the projection of the stored history:
+		// items and tokens above are what was sent, and this is how much less.
+		rec["projection"] = map[string]any{"stubbed_results": p.StubbedResults, "saved_tokens_est": p.SavedTokensEst}
+	}
+	if r.RepeatStopped {
+		rec["repeat_stopped"] = true
+	}
+	l.write("request", rec)
 }
+
+// Adaptive writes the `adaptive` record, once, when an adaptive chat opens: the
+// ranker it starts with, the catalogue's size and the preload budget P.
+func (l *sessionLog) Adaptive(ranker string, tools, budget int) {
+	l.write("adaptive", map[string]any{"ranker": ranker, "tools": tools, "preload_budget": budget})
+}
+
+// Tools writes a `tools` record for one change to the loaded set.
+func (l *sessionLog) Tools(turn int, ch llm.ToolsChange) {
+	f := map[string]any{
+		"turn": turn, "reason": ch.Reason, "loaded": nonNilStrings(ch.Loaded), "evicted": nonNilStrings(ch.Evicted),
+		"loaded_now": nonNilStrings(ch.LoadedNow), "tokens": ch.Tokens,
+	}
+	if ch.RankerError != "" {
+		f["ranker_error"] = rankErrorClass(ch.RankerError)
+	}
+	l.write("tools", f)
+}
+
+// Preload writes a turn's `preload` record (see chat.logPreload).
+func (l *sessionLog) Preload(fields map[string]any) { l.write("preload", fields) }
 
 func nonNilStrings(s []string) []string {
 	if s == nil {

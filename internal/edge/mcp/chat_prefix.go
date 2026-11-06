@@ -93,6 +93,44 @@ func toolDef(t mcpgo.Tool) (llm.ToolDef, error) {
 	return llm.ToolDef{Name: t.Name, Description: t.Description, Schema: schema}, nil
 }
 
+// NewChatToolWindow builds the ToolWindow of an adaptive chat from the tools
+// the principal was shown (the same tools AddPrefix puts in hook 1, which stay
+// in the Builder: the loop sends only the window's projection of them).
+//
+// Every tool that is not loaded goes out as a stub (name, approved purpose,
+// permissive schema; StubPurposes), so the loader's catalogue is the names
+// only (BuildNameCatalogue). The loader's description carries it, not the system prompt, so
+// hook 2 is byte-identical for every provider and for static and adaptive
+// chats alike. budget is the catalogue's allowance in tokens (the preload
+// budget P; 0 or less: no limit); a *CatalogueTooBigError means even the tool
+// names do not fit it. mcp.Replayable tells the window which results a stub may
+// offer back; ranker may be nil (no preload).
+func NewChatToolWindow(tools []llm.ToolDef, ranker llm.ToolRanker, budget int) (*llm.ToolWindow, error) {
+	cat, err := BuildNameCatalogue(tools, budget)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(tools))
+	for i, t := range tools {
+		names[i] = t.Name
+	}
+	return llm.NewToolWindow(llm.ToolWindowSpec{
+		Loader: llm.LoaderDef(cat), Names: names, Replayable: Replayable, Ranker: ranker,
+		Core: ChatCoreTools, Purposes: StubPurposes(tools),
+	})
+}
+
+// ChatCoreTools is the policy list of tools an adaptive chat always has in its
+// window: loaded from the opening, never evicted, never a preload pick. They
+// are the two nearly every turn needs: knomit_bind (nothing else works until a
+// repo is bound) and knomit_query (the plain "what do we know about..."
+// question). Chosen because the live acceptance run showed a 4B model does not
+// call load_tools, so a tool it must load first is a tool it never uses; every
+// other tool stays adaptive (preload plus load_tools). The list is policy, not
+// a measurement of usage, and it adds no more than these two definitions to
+// the opening (TestChatToolWindow_OpeningWithTheCoreSetFitsA32KModel).
+var ChatCoreTools = []string{"knomit_bind", "knomit_query"}
+
 // AddPrefix puts the shared hooks into b: one tool:<name> item per tool
 // (hook 1), ChatSystemPrompt as "system" (hook 2) and instructions as
 // "instructions" (hook 3).

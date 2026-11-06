@@ -108,6 +108,7 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
       ...(d.arguments !== undefined ? { arguments: d.arguments } : {}),
       ...(typeof d.duration_ms === 'number' ? { duration_ms: d.duration_ms } : {}),
       ...(d.summary && typeof (d.summary as { count?: unknown }).count === 'number' ? { summary: { count: (d.summary as { count: number }).count } } : {}),
+      ...(Array.isArray(d.loaded) ? { loaded: d.loaded.map(String) } : {}),
       turn: turnOf(d),
     }));
     on('approval', d => dispatch({ kind: 'approval', approval: d as unknown as ChatApproval }));

@@ -362,7 +362,7 @@ func (s *Server) chatRouter() chi.Router {
 			hal.WriteProblem(w, http.StatusMethodNotAllowed, "Method Not Allowed",
 				"method "+req.Method+" not allowed on "+req.URL.Path, req.URL.Path)
 		})
-		chat.Mount(ctx, r, s.mcpServer, s.Manager, s.LLMProviders, s.ChatSessionsDir, s.ChatLogDir, released)
+		chat.Mount(ctx, r, s.mcpServer, s.Manager, s.LLMProviders, s.Embedder, s.ChatSessionsDir, s.ChatLogDir, released)
 		s.chatRoutes = r
 	})
 	return s.chatRoutes

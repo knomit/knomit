@@ -61,6 +61,25 @@ func (r *embeddingRanker) Rank(ctx context.Context, message string) ([]llm.Score
 	return out, nil
 }
 
+// WarmToolVectors embeds every tool of the toolset into the process-wide cache,
+// so the first Rank of a chat on this toolset embeds none of them. It is for a
+// goroutine started when a chat opens: the first turn then pays one EmbedQuery
+// only. It stops at the first error, or when ctx ends, and leaves what it
+// embedded cached; Rank embeds whatever is missing, so a failed warm-up costs
+// nothing but the head start.
+func WarmToolVectors(ctx context.Context, emb model.Embedder, tools []llm.ToolDef) error {
+	r := &embeddingRanker{emb: emb}
+	for _, t := range tools {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, err := r.document(ctx, t); err != nil {
+			return fmt.Errorf("embedding tool %s: %w", t.Name, err)
+		}
+	}
+	return nil
+}
+
 func (r *embeddingRanker) document(ctx context.Context, t llm.ToolDef) ([]float32, error) {
 	key := toolVectorKey(r.emb.ID(), t)
 	toolVectorsMu.Lock()

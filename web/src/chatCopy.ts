@@ -65,6 +65,12 @@ export const CHAT_REVOKE_GRANT = 'Revoke';
  *  (`<url> → <this>`, the same shape as every other request error). */
 export const CHAT_SEND_TIMEOUT = 'no answer';
 
+/** C8. The row of a call to the loader tool in the "Used Knomit" group.
+ *  Approved by the user 2026-11-05. */
+export function loadedToolsRow(names: string[]): string {
+  return `Loaded tools: ${names.join(', ')}`;
+}
+
 // ── APPROVED (2026-11-06) ──
 // Chat UX v2, PR 1 (design 2026-11-05-chat-ux-v2, section 2). Approved by the
 // user on 2026-11-06, with the singular forms ("1 step", "read 1 fact",
