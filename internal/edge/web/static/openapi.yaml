@@ -4230,13 +4230,39 @@ paths:
         so a declined call's span includes the wait for the answer. A group of
         calls is worded by its wall time: the last `ended_ms` minus the first
         `started_ms`. The live `tool_call` events carry the same fields.
+
+        A `user` row also carries how its turn went, summed over the turn's
+        requests: `usage` (`input`, `cache_read`, `cache_write`, `output`),
+        `cost_usd` (absent when the model has no price card), `cost_rows` (the
+        same cost by token kind, each request priced at its own tier; the four
+        add up to `cost_usd`) and `high_tier` (true when any request of the
+        turn was priced at the model's higher tier).
       operationId: getChat
       responses:
         "200":
           description: The chat
           content:
             application/hal+json:
-              schema: { type: object }
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kind: { type: string }
+                        usage:
+                          type: object
+                          description: "On a user row: the turn's token counts, summed over its requests"
+                          properties:
+                            input: { type: integer }
+                            cache_read: { type: integer }
+                            cache_write: { type: integer }
+                            output: { type: integer }
+                        cost_usd: { type: number, description: "On a user row: the turn's summed cost in USD; absent without a price card" }
+                        cost_rows: { $ref: "#/components/schemas/ChatCostRows" }
+                        high_tier: { type: boolean, description: "On a user row: true when any request of the turn fell in the model's higher price tier; absent otherwise" }
         "404": { $ref: "#/components/responses/Problem" }
     delete:
       tags: [chat]
@@ -4268,7 +4294,9 @@ paths:
         `reasoning`, `tool_call` (state `running` then `done`; `started_ms` on
         both, `ended_ms` on `done`, Unix milliseconds on the server's clock,
         the same values `GET /chats/{id}` lists), `approval`,
-        `usage`, `warning`, `turn_done`, `turn_error`, `chat_state` (the
+        `usage` (one request's `usage`, `cost_usd`, `cost_rows` and, when that
+        request was priced at the higher tier, `high_tier: true`; all three cost
+        fields are absent without a price card), `warning`, `turn_done`, `turn_error`, `chat_state` (the
         chat's rail row changed: `title`, `state` idle, running,
         awaiting_approval or error, `turns`, `cost_usd`, `last_activity`,
         `started_at`; the same row `GET /chats` lists) and `chat_end`. A chat ends 60 seconds
@@ -4366,7 +4394,9 @@ paths:
       description: |
         The context window in tokens, how it was resolved (`config`, `memory`
         or `trained`; absent when the model does not say) and whether Ollama
-        reported part of the model on the CPU after the first request.
+        reported part of the model on the CPU after the first request. With a
+        price card of two tiers it also gives `tier_tokens`, the first tier's
+        prompt-size boundary.
       operationId: getChatContext
       responses:
         "200":
@@ -4379,6 +4409,7 @@ paths:
                   window: { type: integer }
                   how: { type: string, enum: [config, memory, trained] }
                   spill: { type: boolean }
+                  tier_tokens: { type: integer, description: "The price card's first-tier boundary in prompt tokens; absent with one tier or no price card" }
         "404": { $ref: "#/components/responses/Problem" }
 
   /chats/{id}/grants:
@@ -5910,6 +5941,15 @@ components:
             origin's host and its type fit the scheme, 422 otherwise); null
             unlinks. Either needs the local-or-same-origin admin gate (403
             otherwise). Not together with a pasted credential when linking (400).
+
+    ChatCostRows:
+      type: object
+      description: A cost in USD by token kind; the four add up to the total. Cache write covers both cache TTLs.
+      properties:
+        input: { type: number }
+        cache_read: { type: number }
+        cache_write: { type: number }
+        output: { type: number }
 
     ChatItem:
       type: object
