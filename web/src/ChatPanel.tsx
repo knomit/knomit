@@ -13,7 +13,7 @@ import type { ChatState, ChatTurn, ToolCall } from './chatState';
 import type { ApprovalDecision } from './chatApi';
 import {
   CHAT_CONTINUE_MESSAGE, CHAT_INPUT_PLACEHOLDER, CHAT_REPLY_PLACEHOLDER, CHAT_SEND, CHAT_STOP, CHAT_STOP_KEY, COMPOSER_HINT, CONTEXT_LABEL,
-  NOT_SENT, NOT_SENT_RETRY, toolsInContextLine,
+  NOT_SENT, NOT_SENT_RETRY,
 } from './chatCopy';
 
 /** How a turn is drawn: its work (runs of tool calls, each with the text that
@@ -188,7 +188,6 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
                   <ChatTurnFooter usage={t.usage} costUsd={t.costUsd} answer={answer}
                     sessionCostUsd={total} sessionTurns={state.turns.length} />
                 )}
-                {t.tools && <div data-testid="chat-tools-line" style={toolsLine}>{toolsInContextLine(t.tools.loadedNow, t.tools.total, t.tools.tokens)}</div>}
               </div>
             );
           })}
@@ -285,7 +284,6 @@ const keycap: CSSProperties = {
   fontFamily: 'var(--k-font-mono)', fontSize: 9.5, color: '#a07a7a', border: '1px solid #5c2a2a', borderRadius: 3, padding: '0 4px', fontWeight: 400,
 };
 const sendingStrip: CSSProperties = { opacity: 0.6, borderLeftStyle: 'dashed', background: '#161718' };
-const toolsLine: CSSProperties = { margin: '6px 0 0', fontSize: 11, color: '#8a8a8a' };
 const notSentLine: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, margin: '7px 0 0', padding: '0 4px', fontSize: 11, color: '#8a7a78' };
 const retryLink: CSSProperties = {
   background: 'transparent', border: 'none', padding: 0, font: 'inherit', color: '#c8c8c8', cursor: 'pointer',

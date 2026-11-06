@@ -6,7 +6,7 @@ import { ChatSettings } from './ChatSettings';
 import {
   answerChatApproval, cancelChatTurn, getChat, getChatContext, sendChatTurn,
 } from './chatApi';
-import type { ApprovalDecision, ChatApproval, ChatInfo, ChatNotice, ChatTurnTools } from './chatApi';
+import type { ApprovalDecision, ChatApproval, ChatInfo, ChatNotice } from './chatApi';
 import { subscribeChatEvents } from './chatEvents';
 import { NEW_CHAT_ERROR } from './chatCopy';
 import { chatReducer, initialChatState, refusalReason, sessionCost } from './chatState';
@@ -111,10 +111,6 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
       ...(Array.isArray(d.loaded) ? { loaded: d.loaded.map(String) } : {}),
       turn: turnOf(d),
     }));
-    on('tools', d => dispatch({
-      kind: 'tools', turn: turnOf(d), loaded_now: Array.isArray(d.loaded_now) ? d.loaded_now.length : 0,
-      total: Number(d.total ?? 0), tokens: Number(d.tokens ?? 0),
-    }));
     on('approval', d => dispatch({ kind: 'approval', approval: d as unknown as ChatApproval }));
     on('usage', d => dispatch({
       kind: 'usage', usage: d.usage as UsagePayload,
@@ -129,7 +125,7 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
     // A turn's end is shown at once, and the transcript is read again: the
     // server's view is complete by now, and it settles anything a read in
     // flight at this moment got wrong.
-    on('turn_done', d => { dispatch({ kind: 'turn_done', turn: turnOf(d), ...(d.tools ? { tools: d.tools as ChatTurnTools } : {}) }); refresh(); });
+    on('turn_done', d => { dispatch({ kind: 'turn_done', turn: turnOf(d) }); refresh(); });
     on('turn_error', d => {
       dispatch({
         kind: 'turn_error', message: String(d.message ?? ''), cancelled: d.cancelled === true, turn: turnOf(d),

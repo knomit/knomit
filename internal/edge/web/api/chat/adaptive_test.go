@@ -412,29 +412,20 @@ func TestMount_CatalogueThatCannotFitRefusesToOpen(t *testing.T) {
 
 // ---- events ----
 
-type toolsEvent struct {
-	Turn      int      `json:"turn"`
-	Reason    string   `json:"reason"`
-	Loaded    []string `json:"loaded"`
-	Evicted   []string `json:"evicted"`
-	LoadedNow []string `json:"loaded_now"`
-	Total     int      `json:"total"`
-	Tokens    int      `json:"tokens"`
-}
-
-// A scripted run that loads one tool and then, under pressure, evicts it yields
-// SSE tools events with exactly those names and reasons, and turn_done carries
-// the window's counts. The snapshot says the same.
+// A scripted run that loads one tool and then, under pressure, evicts it: the
+// session log gets `tools` records with exactly those names and reasons, the
+// loader's call carries what it loaded, and the page gets no `tools` event and
+// no tools field on turn_done or in the snapshot (the "Tools in context" line
+// was removed by the user's ruling; the log is the diagnostic record).
 //
-// SABOTAGE: chat.go onLoopEvent, drop the LoopToolsChanged case -> no tools
-// events and this fails.
-func TestChat_ToolsEventIsEmittedOnLoadAndEvict(t *testing.T) {
+// SABOTAGE: chat.go onLoopEvent, drop the LoopToolsChanged case -> no tools log
+// records and this fails.
+func TestChat_ToolsChangesAreLoggedAndNotSentToThePage(t *testing.T) {
 	h := newHarness(t)
 	h.useOllama()
-	total := len(h.toolNames(writer, "chat-00000000000000000000000000000a06"))
 	const window = 40000
 	usable := window - 1000 // the scripted model's MaxOutput is the reserve
-	m := h.queueAdaptive("o1", window,
+	h.queueAdaptive("o1", window,
 		loadStep("tu_load", llm.Usage{Input: 50}, "knomit_explain"),
 		// The turn's last response reports a prompt one token over the usable
 		// room, so the next turn's first estimate is over budget and the only
@@ -450,68 +441,25 @@ func TestChat_ToolsEventIsEmittedOnLoadAndEvict(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, blankMessage))
 	second := s.until("turn_done")
 
-	var tools []toolsEvent
 	for _, e := range append(first, second...) {
-		if e.Name == "tools" {
-			var te toolsEvent
-			require.NoError(t, json.Unmarshal(e.Data, &te))
-			tools = append(tools, te)
+		require.NotEqual(t, "tools", e.Name, "the page is not sent the window's changes")
+		if e.Name == "turn_done" {
+			var d map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(e.Data, &d))
+			require.NotContains(t, d, "tools")
 		}
 	}
-	// A tool's Tokens figure is what it adds over its stub, which every
-	// request carries: the full definition less the stub of request 0.
-	explainGrowth := toolTokens(t, m.requests()[1], "knomit_explain") - toolTokens(t, m.requests()[0], "knomit_explain")
-	coreFull := toolTokens(t, m.requests()[1], "knomit_bind") + toolTokens(t, m.requests()[1], "knomit_query")
-	require.Len(t, tools, 2)
-	core := tools[1].Tokens
-	require.Greater(t, core, 0)
-	require.Less(t, core, coreFull, "the stubs the core tools replace are not part of what they add")
-	tokens := explainGrowth
-	coreNames := []string{"knomit_bind", "knomit_query"}
-	withExplain := []string{"knomit_bind", "knomit_explain", "knomit_query"}
-	turnOf := func(evs []sseEvent) int {
-		var d struct {
-			Turn int `json:"turn"`
-		}
-		require.NoError(t, json.Unmarshal(evs[len(evs)-1].Data, &d))
-		return d.Turn
-	}
-	require.Equal(t, 0, turnOf(first))
-	require.Greater(t, turnOf(second), 0)
-	require.Equal(t, []toolsEvent{
-		{Turn: turnOf(first), Reason: llm.ToolsReasonModel, Loaded: []string{"knomit_explain"}, Evicted: []string{}, LoadedNow: withExplain, Total: total, Tokens: core + tokens},
-		{Turn: turnOf(second), Reason: llm.ToolsReasonPressure, Loaded: []string{}, Evicted: []string{"knomit_explain"}, LoadedNow: coreNames, Total: total, Tokens: core},
-	}, tools)
+	_, body := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
+	require.NotContains(t, string(body), `"tools"`)
 
-	done := func(evs []sseEvent) turnTools {
-		var d struct {
-			Tools *turnTools `json:"tools"`
-		}
-		require.NoError(t, json.Unmarshal(evs[len(evs)-1].Data, &d))
-		require.NotNil(t, d.Tools)
-		return *d.Tools
-	}
-	require.Equal(t, turnTools{Loaded: 1, Evicted: 0, LoadedNow: 3, Total: total, Tokens: core + tokens}, done(first))
-	require.Equal(t, turnTools{Loaded: 0, Evicted: 1, LoadedNow: 2, Total: total, Tokens: core}, done(second))
-
-	// The snapshot is authoritative: each turn's user item carries the same.
-	code, body := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
-	require.Equal(t, http.StatusOK, code)
-	var snap struct {
-		Items []struct {
-			Kind  string     `json:"kind"`
-			Tools *turnTools `json:"tools"`
-		} `json:"items"`
-	}
-	require.NoError(t, json.Unmarshal(body, &snap))
-	var userTools []turnTools
-	for _, it := range snap.Items {
-		if it.Kind == "user" {
-			require.NotNil(t, it.Tools)
-			userTools = append(userTools, *it.Tools)
-		}
-	}
-	require.Equal(t, []turnTools{done(first), done(second)}, userTools)
+	recs := recordsOf(readLog(t, h.logDir, id), "tools")
+	require.Len(t, recs, 2)
+	require.Equal(t, llm.ToolsReasonModel, recs[0]["reason"])
+	require.Equal(t, []string{"knomit_explain"}, strs(recs[0]["loaded"]))
+	require.Equal(t, []string{"knomit_bind", "knomit_explain", "knomit_query"}, strs(recs[0]["loaded_now"]))
+	require.Equal(t, llm.ToolsReasonPressure, recs[1]["reason"])
+	require.Equal(t, []string{"knomit_explain"}, strs(recs[1]["evicted"]))
+	require.Equal(t, []string{"knomit_bind", "knomit_query"}, strs(recs[1]["loaded_now"]))
 
 	// The loader's row names what it loaded.
 	var loaderDone struct {
@@ -536,7 +484,7 @@ func TestChat_ToolsEventIsEmittedOnLoadAndEvict(t *testing.T) {
 	require.Equal(t, []string{"knomit_explain"}, loaderDone.Loaded)
 }
 
-// An Anthropic chat's turn_done and snapshot carry no tools field at all.
+// No chat's turn_done or snapshot carries a tools field.
 func TestChat_StaticTurnDoneHasNoTools(t *testing.T) {
 	h := newHarness(t)
 	h.queue("a1", textStep("hi", usage))
@@ -719,64 +667,6 @@ func TestSessionLog_PreloadHitAtTurnEnd(t *testing.T) {
 	require.Empty(t, second["hits"])
 	require.EqualValues(t, 1, second["picked"])
 	require.EqualValues(t, 0, second["called"])
-}
-
-// A turn that changes nothing still shows the loaded set it ran with: its user
-// item and its turn_done carry the window's state, with this turn's counts at 0.
-//
-// SABOTAGE: chat.go startTurn, leave Tools off the user item -> the quiet turn
-// has no tools and this fails.
-func TestChat_TurnWithNoChangeStillShowsTheLoadedSet(t *testing.T) {
-	h := newHarness(t)
-	h.useOllama()
-	total := len(h.toolNames(writer, "chat-00000000000000000000000000000a12"))
-	m := h.queueAdaptive("o1", 40000,
-		loadStep("tu_load", llm.Usage{Input: 50}, "knomit_explain"),
-		textStep("one", llm.Usage{Input: 100}),
-		textStep("two", llm.Usage{Input: 120}),
-	)
-	id := h.createAdaptive("uid:501")
-	s := h.attach("uid:501", id)
-	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, blankMessage))
-	s.until("turn_done")
-	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, blankMessage))
-	second := s.until("turn_done")
-
-	full := toolTokens(t, m.requests()[1], "knomit_explain") + toolTokens(t, m.requests()[1], "knomit_bind") + toolTokens(t, m.requests()[1], "knomit_query")
-	var got struct {
-		Tools *turnTools `json:"tools"`
-	}
-	require.NoError(t, json.Unmarshal(second[len(second)-1].Data, &got))
-	require.NotNil(t, got.Tools)
-	require.Greater(t, got.Tools.Tokens, 0)
-	require.Less(t, got.Tools.Tokens, full, "what the loaded set adds over its stubs is less than its definitions")
-	want := turnTools{Loaded: 0, Evicted: 0, LoadedNow: 3, Total: total, Tokens: got.Tools.Tokens}
-	var d struct {
-		Tools *turnTools `json:"tools"`
-	}
-	require.NoError(t, json.Unmarshal(second[len(second)-1].Data, &d))
-	require.NotNil(t, d.Tools)
-	require.Equal(t, want, *d.Tools)
-	for _, e := range second {
-		require.NotEqual(t, "tools", e.Name, "nothing changed in the second turn")
-	}
-	_, body := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
-	var snap struct {
-		Items []struct {
-			Kind  string     `json:"kind"`
-			Tools *turnTools `json:"tools"`
-		} `json:"items"`
-	}
-	require.NoError(t, json.Unmarshal(body, &snap))
-	var users []*turnTools
-	for _, it := range snap.Items {
-		if it.Kind == "user" {
-			users = append(users, it.Tools)
-		}
-	}
-	require.Len(t, users, 2)
-	require.NotNil(t, users[1])
-	require.Equal(t, want, *users[1])
 }
 
 // The loader's call is logged with decision "auto", raises no approval event and

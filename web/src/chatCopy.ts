@@ -65,14 +65,6 @@ export const CHAT_REVOKE_GRANT = 'Revoke';
  *  (`<url> → <this>`, the same shape as every other request error). */
 export const CHAT_SEND_TIMEOUT = 'no answer';
 
-/** C8. What an adaptive chat shows under a turn's usage: how many of the tools
- *  the model can call are loaded in the request, and about how many tokens
- *  their definitions take. Approved by the user 2026-11-05. */
-export function toolsInContextLine(loadedNow: number, total: number, tokens: number): string {
-  const t = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}K` : String(tokens);
-  return `Tools in context: ${loadedNow} of ${total} (about ${t} tokens)`;
-}
-
 /** C8. The row of a call to the loader tool in the "Used Knomit" group.
  *  Approved by the user 2026-11-05. */
 export function loadedToolsRow(names: string[]): string {
