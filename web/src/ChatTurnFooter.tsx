@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { CopyButton } from './fleetParts';
+import { CARD_GAP as GAP, cardSide } from './chatCardSide';
 import { cachedPercent, compactCount, formatCost } from './chatState';
 import type { TurnUsage } from './chatState';
 import {
@@ -70,14 +71,6 @@ export function ChatTurnFooter({ usage, costUsd, answer, sessionCostUsd, session
       </span>
     </div>
   );
-}
-
-const GAP = 8;
-
-/** Which side of the footer the cost card opens on, given the room between the
- *  footer and the top of the scroller it sits in, and the card's own height. */
-export function cardSide(roomAbove: number, cardHeight: number): 'above' | 'below' {
-  return roomAbove >= cardHeight + GAP ? 'above' : 'below';
 }
 
 /** The top edge of the nearest scrolling ancestor, or of the viewport. */
