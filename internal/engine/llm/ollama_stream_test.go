@@ -155,7 +155,7 @@ func TestOllamaChat_ThinkingModelStreamsReasoningFirst(t *testing.T) {
 	resp, err := c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{}, func(e Event) { kinds = append(kinds, e.Kind) })
 	require.NoError(t, err)
 	require.Equal(t, `true`, string(srv.received()[0]["think"]))
-	require.Equal(t, []EventKind{EventReasoning, EventTextDelta, EventDone}, kinds)
+	require.Equal(t, []EventKind{EventThinkingDelta, EventThinkingDelta, EventReasoning, EventTextDelta, EventDone}, kinds)
 	require.Equal(t, StopEndTurn, resp.StopReason)
 	require.Len(t, resp.Blocks, 2)
 	r := resp.Blocks[0].Reasoning

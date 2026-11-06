@@ -44,14 +44,56 @@ type viewItem struct {
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 	State     string          `json:"state,omitempty"` // running | done
 	IsError   bool            `json:"is_error,omitempty"`
+	// On a "tool_call" item, once done: how long the tool ran and a small
+	// summary of its result when one is cheap to compute.
+	DurationMS int64        `json:"duration_ms,omitempty"`
+	Summary    *callSummary `json:"summary,omitempty"`
 
 	// On a "user" item only: what the page shows for the turn it opens, so a
 	// snapshot is the whole truth about the turn and the page patches nothing.
-	Usage     *turnUsage `json:"usage,omitempty"`     // summed over the turn's requests
-	CostUSD   *float64   `json:"cost_usd,omitempty"`  // summed; absent without a price card
-	Warning   string     `json:"warning,omitempty"`   // the price-tier warning, worded
-	Error     string     `json:"error,omitempty"`     // how the turn ended, if it did not succeed
-	Cancelled bool       `json:"cancelled,omitempty"` // Error is the person's own Stop
+	Usage   *turnUsage `json:"usage,omitempty"`    // summed over the turn's requests
+	CostUSD *float64   `json:"cost_usd,omitempty"` // summed; absent without a price card
+	Warning string     `json:"warning,omitempty"`  // the price-tier warning, worded
+	// WarningInfo is the same warning, structured, for the page to word its own line.
+	WarningInfo *noticeView `json:"warning_info,omitempty"`
+	// ErrorInfo is the structured detail of Error when it has one (context full).
+	ErrorInfo *noticeView `json:"error_info,omitempty"`
+	Error     string      `json:"error,omitempty"`     // how the turn ended, if it did not succeed
+	Cancelled bool        `json:"cancelled,omitempty"` // Error is the person's own Stop
+}
+
+// callSummary is a finished call's result in one number: a query's result count.
+type callSummary struct {
+	Count int `json:"count"`
+}
+
+// noticeView is a notice's numbers, so the page words the line itself. Kind is
+// "price_tier" (PromptTokens, Threshold, TierTokens, Mult, Model) or
+// "context_full" (Needed, Window; Needed is 0 when only the provider knew).
+type noticeView struct {
+	Kind         string  `json:"kind"`
+	PromptTokens int64   `json:"prompt_tokens,omitempty"`
+	Threshold    int     `json:"threshold,omitempty"`
+	TierTokens   int     `json:"tier_tokens,omitempty"`
+	Mult         float64 `json:"mult,omitempty"`
+	Model        string  `json:"model,omitempty"`
+	Needed       int     `json:"needed,omitempty"`
+	Window       int     `json:"window,omitempty"`
+}
+
+// summarize words a finished call's result as a number, when that is cheap:
+// only knomit_query has one (the facts it returned).
+func summarize(name, content string, isErr bool) *callSummary {
+	if isErr || name != "knomit_query" {
+		return nil
+	}
+	var r struct {
+		Facts []json.RawMessage `json:"facts"`
+	}
+	if json.Unmarshal([]byte(content), &r) != nil || r.Facts == nil {
+		return nil
+	}
+	return &callSummary{Count: len(r.Facts)}
 }
 
 // turnUsage is a turn's token counts, summed over its requests.
@@ -120,6 +162,12 @@ type chat struct {
 	ended      bool
 	running    bool
 	turnCancel context.CancelFunc
+	turnSend   string   // the send_id of the running turn, if it had one
+	sends      []string // send ids seen, oldest first (bounded): see sendState
+	sendState  map[string]string
+	turnBegan  time.Time // when the running turn was accepted
+	firstSeen  bool      // the running turn has shown its first sign of life
+	lastPrompt int64     // the last request's prompt tokens (input + cache read + cache write)
 	turns      sync.WaitGroup
 	view       []viewItem
 	turnAt     int // index in view of the running (or last) turn's user item
@@ -352,15 +400,59 @@ func (c *chat) detach(s *subscriber) {
 // ---- the turn ----
 
 var errBusy = errors.New("a turn is already running")
+var errWithdrawn = errors.New("the send was withdrawn before it was accepted")
+
+// maxSends bounds how many send ids a chat remembers.
+const maxSends = 256
+
+// noteSend records a send id's state ("started" or "withdrawn"); c.mu is held.
+func (c *chat) noteSend(id, state string) {
+	if c.sendState == nil {
+		c.sendState = map[string]string{}
+	}
+	if _, ok := c.sendState[id]; !ok {
+		c.sends = append(c.sends, id)
+		if len(c.sends) > maxSends {
+			delete(c.sendState, c.sends[0])
+			c.sends = c.sends[1:]
+		}
+	}
+	c.sendState[id] = state
+}
+
+// cancelSend is Stop for a send the page can name. A turn that already runs
+// under that id is cancelled. A send that has not been accepted yet (its POST
+// is still on the way) is withdrawn: when it arrives it is refused, and no turn
+// starts. A send whose turn already ended is left alone.
+func (c *chat) cancelSend(id string) {
+	c.mu.Lock()
+	if c.running && c.turnSend == id {
+		cancel := c.turnCancel
+		c.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return
+	}
+	if _, seen := c.sendState[id]; !seen {
+		c.noteSend(id, "withdrawn")
+	}
+	c.mu.Unlock()
+}
+
 var errEnded = errors.New("the chat has ended")
 
 // startTurn runs one user turn on its own goroutine.
 // It returns the view index of the turn's user item, which the 202 carries.
-func (c *chat) startTurn(text string) (int, error) {
+func (c *chat) startTurn(text, sendID string) (int, error) {
 	c.mu.Lock()
 	if c.ended {
 		c.mu.Unlock()
 		return 0, errEnded
+	}
+	if sendID != "" && c.sendState[sendID] == "withdrawn" {
+		c.mu.Unlock()
+		return 0, errWithdrawn
 	}
 	if c.running {
 		c.mu.Unlock()
@@ -369,6 +461,11 @@ func (c *chat) startTurn(text string) (int, error) {
 	c.running = true
 	ctx, cancel := context.WithCancel(c.ctx)
 	c.turnCancel = cancel
+	c.turnSend = sendID
+	if sendID != "" {
+		c.noteSend(sendID, "started")
+	}
+	c.turnBegan, c.firstSeen = time.Now(), false
 	c.turnAt = len(c.view)
 	turn := c.turnAt
 	c.view = append(c.view, viewItem{Kind: "user", Text: text})
@@ -405,6 +502,17 @@ func (c *chat) finishTurn(ctx context.Context, res *llm.TurnResult, err error) {
 		c.view[c.turnAt].Error, c.view[c.turnAt].Cancelled = msg, cancelled && msg == err.Error()
 	}
 	truncatedBare := msg == reasoningTruncatedMessage
+	var errInfo *noticeView
+	if err != nil && errors.Is(err, llm.ErrContextFull) {
+		needed, window, _ := llm.ContextFullInfo(err)
+		if window <= 0 {
+			window, _, _ = contextOf(c.loop.Model)
+		}
+		errInfo = &noticeView{Kind: "context_full", Needed: needed, Window: window}
+		if c.turnAt < len(c.view) {
+			c.view[c.turnAt].ErrorInfo = errInfo
+		}
+	}
 	ended := c.ended
 	c.mu.Unlock()
 	c.store.appendTranscript(map[string]any{"turn_end": true, "error": errString(err)})
@@ -422,7 +530,11 @@ func (c *chat) finishTurn(ctx context.Context, res *llm.TurnResult, err error) {
 		c.emit("turn_error", map[string]any{"message": msg, "cancelled": true, "turn": turn})
 		return
 	}
-	c.emit("turn_error", map[string]any{"message": msg, "turn": turn})
+	out := map[string]any{"message": msg, "turn": turn}
+	if errInfo != nil {
+		out["error_info"] = errInfo
+	}
+	c.emit("turn_error", out)
 }
 
 func errString(err error) string {
@@ -448,6 +560,15 @@ func (c *chat) cancelTurn() {
 // and forwards the event to attached streams. It runs on the turn goroutine.
 func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 	switch ev.Kind {
+	case llm.LoopText, llm.LoopThinking, llm.LoopReasoning, llm.LoopToolUse:
+		c.noteFirstSign()
+	}
+	switch ev.Kind {
+	case llm.LoopThinking:
+		c.mu.Lock()
+		turn := c.turnAt
+		c.mu.Unlock()
+		c.emit("thinking_delta", map[string]any{"text": ev.Text, "turn": turn})
 	case llm.LoopText:
 		c.mu.Lock()
 		c.reqText = true
@@ -474,14 +595,24 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		c.view = append(c.view, viewItem{Kind: "tool_call", ID: tu.ID, Name: tu.Name, Arguments: tu.Args, State: "running"})
 		turn := c.turnAt
 		c.mu.Unlock()
-		c.emit("tool_call", map[string]any{"id": tu.ID, "name": tu.Name, "state": "running", "turn": turn})
+		out := map[string]any{"id": tu.ID, "name": tu.Name, "state": "running", "turn": turn}
+		if len(tu.Args) > 0 && len(tu.Args) <= maxApprovalArgs {
+			out["arguments"] = tu.Args
+		}
+		c.emit("tool_call", out)
 	case llm.LoopToolResult:
 		r := ev.Result
 		c.mu.Lock()
 		tu := c.calls[r.ToolUseID]
+		ms := ev.Took.Milliseconds()
+		if ev.Took > 0 && ms == 0 {
+			ms = 1
+		}
+		sum := summarize(tu.Name, r.Content, r.IsError)
 		for i := range c.view {
 			if c.view[i].Kind == "tool_call" && c.view[i].ID == r.ToolUseID {
 				c.view[i].State, c.view[i].IsError = "done", r.IsError
+				c.view[i].DurationMS, c.view[i].Summary = ms, sum
 			}
 		}
 		turn := c.turnAt
@@ -489,9 +620,17 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		if err := c.store.putCall(r.ToolUseID, callRecord{Name: tu.Name, Arguments: tu.Args, Result: r.Content, IsError: r.IsError, Elided: r.Elided}); err != nil {
 			log.Warn().Err(err).Str("chat", c.id).Msg("chat: could not store a tool call")
 		}
-		c.emit("tool_call", map[string]any{"id": r.ToolUseID, "name": tu.Name, "state": "done", "is_error": r.IsError, "turn": turn})
+		done := map[string]any{"id": r.ToolUseID, "name": tu.Name, "state": "done", "is_error": r.IsError, "turn": turn}
+		if ms > 0 {
+			done["duration_ms"] = ms
+		}
+		if sum != nil {
+			done["summary"] = sum
+		}
+		c.emit("tool_call", done)
 	case llm.LoopUsage:
 		c.mu.Lock()
+		c.lastPrompt = ev.Usage.Input + ev.Usage.CacheRead + ev.Usage.CacheWrite
 		c.lastText, c.lastReasoning = c.reqText, c.reqReasoning
 		c.reqText, c.reqReasoning = false, false
 		c.usageSeq++
@@ -529,17 +668,46 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		c.emit("usage", out)
 	case llm.LoopWarning:
 		text := priceWarningText(*ev.Warning)
+		info := &noticeView{
+			Kind: "price_tier", PromptTokens: ev.Warning.PromptTokens, Threshold: ev.Warning.Threshold,
+			TierTokens: ev.Warning.TierTokens, Mult: tierMult(c.loop.Price), Model: ev.Warning.Model,
+		}
 		c.mu.Lock()
 		if c.turnAt < len(c.view) {
 			c.view[c.turnAt].Warning = text
+			c.view[c.turnAt].WarningInfo = info
 		}
 		turn := c.turnAt
 		c.mu.Unlock()
 		c.emit("warning", map[string]any{
-			"turn": turn, "message": text, "threshold": ev.Warning.Threshold,
-			"prompt_tokens": ev.Warning.PromptTokens, "model": ev.Warning.Model,
+			"turn": turn, "message": text, "kind": info.Kind, "threshold": info.Threshold,
+			"prompt_tokens": info.PromptTokens, "tier_tokens": info.TierTokens, "mult": info.Mult, "model": info.Model,
 		})
 	}
+}
+
+// noteFirstSign records, once per turn, how long the model took to show its
+// first sign of life (reasoning, text or a tool call) since the turn was
+// accepted. The manager keeps the slowest per model for this server run.
+func (c *chat) noteFirstSign() {
+	c.mu.Lock()
+	if c.firstSeen || c.turnBegan.IsZero() {
+		c.mu.Unlock()
+		return
+	}
+	c.firstSeen = true
+	d := time.Since(c.turnBegan)
+	c.mu.Unlock()
+	c.m.noteFirstToken(c.provider, c.model, d)
+}
+
+// tierMult is the factor the input price rises by past the price tier: tier 2
+// input over tier 1 input. 0 when the card has no second tier.
+func tierMult(p *llm.PriceCard) float64 {
+	if p == nil || p.InputPerMTok <= 0 || p.HighInputPerMTok <= 0 {
+		return 0
+	}
+	return p.HighInputPerMTok / p.InputPerMTok
 }
 
 // argsHook adds `trace: {Knomit-Trace: chat:<id>}` to a call whose tool

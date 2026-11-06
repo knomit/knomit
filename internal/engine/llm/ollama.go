@@ -511,6 +511,9 @@ func (c *OllamaChat) Stream(ctx context.Context, s Snapshot, o StreamOptions, si
 			return nil, ollamaLineError(ln.Error)
 		}
 		thinking.WriteString(ln.Message.Thinking)
+		if ln.Message.Thinking != "" {
+			sink(Event{Kind: EventThinkingDelta, Text: ln.Message.Thinking})
+		}
 		if ln.Message.Content != "" || len(ln.Message.ToolCalls) > 0 {
 			flushReasoning()
 		}

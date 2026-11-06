@@ -592,7 +592,7 @@ func TestAnthropicChat_ProgressOnEveryStreamEvent(t *testing.T) {
 	// the thinking block's stop, the tool_use at its stop, and done.
 	require.Equal(t, []string{
 		"p",           // message_start
-		"p", "p", "p", // thinking start, thinking_delta, signature_delta
+		"p", "p", "thinking_delta", "p", // thinking start, thinking_delta (summarized: forwarded), signature_delta
 		"p", "reasoning", // thinking stop
 		"p", "p", "p", // tool_use start, two input_json_deltas
 		"p", "tool_use", // tool_use stop

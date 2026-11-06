@@ -74,7 +74,12 @@ const (
 	EventTextDelta EventKind = "text_delta" // Text holds the delta
 	EventToolUse   EventKind = "tool_use"   // ToolUse is complete (args fully streamed)
 	EventReasoning EventKind = "reasoning"  // Reasoning is complete (signature included)
-	EventDone      EventKind = "done"       // the response is complete
+	// EventThinkingDelta carries a piece of the model's reasoning as it
+	// streams (Text). Anthropic sends it only when the thinking display is
+	// "summarized"; Ollama sends the thinking it streams. It is display only:
+	// the complete block still arrives as EventReasoning.
+	EventThinkingDelta EventKind = "thinking_delta"
+	EventDone          EventKind = "done" // the response is complete
 )
 
 // Event is one streamed item.

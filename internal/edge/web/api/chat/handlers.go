@@ -44,6 +44,9 @@ type modelView struct {
 	Available bool   `json:"available"`
 	Tools     bool   `json:"tools"`
 	Reason    string `json:"reason,omitempty"`
+	// ExpectedFirstTokenMS is the slowest time to a first reply this model took
+	// in this server run; absent until one has been observed.
+	ExpectedFirstTokenMS int64 `json:"expected_first_token_ms,omitempty"`
 }
 
 type providerView struct {
@@ -128,7 +131,7 @@ func (m *manager) handleProviders(w http.ResponseWriter, r *http.Request) {
 		for _, p := range m.reg.List(r.Context()) {
 			pv := providerView{Name: p.Name, Kind: p.Kind, Models: []modelView{}}
 			for _, ms := range p.Models {
-				pv.Models = append(pv.Models, modelView{ID: ms.ID, Name: ms.Name, Available: ms.Available, Tools: ms.Tools, Reason: ms.Reason})
+				pv.Models = append(pv.Models, modelView{ID: ms.ID, Name: ms.Name, Available: ms.Available, Tools: ms.Tools, Reason: ms.Reason, ExpectedFirstTokenMS: m.expectedFirstTokenMS(p.Name, ms.ID)})
 			}
 			out = append(out, pv)
 		}
@@ -215,10 +218,15 @@ type chatView struct {
 	Running bool `json:"running"`
 	// UsageSeq is the seq of the last usage event the items include, so a page
 	// that holds this snapshot ignores the live usage events it already has.
-	UsageSeq int                `json:"usage_seq"`
-	Items    []viewItem         `json:"items"`
-	Pending  []*pendingApproval `json:"pending_approvals"`
-	Grants   []grantInfo        `json:"grants"`
+	UsageSeq int `json:"usage_seq"`
+	// PromptTokens is the size of the last request's prompt (input + cache read
+	// + cache write): what the context meter shows as used. 0 before a request.
+	PromptTokens int64 `json:"prompt_tokens"`
+	// ExpectedFirstTokenMS: see modelView.
+	ExpectedFirstTokenMS int64              `json:"expected_first_token_ms,omitempty"`
+	Items                []viewItem         `json:"items"`
+	Pending              []*pendingApproval `json:"pending_approvals"`
+	Grants               []grantInfo        `json:"grants"`
 }
 
 func (m *manager) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +235,7 @@ func (m *manager) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.mu.Lock()
-	v := chatView{chatItem: itemOf(c), Running: c.running, UsageSeq: c.usageSeq, Items: append([]viewItem{}, c.view...), Pending: []*pendingApproval{}}
+	v := chatView{chatItem: itemOf(c), Running: c.running, UsageSeq: c.usageSeq, PromptTokens: c.lastPrompt, ExpectedFirstTokenMS: m.expectedFirstTokenMS(c.provider, c.model), Items: append([]viewItem{}, c.view...), Pending: []*pendingApproval{}}
 	for _, p := range c.pending {
 		v.Pending = append(v.Pending, p)
 	}
@@ -288,6 +296,9 @@ func (m *manager) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 type turnRequest struct {
 	Text string `json:"text"`
+	// SendID names this send so a Stop that overtakes it can withdraw it (see
+	// cancelRequest). Optional.
+	SendID string `json:"send_id,omitempty"`
 }
 
 func (m *manager) handleTurn(w http.ResponseWriter, r *http.Request) {
@@ -303,12 +314,14 @@ func (m *manager) handleTurn(w http.ResponseWriter, r *http.Request) {
 		hal.WriteProblem(w, http.StatusBadRequest, "Invalid request", "text is required", r.URL.Path)
 		return
 	}
-	turn, err := c.startTurn(req.Text)
+	turn, err := c.startTurn(req.Text, req.SendID)
 	switch {
 	case err == nil:
 		// `turn` is the view index of the new turn: the client routes live
 		// events by it. The turn is already in the view when this answers.
 		hal.WriteHAL(w, http.StatusAccepted, map[string]any{"turn": turn, "_links": chatLinks(c.id)})
+	case errors.Is(err, errWithdrawn):
+		hal.WriteProblem(w, http.StatusConflict, "Send withdrawn", "the send was stopped before the server accepted it", r.URL.Path)
 	case errors.Is(err, errBusy):
 		hal.WriteProblem(w, http.StatusConflict, "A turn is running", "wait for the running turn to finish, or cancel it", r.URL.Path)
 	default:
@@ -321,8 +334,25 @@ func (m *manager) handleCancel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	c.cancelTurn()
+	// An optional body {"send_id"} names a send the page has not seen accepted
+	// yet: Stop then withdraws that send as well as ending a running turn that
+	// came from it. Without one, Stop ends the running turn, as it always did.
+	var req cancelRequest
+	if r.ContentLength != 0 {
+		if !httpx.DecodeJSON(w, r, &req, 1<<12) {
+			return
+		}
+	}
+	if req.SendID != "" {
+		c.cancelSend(req.SendID)
+	} else {
+		c.cancelTurn()
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type cancelRequest struct {
+	SendID string `json:"send_id,omitempty"`
 }
 
 type approvalRequest struct {
@@ -360,10 +390,12 @@ func (m *manager) handleApproval(w http.ResponseWriter, r *http.Request) {
 // not say) and whether Ollama reported part of the model on the CPU after the
 // first real request (read live, so it is false until that request is done).
 type contextView struct {
-	Window int         `json:"window"`
-	How    string      `json:"how,omitempty"`
-	Spill  bool        `json:"spill"`
-	Links  hal.LinkMap `json:"_links"`
+	Window int    `json:"window"`
+	How    string `json:"how,omitempty"`
+	Spill  bool   `json:"spill"`
+	// PromptTokens: see chatView.
+	PromptTokens int64       `json:"prompt_tokens"`
+	Links        hal.LinkMap `json:"_links"`
 }
 
 // contextOf is the model's ContextInfo, or its Caps window with no "how" when
@@ -381,8 +413,11 @@ func (m *manager) handleContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	window, how, spill := contextOf(c.loop.Model)
+	c.mu.Lock()
+	prompt := c.lastPrompt
+	c.mu.Unlock()
 	hal.WriteHAL(w, http.StatusOK, contextView{
-		Window: window, How: how, Spill: spill,
+		Window: window, How: how, Spill: spill, PromptTokens: prompt,
 		Links: hal.LinkMap{"self": {Href: httpx.APIBase + "/chats/" + c.id + "/context"}},
 	})
 }
