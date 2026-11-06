@@ -66,16 +66,15 @@ func TestCatalogue_EveryRegisteredToolHasAPurpose(t *testing.T) {
 func TestCatalogue_PurposesAreTheApprovedLines(t *testing.T) {
 	require.Equal(t, approvedPurposes, toolPurposes)
 	defs, _ := registeredToolDefs(t)
-	cat, err := BuildCatalogue(defs, 0)
-	require.NoError(t, err)
+	got := StubPurposes(defs)
 	for name, purpose := range approvedPurposes {
-		require.Contains(t, strings.Split(cat, "\n"), "- "+name+": "+purpose)
+		require.Equal(t, purpose, got[name], "the stub of %s carries the approved line", name)
 	}
 }
 
 func TestCatalogue_LinesAreOnePerToolSortedByName(t *testing.T) {
 	defs, _ := registeredToolDefs(t)
-	cat, err := BuildCatalogue(defs, 0)
+	cat, err := BuildNameCatalogue(defs, 0)
 	require.NoError(t, err)
 	lines := strings.Split(cat, "\n")
 	require.Len(t, lines, len(defs))
@@ -85,7 +84,7 @@ func TestCatalogue_LinesAreOnePerToolSortedByName(t *testing.T) {
 	}
 	sort.Strings(names)
 	for i, n := range names {
-		require.True(t, strings.HasPrefix(lines[i], "- "+n+": "), "line %d is %q, want the line of %s", i, lines[i], n)
+		require.Equal(t, "- "+n, lines[i])
 	}
 }
 
@@ -107,9 +106,9 @@ func TestCatalogue_ReadOnlyPrincipalSeesNoWriteTool(t *testing.T) {
 	roTools := open(chatIDA, auth.StaticGrants{key: {auth.Read: {}}})
 	rwTools := open(chatIDB, auth.StaticGrants{key: {auth.Read: {}, auth.Write: {}}})
 
-	roCat, err := BuildCatalogue(roTools, 0)
+	roCat, err := BuildNameCatalogue(roTools, 0)
 	require.NoError(t, err)
-	rwCat, err := BuildCatalogue(rwTools, 0)
+	rwCat, err := BuildNameCatalogue(rwTools, 0)
 	require.NoError(t, err)
 
 	require.Len(t, strings.Split(roCat, "\n"), len(roTools))
@@ -127,13 +126,13 @@ func TestCatalogue_ReadOnlyPrincipalSeesNoWriteTool(t *testing.T) {
 	}
 	require.Contains(t, writeOnly, "knomit_learn", "fixture: the tools only a writer is shown")
 	for _, name := range writeOnly {
-		require.NotContains(t, roCat, "- "+name+":", "the read-only catalogue lists %s", name)
-		require.Contains(t, rwCat, "- "+name+":")
+		require.NotContains(t, strings.Split(roCat, "\n"), "- "+name, "the read-only catalogue lists %s", name)
+		require.Contains(t, strings.Split(rwCat, "\n"), "- "+name)
 	}
 }
 
-// A tool the table does not know (a script tool, one added later) gets the
-// first sentence of its description, cut at the sentence.
+// A tool the table does not know (a script tool, one added later) has as its
+// stub purpose the first sentence of its description, cut at the sentence.
 //
 // SABOTAGE: return the whole description -> this fails.
 func TestCatalogue_DerivedPurposeCutsAtASentence(t *testing.T) {
@@ -141,66 +140,35 @@ func TestCatalogue_DerivedPurposeCutsAtASentence(t *testing.T) {
 		Name:        "script_deploy",
 		Description: "Deploy the staging build to the review host. It restarts the service. Afterwards it posts the result.",
 	}
-	cat, err := BuildCatalogue([]llm.ToolDef{tool}, 0)
-	require.NoError(t, err)
-	require.Equal(t, "- script_deploy: Deploy the staging build to the review host.", cat)
-
+	got := StubPurposes([]llm.ToolDef{tool, {Name: "plain", Description: "  just a phrase  "}})
+	require.Equal(t, "Deploy the staging build to the review host.", got["script_deploy"])
 	// No sentence end: the whole (short) description, trimmed.
-	cat, err = BuildCatalogue([]llm.ToolDef{{Name: "plain", Description: "  just a phrase  "}}, 0)
-	require.NoError(t, err)
-	require.Equal(t, "- plain: just a phrase", cat)
+	require.Equal(t, "just a phrase", got["plain"])
 }
 
-// The derived purpose's length is the catalogue budget's share per tool: two
-// budgets give two different cuts of the same description.
-func TestCatalogue_DerivedPurposeLengthComesFromTheBudget(t *testing.T) {
+// A derived purpose is cut to the limit, at a rune boundary.
+func TestCatalogue_DerivedPurposeIsCutToTheLimit(t *testing.T) {
 	long := strings.Repeat("alpha beta ", 40) + "ends here."
-	tools := []llm.ToolDef{{Name: "script_a", Description: long}, {Name: "script_b", Description: long}}
-	small, err := BuildCatalogue(tools, 60)
-	require.NoError(t, err)
-	large, err := BuildCatalogue(tools, 600)
-	require.NoError(t, err)
-	require.Less(t, len(small), len(large))
-	require.LessOrEqual(t, len(small)/4, 60)
-	require.LessOrEqual(t, len(large)/4, 600)
-	require.True(t, strings.HasPrefix(large, "- script_a: alpha beta"))
+	require.LessOrEqual(t, len(derivedPurpose(long, 60)), 60)
+	require.Greater(t, len(derivedPurpose(long, 600)), len(derivedPurpose(long, 60)))
+	require.Equal(t, "é", derivedPurpose("éé", 3), "a cut never splits a rune")
 }
 
-// With a budget below the lines the catalogue is names only; below the names,
-// the chat refuses to open (the opening-too-big family).
+// With a budget below the names the chat refuses to open (the opening-too-big
+// family); at the names exactly it opens.
 //
-// SABOTAGE: skip the names-only step -> the middle case errors and this fails.
-func TestCatalogue_DegradesToNamesThenRefuses(t *testing.T) {
+// SABOTAGE: ignore the budget in BuildNameCatalogue -> the error case fails.
+func TestCatalogue_NamesBudgetRefusesBelowTheNames(t *testing.T) {
 	defs, _ := registeredToolDefs(t)
-	full, err := BuildCatalogue(defs, 0)
+	namesOnly, err := BuildNameCatalogue(defs, 0)
 	require.NoError(t, err)
-	fullTokens := len(full) / 4
-
-	names := make([]string, len(defs))
-	for i, d := range defs {
-		names[i] = d.Name
-	}
-	sort.Strings(names)
-	var nameLines []string
-	for _, n := range names {
-		nameLines = append(nameLines, "- "+n)
-	}
-	namesOnly := strings.Join(nameLines, "\n")
 	namesTokens := len(namesOnly) / 4
-	require.Less(t, namesTokens, fullTokens, "fixture: purposes cost something")
 
-	// Budget between the two: names only.
-	cat, err := BuildCatalogue(defs, namesTokens+(fullTokens-namesTokens)/2)
+	cat, err := BuildNameCatalogue(defs, namesTokens)
 	require.NoError(t, err)
 	require.Equal(t, namesOnly, cat)
 
-	// Budget exactly the full catalogue: the lines.
-	cat, err = BuildCatalogue(defs, fullTokens)
-	require.NoError(t, err)
-	require.Equal(t, full, cat)
-
-	// Budget below the names: the error, with both sizes.
-	_, err = BuildCatalogue(defs, namesTokens-1)
+	_, err = BuildNameCatalogue(defs, namesTokens-1)
 	var big *CatalogueTooBigError
 	require.True(t, errors.As(err, &big), "got %v", err)
 	require.Equal(t, namesTokens, big.Need)

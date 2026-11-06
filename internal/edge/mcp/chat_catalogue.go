@@ -40,46 +40,6 @@ func (e *CatalogueTooBigError) Error() string {
 	return fmt.Sprintf("the tool catalogue needs about %d tokens for the names alone, and %d fit", e.Need, e.Budget)
 }
 
-// BuildCatalogue is the catalogue the loader tool's description carries: one
-// line per tool, "- name: purpose", sorted by name. It is exactly the tools the
-// principal was shown, so a read-only principal's holds no write tool.
-//
-// budget is the catalogue's allowance in tokens (bytes/4); 0 or less means no
-// limit. A tool with no row in toolPurposes gets the first sentence of its
-// description, cut to its share of the budget. If the lines do not fit, the
-// catalogue is the names only ("- name"); if the names do not fit, the error is
-// a *CatalogueTooBigError and no tool count or size is assumed anywhere.
-func BuildCatalogue(tools []llm.ToolDef, budget int) (string, error) {
-	sorted := append([]llm.ToolDef(nil), tools...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
-
-	lines := make([]string, len(sorted))
-	names := make([]string, len(sorted))
-	for i, t := range sorted {
-		lead := "- " + t.Name + ": "
-		purpose, ok := toolPurposes[t.Name]
-		if !ok {
-			// Each tool's share of the budget, less the words around the purpose.
-			share := -1
-			if budget > 0 {
-				share = max(4*budget/len(sorted)-len(lead), 0)
-			}
-			purpose = derivedPurpose(t.Description, share)
-		}
-		lines[i] = lead + purpose
-		names[i] = "- " + t.Name
-	}
-	full := strings.Join(lines, "\n")
-	if budget <= 0 || len(full)/4 <= budget {
-		return full, nil
-	}
-	only := strings.Join(names, "\n")
-	if len(only)/4 <= budget {
-		return only, nil
-	}
-	return "", &CatalogueTooBigError{Need: len(only) / 4, Budget: budget}
-}
-
 // derivedPurpose is the first sentence of a description (up to the first
 // sentence end), at most limit bytes when limit is not negative, cut at a rune
 // boundary.
@@ -105,8 +65,9 @@ func derivedPurpose(desc string, limit int) string {
 // adaptive chat: "- name" per tool, sorted. The purposes are not repeated
 // there, because every tool that is not loaded is in the tools block as a stub
 // that carries its purpose (StubPurposes); the loader keeps the list of valid
-// names it takes. budget is as for BuildCatalogue; if the names do not fit the
-// error is a *CatalogueTooBigError.
+// names it takes. budget is the allowance in tokens (bytes/4); 0 or less means no limit. If the
+// names do not fit it, the error is a *CatalogueTooBigError and no tool count
+// or size is assumed anywhere.
 func BuildNameCatalogue(tools []llm.ToolDef, budget int) (string, error) {
 	names := make([]string, len(tools))
 	for i, t := range tools {

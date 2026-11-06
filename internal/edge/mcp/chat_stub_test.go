@@ -73,8 +73,8 @@ func TestStubPurposes_AreTheApprovedLinesOrADerivedSentence(t *testing.T) {
 // are in the stubs. Trimming it saves tokens and loses no name the loader
 // takes.
 //
-// SABOTAGE: chat_prefix.go NewChatToolWindow, call BuildCatalogue instead of
-// BuildNameCatalogue -> the Equal fails.
+// SABOTAGE: chat_prefix.go NewChatToolWindow, build the loader's catalogue
+// with the purposes appended -> the Equal fails.
 func TestChatToolWindow_LoaderCatalogueIsNamesAndStubsCarryThePurposes(t *testing.T) {
 	_, defs := writerPrefix(t)
 	w, err := NewChatToolWindow(defs, nil, 0)
@@ -86,9 +86,6 @@ func TestChatToolWindow_LoaderCatalogueIsNamesAndStubsCarryThePurposes(t *testin
 	require.NoError(t, err)
 	loader := sent.Hooks[llm.HookTools][0].Tool
 	require.Equal(t, llm.LoaderDescription+"\n"+names, loader.Description)
-	full, err := BuildCatalogue(defs, 0)
-	require.NoError(t, err)
-	require.Less(t, len(names), len(full))
 	_, stubs := splitTools(sent, defs)
 	for _, it := range sent.Hooks[llm.HookTools][1:] {
 		for _, s := range stubs {
@@ -97,7 +94,6 @@ func TestChatToolWindow_LoaderCatalogueIsNamesAndStubsCarryThePurposes(t *testin
 			}
 		}
 	}
-	t.Logf("loader catalogue: names %d bytes vs lines %d bytes (%d tokens saved)", len(names), len(full), (len(full)-len(names))/4)
 }
 
 // The opening of an adaptive chat counts the core definitions AND the stubs.
