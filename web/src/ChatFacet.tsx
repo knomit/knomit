@@ -107,6 +107,8 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
       kind: 'tool_call', id: String(d.id), name: String(d.name), state: d.state === 'done' ? 'done' : 'running', is_error: d.is_error === true,
       ...(d.arguments !== undefined ? { arguments: d.arguments } : {}),
       ...(typeof d.duration_ms === 'number' ? { duration_ms: d.duration_ms } : {}),
+      ...(typeof d.started_ms === 'number' ? { started_ms: d.started_ms } : {}),
+      ...(typeof d.ended_ms === 'number' ? { ended_ms: d.ended_ms } : {}),
       ...(d.summary && typeof (d.summary as { count?: unknown }).count === 'number' ? { summary: { count: (d.summary as { count: number }).count } } : {}),
       turn: turnOf(d),
     }));

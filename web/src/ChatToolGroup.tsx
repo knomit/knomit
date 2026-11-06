@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import { markdownPlugins, markdownComponents } from './markdown';
 import type { ChatApproval, ApprovalDecision } from './chatApi';
 import type { ToolCall } from './chatState';
-import { toolRowLabel, toolKind, callTarget, boundAfter, keyArg, queryText, formatDuration, totalDurationMs } from './chatState';
+import { toolRowLabel, toolKind, callTarget, boundAfter, keyArg, queryText, formatDuration, wallDurationMs } from './chatState';
 import {
   APPROVAL_ALLOW, APPROVAL_DECLINE, APPROVAL_ALLOW_SESSION, APPROVAL_TARGET_UNRESOLVED, CHAT_STOP,
   activitySummary, activitySteps, liveStep, toolVerb, resultCount,
@@ -92,7 +92,7 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
               </span>
             )}
           <span data-testid="chat-activity-steps" style={steps}>
-            {activitySteps(calls.length)}{totalDurationMs(calls) > 0 && ` · ${formatDuration(totalDurationMs(calls))}`}
+            {activitySteps(calls.length)}{wallDurationMs(calls) > 0 && ` · ${formatDuration(wallDurationMs(calls))}`}
           </span>
           <span aria-hidden="true" style={{ color: '#555', fontSize: 11, transform: open ? 'rotate(90deg)' : 'none', display: 'inline-block' }}>›</span>
         </button>

@@ -43,13 +43,17 @@ func (h *harness) row(who, id string) row {
 
 func TestTitleOf_CutsTheFirstMessage(t *testing.T) {
 	require.Equal(t, "what changed this week?", titleOf("  what   changed\nthis week?  "))
-	// 100 chars of 5-char words: cut at the last word boundary inside 60.
-	got := titleOf(strings.Repeat("abcd ", 20))
-	require.Equal(t, strings.TrimSpace(strings.Repeat("abcd ", 12))+"…", got)
-	// No spaces: a hard cut at 60 runes, multi-byte safe.
-	require.Equal(t, strings.Repeat("é", 60)+"…", titleOf(strings.Repeat("é", 90)))
-	// Exactly 60 is not cut.
-	require.Equal(t, strings.Repeat("x", 60), titleOf(strings.Repeat("x", 60)))
+	require.Equal(t, 300, chatTitleMax, "a generous cap: the title is cut by CSS in the UI, the server only bounds the payload")
+	// A long message: cut at the last word boundary inside the cap.
+	got := titleOf(strings.Repeat("abcd ", 100))
+	require.Equal(t, strings.TrimSpace(strings.Repeat("abcd ", 60))+"…", got)
+	// A message well past the old 60-char cut is kept whole.
+	sentence := "Bind to the all lens, then reply with one short sentence containing the inline code and a table"
+	require.Equal(t, sentence, titleOf(sentence))
+	// No spaces: a hard cut at the cap, multi-byte safe.
+	require.Equal(t, strings.Repeat("é", 300)+"…", titleOf(strings.Repeat("é", 400)))
+	// Exactly the cap is not cut.
+	require.Equal(t, strings.Repeat("x", 300), titleOf(strings.Repeat("x", 300)))
 }
 
 func TestChat_ListRowFieldsAndStateTransitions(t *testing.T) {
