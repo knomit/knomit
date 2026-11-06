@@ -253,6 +253,27 @@ func validateBatchTypeConsistency(inputs []learnFactInput) error {
 	return nil
 }
 
+// placementRefusal words a fact.ValidatePlacement refusal for knomit_learn. It
+// never decides anything: it maps the typed errors to the agent-facing copy.
+func placementRefusal(i int, ontology *fact.Ontology, err error) error {
+	valid := ""
+	if ontology != nil {
+		valid = strings.Join(ontology.TopicNames(), ", ")
+	}
+	var unknown *fact.UnknownTopicError
+	switch {
+	case errors.Is(err, fact.ErrEmptyPath):
+		return fmt.Errorf("fact %d: topic and category are missing (or give path for an artifact); valid topics: %s", i, valid)
+	case errors.As(err, &unknown) && unknown.Topic == "":
+		return fmt.Errorf("fact %d: topic is missing (or give path for an artifact); valid: %s", i, valid)
+	case errors.As(err, &unknown):
+		return fmt.Errorf("fact %d: unknown topic %q; valid: %s", i, unknown.Topic, valid)
+	case errors.Is(err, fact.ErrCategoryRequired):
+		return fmt.Errorf("fact %d: category is missing", i)
+	}
+	return fmt.Errorf("fact %d: %v", i, err)
+}
+
 // validateAndBuildFacts validates each input against the ontology, assigns it a
 // server-generated path, and renders it into the pending-write map.
 //
@@ -276,10 +297,10 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 		// whatever later rule it happens to trip. SerializeFact enforces the
 		// same rule for every write path; this is the same rule, reported
 		// with the fact's index.
-		if errors.Is(fact.ValidateTitle(fi.Title), fact.ErrTitleRequired) {
-			return nil, nil, nil, nil, fmt.Errorf("fact %d: title is missing", i)
-		}
 		if err := fact.ValidateTitle(fi.Title); err != nil {
+			if errors.Is(err, fact.ErrTitleRequired) {
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: title is missing", i)
+			}
 			return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
 		}
 		var path string
@@ -305,31 +326,11 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 			// The same placement check the REST create runs (POST .../facts):
 			// one rule for both write APIs, because a lens read skips a member
 			// whose ontology lacks the topic.
-			// Missing and unknown topics are reported here, with the repo's
-			// own topic names, so the caller can repair without a second
-			// call. The placement rule itself stays in ValidatePlacement.
-			if ontology != nil {
-				valid := strings.Join(ontology.TopicNames(), ", ")
-				noTopic := strings.TrimSpace(fi.Topic) == ""
-				noCategory := strings.TrimSpace(fi.Category) == ""
-				switch {
-				case noTopic && noCategory:
-					return nil, nil, nil, nil, fmt.Errorf(
-						"fact %d: topic and category are missing (or give path for an artifact); valid topics: %s", i, valid)
-				case noTopic:
-					return nil, nil, nil, nil, fmt.Errorf(
-						"fact %d: topic is missing (or give path for an artifact); valid: %s", i, valid)
-				}
-				if _, known := ontology.Topics[strings.ToLower(fi.Topic)]; !known {
-					return nil, nil, nil, nil, fmt.Errorf("fact %d: unknown topic %q; valid: %s", i, fi.Topic, valid)
-				}
-			}
+			// ValidatePlacement alone decides accept or refuse; its typed
+			// refusals are only re-worded here, with the repo's topic names.
 			tc, err := fact.ValidatePlacement(ontology, fi.Topic, fi.Category)
 			if err != nil {
-				if err.Error() == "category is required" {
-					return nil, nil, nil, nil, fmt.Errorf("fact %d: category is missing", i)
-				}
-				return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
+				return nil, nil, nil, nil, placementRefusal(i, ontology, err)
 			}
 			topicCategory = tc
 			path = fact.BuildFactPath(ontologyRoot, fi.Topic, fi.Category)
