@@ -46,11 +46,6 @@ a { color: inherit; }
   .k-bar-name { min-width: 3ch; }
   .k-bar-pill { display: none !important; }
   .k-chat-body { flex-direction: column !important; }
-  /* At a phone width the side panel stacks ABOVE the chat, full width, and the
-     splitter goes (there is nothing to drag sideways); the page never scrolls
-     sideways because of it. */
-  .k-chat-result { width: 100% !important; max-width: 100% !important; max-height: 50%; border-top: none; border-bottom: 1px solid #222; order: -1; }
-  .k-chat-body > [data-testid="chat-panel-splitter"] { display: none; }
 }
 
 /* The chat: a centered column (ChatPanel). With no side panel it takes the
@@ -58,7 +53,15 @@ a { color: inherit; }
    remembered width; the column narrows to fit, it is not overlaid. */
 .k-chat-body { flex: 1 1 0; min-height: 0; min-width: 0; display: flex; overflow: hidden; }
 .k-chat-main { flex: 1 1 0; min-width: 0; min-height: 0; }
-.k-chat-result { width: 470px; max-width: 60%; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; background: #111; }
+.k-chat-result { width: var(--k-panel-w, 470px); max-width: 60%; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; background: #111; }
+/* At a phone width the side panel STACKS ABOVE the chat, full width, and the
+   splitter goes (there is nothing to drag sideways); the page never scrolls
+   sideways because of it. These come AFTER the base rule above, so they win by
+   order and need no override flag. */
+@media (max-width: 640px) {
+  .k-chat-result { width: 100%; max-width: 100%; max-height: 50%; border-top: none; border-bottom: 1px solid #222; order: -1; }
+  .k-chat-body > [data-testid="chat-panel-splitter"] { display: none; }
+}
 /* The link a click opened stays marked (the design's .fp.open). In the narrowed
    column a fact link in a table caps at 150px. PR 6 renders the links; these
    are their hooks. */

@@ -5,10 +5,10 @@ import { render, screen, waitFor, cleanup, fireEvent, within, act } from '@testi
 import { useEffect, useReducer } from 'react';
 import { ChatFacet } from './ChatFacet';
 import { ChatSidePanel } from './ChatSidePanel';
-import { initialPanelState, panelReducer, PANEL_WIDTH_KEY, PANEL_DEFAULT_WIDTH, usePanelWidth } from './chatPanelState';
+import { clampPanelWidth, initialPanelState, panelReducer, PANEL_WIDTH_KEY, PANEL_DEFAULT_WIDTH, PANEL_MAX_FRACTION, PANEL_MIN_WIDTH, usePanelWidth } from './chatPanelState';
 import type { PanelEntry, PanelState } from './chatPanelState';
 import { installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
-import { stubFleetFetch } from './fleetTestFetch';
+import { stubFleetFetch, problem } from './fleetTestFetch';
 import type { ChatSnapshot } from './chatApi';
 
 const CHAT = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
@@ -26,7 +26,8 @@ const FACT = {
 
 const calls = {
   tu_1: { name: 'knomit_query', arguments: { text: 'first' }, result: 'RESULT-ONE', is_error: false, elided: false },
-  tu_2: { name: 'knomit_materialize', arguments: { repo: 'r1', path: 'kb/decisions/web/two.md' }, result: JSON.stringify({ text: '# Two\n', has_more: false }), is_error: false, elided: false },
+  // A materialize as the model really sends it: `file`, `audience` and the binding handle; no repo.
+  tu_2: { name: 'knomit_materialize', arguments: { file: 'kb/decisions/web/two.md', audience: 'agent', binding: 'bnd_xyz' }, result: JSON.stringify({ text: '# Two\n', has_more: false }), is_error: false, elided: false },
 };
 
 function routes() {
@@ -42,16 +43,17 @@ function routes() {
 
 /** The panel with its own history, driven through the panel API (the way fact links will). */
 let api: { open: (e: PanelEntry) => void; state: () => PanelState };
-function Harness({ running = false, onBrowse }: { running?: boolean; onBrowse?: (r: string, p: string) => void }) {
+function Harness({ running = false, onBrowse, bound = '', onStop }: { running?: boolean; onBrowse?: (r: string, p: string) => void; bound?: string; onStop?: () => void }) {
   const [panel, dispatch] = useReducer(panelReducer, initialPanelState);
   useEffect(() => { api = { open: entry => dispatch({ type: 'open', entry }), state: () => panel }; });
   const w = usePanelWidth();
-  return <ChatSidePanel chatId="chat-a" panel={panel} dispatch={dispatch} running={running} width={w.width} onSplitterDown={w.onSplitterDown} onOpenInBrowse={onBrowse} />;
+  return <ChatSidePanel chatId="chat-a" panel={panel} dispatch={dispatch} running={running} width={w.width} onSplitterDown={w.onSplitterDown} onOpenInBrowse={onBrowse} boundFor={() => bound} />;
 }
 
 beforeEach(() => { installFakeEventSource(); localStorage.clear(); });
 afterEach(() => { cleanup(); uninstallFakeEventSource(); vi.unstubAllGlobals(); });
 
+const panelW = () => screen.getByTestId('chat-side-panel').style.getPropertyValue('--k-panel-w');
 const crumb = () => screen.getByTestId('chat-panel-crumb').textContent;
 const footer = () => screen.getByTestId('chat-panel-footer').textContent;
 
@@ -100,10 +102,9 @@ describe('ChatSidePanel', () => {
     act(() => api.open(F1));
     await screen.findByTestId('chat-fact-title');
     expect(screen.getByTestId('chat-fact-title')).toHaveTextContent('One decision');
-    const band = screen.getByTestId('fact-band');
-    expect(band).toHaveTextContent('observation');
-    expect(band).toHaveTextContent('0.9');
-    expect(band).toHaveTextContent('2');
+    expect(screen.getByTestId('fact-type-badge').textContent?.trim()).toBe('observation');
+    expect(screen.getByTestId('fact-confidence').textContent?.replace(/\s+/g, ' ').trim()).toBe('conf 0.90');
+    expect(screen.getByTestId('fact-meta').textContent?.replace(/\s+/g, ' ').trim()).toBe('observation·conf 0.90·2 sources');
     expect(screen.getByTestId('fact-band-path')).toHaveTextContent('kb/decisions/web/one.md');
     await waitFor(() => expect(screen.getByTestId('chat-fact-cited-by')).toHaveTextContent('cited by 2'));
     expect(screen.getByTestId('chat-fact-cites')).toHaveTextContent('cites 1');
@@ -131,7 +132,7 @@ describe('ChatSidePanel', () => {
 
   it('back and forward move across a mixed history, with the footer counting N of M', async () => {
     stubFleetFetch(routes());
-    render(<Harness />);
+    render(<Harness bound="r1" />);
     act(() => api.open(R1));
     await screen.findByTestId('chat-result-text');
     expect(footer()).toBe('Esc close · ⌘[ back · 1 of 1 opened');
@@ -176,7 +177,7 @@ describe('ChatSidePanel', () => {
   it('× closes it; Open in Browse names the repo and the fact path, for a fact and for a materialize result', async () => {
     stubFleetFetch(routes());
     const onBrowse = vi.fn();
-    render(<Harness onBrowse={onBrowse} />);
+    render(<Harness bound="r1" onBrowse={onBrowse} />);
     act(() => api.open(F1));
     await screen.findByTestId('chat-fact-title');
     fireEvent.click(screen.getByTestId('chat-panel-browse'));
@@ -198,12 +199,12 @@ describe('ChatSidePanel', () => {
     const first = render(<Harness />);
     act(() => api.open(R1));
     await screen.findByTestId('chat-result-text');
-    expect(screen.getByTestId('chat-side-panel').style.width).toBe('470px');
+    expect(panelW()).toBe('470px');
     // Dragging the splitter left by 60px widens it by 60px, and the width is stored on release.
     const splitter = screen.getByTestId('chat-panel-splitter');
     fireEvent.mouseDown(splitter, { clientX: 1000 });
     fireEvent.mouseMove(document, { clientX: 940 });
-    expect(screen.getByTestId('chat-side-panel').style.width).toBe('530px');
+    expect(panelW()).toBe('530px');
     expect(localStorage.getItem(PANEL_WIDTH_KEY)).toBeNull(); // not on every frame
     fireEvent.mouseUp(document);
     expect(localStorage.getItem(PANEL_WIDTH_KEY)).toBe('530');
@@ -212,7 +213,7 @@ describe('ChatSidePanel', () => {
     render(<Harness />);
     act(() => api.open(R1));
     await screen.findByTestId('chat-result-text');
-    expect(screen.getByTestId('chat-side-panel').style.width).toBe('530px');
+    expect(panelW()).toBe('530px');
   });
 });
 
@@ -255,7 +256,7 @@ describe('the side panel in the chat page', () => {
     expect(await screen.findByTestId('chat-result-text')).toHaveTextContent('RESULT-ONE');
     expect(screen.getByTestId('chat-tool-select-tu_1')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('chat-tool-select-tu_2')).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByTestId('chat-side-panel').style.width).toBe('470px');
+    expect(panelW()).toBe('470px');
     // Another step moves the highlight and the panel; the history now has two.
     fireEvent.click(screen.getByTestId('chat-tool-select-tu_2'));
     await screen.findByTestId('chat-result-fact');
@@ -288,7 +289,13 @@ describe('the side panel in the chat page', () => {
     expect(rule('.k-chat-result')).not.toMatch(/position:\s*(absolute|fixed)/);
     // At a phone width the panel stacks above the chat at full width: the later
     // base rule's max-width (60%) would otherwise win (seen in the browser: 225px of 375).
-    expect(css).toMatch(/@media \(max-width: 640px\)[\s\S]*\.k-chat-result \{ width: 100% !important; max-width: 100% !important;/);
+    const base = css.indexOf('.k-chat-result { width: var(--k-panel-w, 470px); max-width: 60%;');
+    const narrow = css.indexOf('.k-chat-result { width: 100%; max-width: 100%;');
+    expect(base).toBeGreaterThan(-1);
+    expect(narrow).toBeGreaterThan(base); // after the base rule, so it wins by order
+    expect(css.slice(css.indexOf('/* The chat: a centered column'), css.indexOf('.k-chat-user {'))).not.toContain('!important');
+    // One cap: the stylesheet's max-width is the constant the stored width is clamped to.
+    expect(Number(/\.k-chat-result \{[^}]*max-width: (\d+)%/.exec(css)![1])).toBe(PANEL_MAX_FRACTION * 100);
     // Fact links in tables cap at 150px in the narrowed column, and an open one is marked.
     expect(css).toMatch(/\.k-chat-main--narrow table \.fp \{ max-width: 150px; \}/);
     expect(css).toMatch(/\.fp\.open \{ border-color: #6ea8fe; \}/);
@@ -353,5 +360,108 @@ describe('the side panel in the chat page', () => {
     rerender(<ChatFacet chat={CHAT} facet="settings" onGone={vi.fn()} />);
     fireEvent.keyDown(document.body, { key: 'Escape' });
     expect(within(screen.getByTestId('chat-facet')).getByTestId('chat-side-panel')).toBeInTheDocument();
+  });
+});
+
+describe('the side panel: target, width clamp, errors, keys', () => {
+  it('Open in Browse for a real materialize (file + audience + binding, no repo) uses the bound target', async () => {
+    stubFleetFetch(routes());
+    const onBrowse = vi.fn();
+    render(<Harness bound="r1" onBrowse={onBrowse} />);
+    act(() => api.open(R2));
+    await screen.findByTestId('chat-result-fact');
+    await waitFor(() => expect(screen.getByTestId('chat-panel-browse')).toBeInTheDocument());
+    expect(crumb()).toBe('r1 / kb / decisions / web');
+    fireEvent.click(screen.getByTestId('chat-panel-browse'));
+    expect(onBrowse).toHaveBeenCalledTimes(1);
+    expect(onBrowse).toHaveBeenLastCalledWith('r1', 'kb/decisions/web/two.md');
+  });
+
+  it('a kb://<store>/ file is passed whole, and its breadcrumb drops the store', async () => {
+    stubFleetFetch({ ...routes(), [`GET ${BASE}/calls/tu_3`]: { body: { ...calls.tu_2, arguments: { file: 'kb://abc123def456/kb/x/y/z.md', audience: 'agent' } } } });
+    const onBrowse = vi.fn();
+    render(<Harness bound="all" onBrowse={onBrowse} />);
+    act(() => api.open({ kind: 'result', callId: 'tu_3' }));
+    await waitFor(() => expect(screen.getByTestId('chat-panel-browse')).toBeInTheDocument());
+    expect(crumb()).toBe('all / kb / x / y');
+    fireEvent.click(screen.getByTestId('chat-panel-browse'));
+    expect(onBrowse).toHaveBeenLastCalledWith('all', 'kb://abc123def456/kb/x/y/z.md');
+  });
+
+  it('a result with neither a target nor a binding offers no Open in Browse', async () => {
+    stubFleetFetch(routes());
+    render(<Harness bound="" onBrowse={vi.fn()} />);
+    act(() => api.open(R2));
+    await screen.findByTestId('chat-result-fact');
+    expect(screen.queryByTestId('chat-panel-browse')).toBeNull();
+    expect(crumb()).toBe('knomit: Knomit materialize / kb / decisions / web');
+  });
+
+  it('clampPanelWidth: the minimum, the share of the container, and no bound without a container', () => {
+    expect(PANEL_MIN_WIDTH).toBe(320);
+    expect(PANEL_MAX_FRACTION).toBe(0.6);
+    expect(clampPanelWidth(100, 1000)).toBe(320);
+    expect(clampPanelWidth(450, 1000)).toBe(450);
+    expect(clampPanelWidth(900, 1000)).toBe(600);
+    expect(clampPanelWidth(900, 400)).toBe(320); // a small container never goes below the minimum
+    expect(clampPanelWidth(900, 0)).toBe(900);
+  });
+
+  it('a drag is clamped to 60% of the chat body, and starts from the width shown, not the stored one', async () => {
+    stubFleetFetch(routes());
+    localStorage.setItem(PANEL_WIDTH_KEY, '864');
+    render(<Harness />);
+    act(() => api.open(R1));
+    await screen.findByTestId('chat-result-text');
+    const splitter = screen.getByTestId('chat-panel-splitter');
+    const panel = screen.getByTestId('chat-side-panel');
+    Object.defineProperty(splitter.parentElement!, 'clientWidth', { configurable: true, value: 1000 });
+    // The stylesheet is showing 600 although 864 is stored: dragging 50px right narrows from 600, not 864.
+    Object.defineProperty(panel, 'offsetWidth', { configurable: true, value: 600 });
+    fireEvent.mouseDown(splitter, { clientX: 1000 });
+    fireEvent.mouseMove(document, { clientX: 1050 });
+    expect(panelW()).toBe('550px');
+    // Far to the left: at most 60% of 1000.
+    fireEvent.mouseMove(document, { clientX: -2000 });
+    expect(panelW()).toBe('600px');
+    // Far to the right: at least the minimum.
+    fireEvent.mouseMove(document, { clientX: 5000 });
+    expect(panelW()).toBe('320px');
+    fireEvent.mouseUp(document);
+    expect(localStorage.getItem(PANEL_WIDTH_KEY)).toBe('320');
+  });
+
+  it('a fact that cannot be read shows the server\'s sentence in the blocked notice style, not the request URL', async () => {
+    stubFleetFetch({
+      ...routes(),
+      [`GET ${FACT_BASE}/kb/gone.md`]: problem(404, 'not_found', 'no such fact'),
+    });
+    render(<Harness />);
+    act(() => api.open({ kind: 'fact', repo: 'r1', branch: 'main', path: 'kb/gone.md' }));
+    const err = await screen.findByTestId('chat-fact-error');
+    expect(err.textContent).toBe('no such fact');
+    expect(err.getAttribute('data-tone')).toBe('blocked');
+    expect(err.textContent).not.toContain('/api/v1');
+    expect(err.getAttribute('title')).toBeNull();
+    expect(screen.getByRole('alert')).toContainElement(err);
+    expect(screen.queryByTestId('chat-fact')).toBeNull();
+  });
+
+  it('Esc while a turn runs and focus is inside the side panel is Stop too, and the panel stays', async () => {
+    const fx = stubFleetFetch({
+      ...routes(),
+      [`GET ${BASE}`]: { body: snap({ running: true, items: [{ kind: 'user', text: 'q' }, { kind: 'tool_call', id: 'tu_1', name: 'knomit_query', state: 'done' }] }) },
+      [`POST ${BASE}/cancel`]: { body: {} },
+    });
+    render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} />);
+    await screen.findByTestId('chat-stop');
+    await openStep('tu_1');
+    await screen.findByTestId('chat-result-text');
+    const tab = screen.getByTestId('chat-result-tab-arguments');
+    tab.focus();
+    expect(document.activeElement).toBe(tab);
+    fireEvent.keyDown(tab, { key: 'Escape' });
+    await waitFor(() => expect(cancels(fx)).toHaveLength(1));
+    expect(screen.getByTestId('chat-side-panel')).toBeInTheDocument();
   });
 });

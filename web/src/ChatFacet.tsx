@@ -9,7 +9,7 @@ import {
 } from './chatApi';
 import type { ApprovalDecision, ChatApproval, ChatInfo, ChatNotice } from './chatApi';
 import { NEW_CHAT_ERROR } from './chatCopy';
-import { chatReducer, initialChatState, refusalReason, sessionCost } from './chatState';
+import { boundBeforeCall, chatReducer, initialChatState, refusalReason, sessionCost } from './chatState';
 import { RECONNECT_INITIAL_MS, RECONNECT_MAX_MS } from './eventStream';
 import type { ToolCall, UsagePayload } from './chatState';
 
@@ -300,7 +300,7 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onOpenInBrowse }: {
     <>
       {facet === 'settings' && <ChatSettings chatId={chat.id} />}
       <div data-testid="chat-facet" style={{ flex: 1, minHeight: 0, display: facet === 'chat' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
-        <div data-testid="chat-columns" className="k-chat-body">
+        <div data-testid="chat-columns" data-chat-scope className="k-chat-body">
           <div className={openEntry ? 'k-chat-main k-chat-main--narrow' : 'k-chat-main'} data-panel={openEntry ? 'open' : 'closed'}>
             <ChatPanel state={state} selectedId={selectedId} actionError={newChatError || actionError} notSent={notSent} landed={landed} modelName={chat.name || chat.model}
               context={{ used: state.ctxTokens, window: ctxWindow }}
@@ -314,7 +314,8 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onOpenInBrowse }: {
               side panel; the chat column narrows to make room. */}
           {openEntry && (
             <ChatSidePanel chatId={chat.id} panel={panel} dispatch={dispatchPanel} running={state.running}
-              width={panelWidth} onSplitterDown={onSplitterDown} onOpenInBrowse={onOpenInBrowse} />
+              width={panelWidth} onSplitterDown={onSplitterDown} onOpenInBrowse={onOpenInBrowse}
+              boundFor={callId => boundBeforeCall(state.turns, callId)} />
           )}
         </div>
       </div>

@@ -5,6 +5,7 @@ import type { Fact } from './api';
 import { FactBand } from './FactBand';
 import { FactBody } from './FactBody';
 import { CHAT_RESULT_LOADING } from './chatCopy';
+import { NoticeLine } from './ChatNotice';
 import { EDGE_ACCENT, EDGE_GLYPH, EDGE_LABEL, relativeTime } from './utils';
 import type { EdgeDir } from './utils';
 
@@ -53,7 +54,9 @@ export function ChatFactView({ repo, branch, path, commit }: { repo: string; bra
     return <div data-testid="chat-fact-loading" style={{ color: '#777', fontSize: 13, padding: '14px 18px' }}>{CHAT_RESULT_LOADING}</div>;
   }
   if (shown.error) {
-    return <div role="alert" data-testid="chat-fact-error" style={{ color: '#e0a0a0', fontSize: 13, padding: '14px 18px' }}>{shown.error}</div>;
+    // The server's sentence, not the request URL fetchJSON puts in front of it.
+    const sentence = /→ \d{3} ([\s\S]+)$/.exec(shown.error)?.[1] ?? shown.error;
+    return <div role="alert" style={{ padding: '0 18px' }}><NoticeLine tone="blocked" testId="chat-fact-error" lead={sentence} /></div>;
   }
   const fact = shown.fact!;
   const cell = (dir: EdgeDir, n: number | undefined) => n === undefined ? null : (

@@ -46,7 +46,7 @@ function typingIn(el: Element | null): boolean {
  *   Cmd+[ (Ctrl+[ too) goes back, from anywhere, including the composer; the
  *   browser's own history shortcut is suppressed.
  */
-export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplitterDown, onOpenInBrowse }: {
+export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplitterDown, onOpenInBrowse, boundFor }: {
   chatId: string;
   panel: PanelState;
   dispatch: Dispatch<PanelAction>;
@@ -56,16 +56,25 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
   onSplitterDown: (e: ReactMouseEvent) => void;
   /** Open this fact in Browse. Absent where the page cannot navigate. */
   onOpenInBrowse?: (repo: string, path: string) => void;
+  /** The repo or lens the chat was bound to when a call ran (a result with no
+   *  target of its own belongs to it). */
+  boundFor?: (callId: string) => string;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const entry = shownEntry(panel);
   // What a loaded result says about itself: its breadcrumb and where Browse would open it.
   const [calls, setCalls] = useState<Record<string, { crumb: string[]; browse?: { repo: string; path: string } }>>({});
+  const boundForRef = useRef(boundFor);
+  useEffect(() => { boundForRef.current = boundFor; });
   const onCall = useCallback((callId: string, call: ChatCall) => {
-    const repo = arg(call, 'repo', 'lens', 'target');
-    const path = arg(call, 'path');
+    // A materialize names its fact as `file` (a path, or kb://<id>/<path>); other
+    // tools use `path`. The target is what the call names, else the binding in
+    // force when it ran (the handle in `binding` is opaque, so it is not read).
+    const file = arg(call, 'file', 'path');
+    const path = file.replace(/^kb:\/\/[^/]+\//, '');
+    const repo = arg(call, 'repo', 'lens', 'target') || boundForRef.current?.(callId) || '';
     const crumb = repo || path ? crumbOf(repo || toolRowLabel(call.name), path) : [toolRowLabel(call.name)];
-    const browse = call.name === 'knomit_materialize' && !call.is_error && repo && path ? { repo, path } : undefined;
+    const browse = call.name === 'knomit_materialize' && !call.is_error && repo && path ? { repo, path: file } : undefined;
     setCalls(c => ({ ...c, [callId]: { crumb, ...(browse ? { browse } : {}) } }));
   }, []);
 
@@ -98,7 +107,7 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
   return (
     <>
       <FacetSplitter onMouseDown={onSplitterDown} testId="chat-panel-splitter" />
-      <div ref={root} data-testid="chat-side-panel" className="k-chat-result" style={{ width }}>
+      <div ref={root} data-testid="chat-side-panel" className="k-chat-result" style={{ ['--k-panel-w' as string]: `${width}px` }}>
         <div data-testid="chat-panel-header" style={header}>
           <button type="button" data-testid="chat-panel-back" aria-label={PANEL_BACK_LABEL} title={PANEL_BACK_LABEL}
             disabled={!canBack} onClick={() => dispatch({ type: 'back' })} style={iconBtn(canBack)}>‹</button>

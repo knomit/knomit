@@ -63,32 +63,43 @@ export const shownEntry = (s: PanelState): PanelEntry | null => (s.open ? s.entr
 export const PANEL_WIDTH_KEY = 'knomit.chatPanelWidth';
 export const PANEL_DEFAULT_WIDTH = 470;
 export const PANEL_MIN_WIDTH = 320;
-/** The largest share of the window the panel may take, so the chat column keeps room. */
+/** The largest share of the chat body (the chat column plus the panel) the panel
+ *  may take, so the chat column keeps room. App.css's `.k-chat-result`
+ *  `max-width` is this same fraction of the same box; a test pins the two. */
 export const PANEL_MAX_FRACTION = 0.6;
 
-const clamp = (w: number): number => {
-  const max = Math.max(PANEL_MIN_WIDTH, Math.floor((typeof window === 'undefined' ? 1600 : window.innerWidth) * PANEL_MAX_FRACTION));
+/** The width to keep: at least the minimum, at most the share of `container`
+ *  (the chat body's width in px; unknown, 0, means no upper bound here and the
+ *  stylesheet's cap alone shows). */
+export function clampPanelWidth(w: number, container: number): number {
+  const max = container > 0 ? Math.max(PANEL_MIN_WIDTH, Math.floor(container * PANEL_MAX_FRACTION)) : Infinity;
   return Math.min(max, Math.max(PANEL_MIN_WIDTH, Math.round(w)));
-};
+}
 
 export function loadPanelWidth(): number {
   try {
     const n = Number(localStorage.getItem(PANEL_WIDTH_KEY));
-    if (Number.isFinite(n) && n > 0) return clamp(n);
+    if (Number.isFinite(n) && n > 0) return clampPanelWidth(n, 0);
   } catch { /* storage disabled */ }
   return PANEL_DEFAULT_WIDTH;
 }
 
 /** usePanelWidth: the remembered width and the splitter's drag handler. The
- *  panel is on the right, so dragging LEFT widens it. Persisted on release, not
- *  on every frame (the same pattern as the Library's width). */
+ *  panel is on the right, so dragging LEFT widens it. A drag starts from the
+ *  width the panel is SHOWN at (the stylesheet may cap what was stored, and a
+ *  drag from the stored value would then seem stuck) and is clamped to the
+ *  chat body's width, the box the stylesheet caps against. Persisted on
+ *  release, not on every frame (the same pattern as the Library's width). */
 export function usePanelWidth(): { width: number; onSplitterDown: (e: ReactMouseEvent) => void } {
   const [width, setWidth] = useState<number>(loadPanelWidth);
   const onSplitterDown = useCallback((e: ReactMouseEvent) => {
     e.preventDefault();
+    const splitter = e.currentTarget as HTMLElement;
+    const container = splitter.parentElement?.clientWidth ?? 0;
+    const shown = (splitter.nextElementSibling as HTMLElement | null)?.offsetWidth ?? 0;
     const startX = e.clientX;
-    const start = width;
-    const onMove = (ev: MouseEvent) => setWidth(clamp(start - (ev.clientX - startX)));
+    const start = shown > 0 ? shown : width;
+    const onMove = (ev: MouseEvent) => setWidth(clampPanelWidth(start - (ev.clientX - startX), container));
     const onUp = () => {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
