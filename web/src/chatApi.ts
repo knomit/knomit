@@ -8,11 +8,14 @@ import type { EventSourceLike } from './eventStream';
 import { CHAT_SEND_TIMEOUT } from './chatCopy';
 
 /** One live chat, as GET /chats lists it. */
-export interface ChatInfo { id: string; provider: string; model: string }
+/** `name` is the model's display name; the server always sends it (the id when
+ *  the config gives none), and a reader falls back to `model` when it is absent. */
+export interface ChatInfo { id: string; provider: string; model: string; name?: string }
 
-/** A model the picker offers: `available` is the provider's own answer, `tools`
+/** A model the picker offers: `name` is what a person sees (its id when the
+ *  config gives none), `available` is the provider's own answer, `tools`
  *  whether it can call tools, `reason` says why a model is unusable. */
-export interface ChatModelOption { id: string; available: boolean; tools: boolean; reason?: string }
+export interface ChatModelOption { id: string; name?: string; available: boolean; tools: boolean; reason?: string }
 export interface ChatProvider { name: string; kind: string; models: ChatModelOption[] }
 
 /** A row of GET /chats/{id}'s transcript. Tool results are not in it: they are
@@ -58,12 +61,12 @@ export async function listChatProviders(): Promise<ChatProvider[]> {
 
 export async function listChats(): Promise<ChatInfo[]> {
   const data = await fetchJSON<{ _embedded?: { chats?: ChatInfo[] } }>(chatsUrl());
-  return (data._embedded?.chats ?? []).map(({ id, provider, model }) => ({ id, provider, model }));
+  return (data._embedded?.chats ?? []).map(({ id, provider, model, name }) => ({ id, provider, model, name }));
 }
 
 export async function createChat(provider: string, model: string): Promise<ChatInfo> {
   const c = await fetchJSON<ChatInfo>(chatsUrl(), { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ provider, model }) });
-  return { id: c.id, provider: c.provider, model: c.model };
+  return { id: c.id, provider: c.provider, model: c.model, name: c.name };
 }
 
 export function getChat(id: string): Promise<ChatSnapshot> {

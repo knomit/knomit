@@ -209,6 +209,7 @@ func newHarnessProvider(t *testing.T, provider http.HandlerFunc) *harness {
 	reg := llm.NewRegistry(map[string]config.LLMProviderConfig{
 		"anthropic": {
 			Kind: "anthropic", BaseURL: anthropicModels.URL, APIKey: plainKey, Models: []string{"a1", "a2"},
+			Entries: []config.LLMModelEntry{{ID: "a1", Name: "Alpha"}, {ID: "a2"}},
 			ModelDefaults: map[string]config.LLMModelConfig{"a1": {Price: &config.LLMPriceCard{
 				Tiers: []config.LLMPriceTier{
 					{UpToPromptTokens: 100_000, InputPerMTok: 0.1, OutputPerMTok: 0.5},

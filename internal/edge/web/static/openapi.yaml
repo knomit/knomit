@@ -4100,6 +4100,7 @@ paths:
                                 type: object
                                 properties:
                                   id: { type: string }
+                                  name: { type: string, description: "Display name; the id when the config gives none" }
                                   available: { type: boolean }
                                   tools: { type: boolean }
                                   reason: { type: string }
@@ -5859,7 +5860,8 @@ components:
       properties:
         id: { type: string, description: "chat- and 32 hex digits; also the MCP session id and the session log's name" }
         provider: { type: string }
-        model: { type: string }
+        model: { type: string, description: "The model id; the identity" }
+        name: { type: string, description: "The model's display name from the config; its id when none is given or the model is no longer configured" }
         _links: { type: object }
     Secret:
       type: object

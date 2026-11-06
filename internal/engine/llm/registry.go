@@ -25,6 +25,7 @@ const registryCacheTTL = 60 * time.Second
 // capability). Reason says why a model is unavailable or toolless.
 type ModelStatus struct {
 	ID        string
+	Name      string // display name from the config; the id when none is given
 	Available bool
 	Tools     bool
 	Reason    string
@@ -116,6 +117,9 @@ func (r *Registry) List(ctx context.Context) []ProviderStatus {
 		st := ProviderStatus{Name: n, Kind: p.Kind}
 		if why := p.APIKeyEnvBlocked(n); why != "" {
 			st.Models = allUnavailable(p, why)
+			for i := range st.Models {
+				st.Models[i].Name = p.ModelName(st.Models[i].ID)
+			}
 			out = append(out, st)
 			continue
 		}
@@ -124,6 +128,9 @@ func (r *Registry) List(ctx context.Context) []ProviderStatus {
 			st.Models = r.anthropicStatus(ctx, p)
 		case config.LLMKindOllama:
 			st.Models = r.ollamaStatus(ctx, p)
+		}
+		for i := range st.Models {
+			st.Models[i].Name = p.ModelName(st.Models[i].ID)
 		}
 		out = append(out, st)
 	}
@@ -283,6 +290,17 @@ func (r *Registry) lookup(provider, model string) (config.LLMProviderConfig, err
 		}
 	}
 	return p, fmt.Errorf("%w: model %q is not in provider %q's allowlist (%s)", ErrUnknownModel, model, provider, strings.Join(p.Models, ", "))
+}
+
+// ModelName is the display name the config gives provider's model id. It is
+// the id itself when the config gives no name or no longer lists the provider
+// or the model. The name is resolved here, at read time: a chat stores only ids.
+func (r *Registry) ModelName(provider, model string) string {
+	p, ok := r.cfg[provider]
+	if !ok {
+		return model
+	}
+	return p.ModelName(model)
 }
 
 // Open builds the chat model for an allowlisted provider/model, wrapped in the

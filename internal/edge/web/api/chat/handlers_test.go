@@ -336,10 +336,27 @@ func TestChat_ProvidersListsModels(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(body, &v))
 	require.Equal(t, []providerView{{Name: "anthropic", Kind: "anthropic", Models: []modelView{
-		{ID: "a1", Available: true, Tools: true},
-		{ID: "a2", Reason: "not offered by the provider"},
+		{ID: "a1", Name: "Alpha", Available: true, Tools: true},
+		{ID: "a2", Name: "a2", Reason: "not offered by the provider"},
 	}}}, v.Embedded.Providers)
 	require.NotContains(t, string(body), plainKey)
+}
+
+// A chat's item carries the model's display name, read from the config at
+// read time; the chat's model stays the id.
+func TestChat_ItemCarriesModelName(t *testing.T) {
+	h := newHarness(t)
+	code, body := h.do("uid:501", http.MethodPost, "/chats", map[string]string{"provider": "anthropic", "model": "a1"})
+	require.Equal(t, http.StatusCreated, code, string(body))
+	var c chatItem
+	require.NoError(t, json.Unmarshal(body, &c))
+	require.Equal(t, "a1", c.Model)
+	require.Equal(t, "Alpha", c.Name)
+
+	code, body = h.do("uid:501", http.MethodGet, "/chats", nil)
+	require.Equal(t, http.StatusOK, code)
+	require.Contains(t, string(body), `"name":"Alpha"`)
+	require.Contains(t, string(body), `"model":"a1"`)
 }
 
 func TestChat_CreateRefusesUnknownModel(t *testing.T) {

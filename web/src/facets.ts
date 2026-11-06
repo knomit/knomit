@@ -433,7 +433,7 @@ export function targetLabelFor(
       // the crumb. A kind the list does not know yet keeps the chat glyph.
       const chat = chats.find(c => c.id === target.id);
       const kind = chat ? chatProviders.find(p => p.name === chat.provider)?.kind ?? '' : '';
-      return { kind: 'chat', name: chat?.model ?? '', id: target.id, ...(chat ? { provider: { name: chat.provider, kind } } : {}) };
+      return { kind: 'chat', name: chat ? (chat.name || chat.model) : '', id: target.id, ...(chat ? { provider: { name: chat.provider, kind } } : {}) };
     }
     case 'archived':
       return { kind: 'repo', name: archived.find(a => a.id === target.id)?.name ?? '', chip: { text: 'archived', tone: 'archived' } };

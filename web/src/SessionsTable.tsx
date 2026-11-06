@@ -5,6 +5,7 @@ import { BookIcon, ChevronDownIcon, GitBranchIcon, LayersIcon } from './icons';
 import { LENS } from './utils';
 import type { SessionTarget } from './useTargetSessions';
 import { tableWrap, th, policyFooter } from './tableStyles';
+import type { ChatProvider } from './chatApi';
 
 // relativeTime renders an age the way the table reads it. Not exported: this
 // module exports components only (react-refresh), and the test reads the
@@ -24,11 +25,16 @@ function relativeTime(iso: string, now: Date): string {
 const CHAT_CLIENT = 'knomit-chat';
 
 /** The Client cell's text: "name version", except for a chat, which reads
- *  "Chat · provider · model". */
-function clientLabel(c: ClientSession['client']): string {
+ *  "Chat · provider · model name". The model is shown by its configured name;
+ *  the version carries the id, and an id no longer configured shows as itself. */
+function clientLabel(c: ClientSession['client'], providers: ChatProvider[]): string {
   if (c.name !== CHAT_CLIENT) return `${c.name} ${c.version}`;
   const i = c.version.indexOf('/');
-  return i < 0 ? `Chat · ${c.version}` : `Chat · ${c.version.slice(0, i)} · ${c.version.slice(i + 1)}`;
+  if (i < 0) return `Chat · ${c.version}`;
+  const provider = c.version.slice(0, i);
+  const id = c.version.slice(i + 1);
+  const name = providers.find(p => p.name === provider)?.models.find(m => m.id === id)?.name || id;
+  return `Chat · ${provider} · ${name}`;
 }
 
 const STATE_COLOR: Record<ClientSession['state'], string> = { live: '#4ade80', idle: '#facc15', dead: '#555' };
@@ -137,12 +143,14 @@ function BranchChip({ branch }: WriteChip) {
 // Only the target's binding groups are drawn: the server already filtered the
 // sessions to ones bound to it, and a session bound here AND elsewhere shows
 // just this target's line and handles.
-export function SessionsTable({ rows, policy, error, now, target }: {
+export function SessionsTable({ rows, policy, error, now, target, chatProviders = [] }: {
   rows: ClientSession[];
   policy: ClientSessionPolicy | null;
   error: string | null;
   now: Date;
   target: SessionTarget;
+  /** The configured chat providers, for a chat session's model name. */
+  chatProviders?: ChatProvider[];
 }) {
   const targetKey = `${target.kind}:${target.uid}`;
   // Which rows have their per-handle detail open, keyed by session id. Per page
@@ -210,7 +218,7 @@ export function SessionsTable({ rows, policy, error, now, target }: {
                 <tr data-testid="session-row" style={{ color: dead ? '#666' : '#ddd', borderTop: '1px solid #222' }}>
                   <td title={r.state}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 4, background: STATE_COLOR[r.state] }} /></td>
                   <td>
-                    {r.client.name ? clientLabel(r.client) : <span style={{ color: '#777' }}>unknown</span>}
+                    {r.client.name ? clientLabel(r.client, chatProviders) : <span style={{ color: '#777' }}>unknown</span>}
                     {/* A row the server never saw initialize: it outlived a
                         restart and was rebuilt from request headers. */}
                     {!r.client.initialized && <span style={{ marginLeft: 6, color: '#a78bfa' }}>resumed</span>}

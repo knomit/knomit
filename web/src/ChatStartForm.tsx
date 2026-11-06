@@ -51,8 +51,9 @@ export function ChatStartForm({ providers, onCreated, onCancel }: {
                 disabled={busy || !m.tools}
                 onClick={() => { void start(p.name, m.id); }}
                 style={modelBtn(!m.tools || busy)}
+                title={m.id}
               >
-                {m.id}
+                {m.name || m.id}
               </button>
               {!m.tools && m.reason && <span data-testid={`chat-model-reason-${p.name}-${m.id}`} style={reason}>{m.reason}</span>}
             </div>
