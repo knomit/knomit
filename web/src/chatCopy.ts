@@ -180,6 +180,8 @@ export const noticeFullRest = (needed: string, window: string): string =>
   `${needed && window ? `${needed} > ${window}, ` : ''}nothing sent`;
 export const NOT_SENT = 'Not sent';
 export const NOT_SENT_RETRY = 'Retry';
+/** Existing approved wording (App's boundary label for the new-chat draft), reused when starting a chat from a notice fails. */
+export const NEW_CHAT_ERROR = 'New chat hit an error';
 
 /** A tool's run time on a timeline row and in "N steps · T": 840ms, 1.9s, 22s, 1m 12s. */
 export const durationMs = (ms: number): string => `${ms}ms`;

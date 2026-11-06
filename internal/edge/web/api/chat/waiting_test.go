@@ -352,3 +352,60 @@ func TestChat_ExpectedFirstTokenIsTheSlowestObserved(t *testing.T) {
 	drive(t, h, "uid:501", id, s, nil)
 	require.Equal(t, first, h.snapshot("uid:501", id).ExpectedFirstTokenMS, "a faster reply does not lower the slowest")
 }
+
+// A second Stop for the same send changes nothing: one entry, still withdrawn once.
+func TestChat_DuplicateCancelForOneSendIsHarmless(t *testing.T) {
+	h := newHarness(t)
+	m := h.queue("a1", textStep("after", usage))
+	id := h.create("uid:501", "a1")
+	require.Equal(t, http.StatusNoContent, h.cancelSend("uid:501", id, "dup"))
+	require.Equal(t, http.StatusNoContent, h.cancelSend("uid:501", id, "dup"))
+	c := h.mgr.find(id, writer.String())
+	c.mu.Lock()
+	require.Equal(t, []string{"dup"}, c.sends, "one entry for two cancels")
+	require.Equal(t, "withdrawn", c.sendState["dup"])
+	c.mu.Unlock()
+
+	require.Equal(t, http.StatusConflict, h.sendTurn("uid:501", id, "x", "dup"), "still withdrawn")
+	require.Empty(t, m.requests())
+	// A cancel after the refusal still leaves other sends alone.
+	require.Equal(t, http.StatusNoContent, h.cancelSend("uid:501", id, "dup"))
+	require.Equal(t, http.StatusAccepted, h.sendTurn("uid:501", id, "y", "other"))
+}
+
+// The per-chat memory of send ids is bounded: the oldest is forgotten after
+// maxSends newer ones, and a forgotten withdrawn id no longer withdraws.
+func TestChat_SendIDMemoryIsBoundedAndEvictsTheOldest(t *testing.T) {
+	cancelMany := func(h *harness, id string, n int) {
+		for i := 0; i < n; i++ {
+			require.Equal(t, http.StatusNoContent, h.cancelSend("uid:501", id, fmt.Sprintf("n-%d", i)))
+		}
+	}
+	// maxSends-1 newer ids: "first" is the oldest of exactly maxSends, still remembered.
+	h := newHarness(t)
+	h.queue("a1", textStep("ok", usage))
+	id := h.create("uid:501", "a1")
+	require.Equal(t, http.StatusNoContent, h.cancelSend("uid:501", id, "first"))
+	cancelMany(h, id, maxSends-1)
+	c := h.mgr.find(id, writer.String())
+	c.mu.Lock()
+	require.Len(t, c.sends, maxSends)
+	require.Len(t, c.sendState, maxSends)
+	c.mu.Unlock()
+	require.Equal(t, http.StatusConflict, h.sendTurn("uid:501", id, "x", "first"), "at the bound it is still withdrawn")
+
+	// One more newer id evicts "first": it is no longer withdrawn, and the memory stays at the bound.
+	h2 := newHarness(t)
+	h2.queue("a1", textStep("ok", usage))
+	id2 := h2.create("uid:501", "a1")
+	require.Equal(t, http.StatusNoContent, h2.cancelSend("uid:501", id2, "first"))
+	cancelMany(h2, id2, maxSends)
+	c2 := h2.mgr.find(id2, writer.String())
+	c2.mu.Lock()
+	require.Len(t, c2.sends, maxSends, "never more than maxSends")
+	require.Len(t, c2.sendState, maxSends)
+	require.NotContains(t, c2.sendState, "first", "the oldest was forgotten")
+	require.Contains(t, c2.sendState, fmt.Sprintf("n-%d", maxSends-1), "the newest is kept")
+	c2.mu.Unlock()
+	require.Equal(t, http.StatusAccepted, h2.sendTurn("uid:501", id2, "x", "first"), "a forgotten withdrawn id starts its turn")
+}

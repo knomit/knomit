@@ -105,6 +105,33 @@ describe('Stop', () => {
     expect(composer().value).toBe('Retract only the ones in knomit-kb');
   });
 
+  it('a Stop that LOST the race to acceptance: the server listed the turn, so the restored text is taken out of the composer (no duplicate)', async () => {
+    const { fx, calls, answer } = mount(snap([]));
+    await screen.findByTestId('chat-input');
+    send('Retract only the ones in knomit-kb');
+    fireEvent.click(screen.getByTestId('chat-stop'));
+    expect(composer().value).toBe('Retract only the ones in knomit-kb');
+    await waitFor(() => expect(calls('/cancel')).toHaveLength(1));
+    // The server had already taken the turn (and the cancel ended it): the POST answers 202, the snapshot lists it.
+    fx.set(`GET ${BASE}`, { body: snap([{ kind: 'user', text: 'Retract only the ones in knomit-kb', cancelled: true, error: 'The turn was cancelled.' }]) });
+    await answer(202, { turn: 0 });
+    await waitFor(() => expect(composer().value).toBe(''));
+    expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['Retract only the ones in knomit-kb']);
+    expect(screen.queryByTestId('chat-not-sent')).toBeNull();
+  });
+
+  it('when the person typed more after the restored text, only the restored part goes', async () => {
+    const { fx, calls, answer } = mount(snap([]));
+    await screen.findByTestId('chat-input');
+    send('first draft');
+    fireEvent.click(screen.getByTestId('chat-stop'));
+    type('first draft\nand more');
+    await waitFor(() => expect(calls('/cancel')).toHaveLength(1));
+    fx.set(`GET ${BASE}`, { body: snap([{ kind: 'user', text: 'first draft', cancelled: true, error: 'The turn was cancelled.' }]) });
+    await answer(202, { turn: 0 });
+    await waitFor(() => expect(composer().value).toBe('and more'));
+  });
+
   it('Stop before acceptance keeps what was typed since, after the restored text', async () => {
     const { answer } = mount(snap([]));
     await screen.findByTestId('chat-input');
@@ -222,6 +249,21 @@ describe('the thinking placeholder', () => {
     expect(screen.getByTestId('chat-thinking-label').textContent).toBe('No response yet');
     expect(screen.getByTestId('chat-thinking-counter').textContent).toBe('7s');
     expect(screen.getByTestId('chat-thinking').getAttribute('data-stalled')).toBe('true');
+  });
+
+  it('streaming reasoning is a sign of life: past the expected time WITH thinking text it still says Thinking…, not No response yet', async () => {
+    fake();
+    const { answer } = mount(snap([], { expected_first_token_ms: 5000 }));
+    await screen.findByTestId('chat-input');
+    send('hello');
+    await answer(202, { turn: 0 });
+    const es = latestStream('/chats/chat-a/events')!;
+    await tick(1000);
+    act(() => { es.emit('thinking_delta', { text: 'Comparing blast radius…', turn: 0 }); });
+    await tick(9000); // 10 s in, twice the expected 5000 ms
+    expect(screen.getByTestId('chat-thinking-counter').textContent).toBe('10s');
+    expect(screen.getByTestId('chat-thinking-label').textContent).toBe('Thinking…');
+    expect(screen.getByTestId('chat-thinking').getAttribute('data-stalled')).toBeNull();
   });
 
   it('with no observation yet (0), it never says "No response yet", however long it waits', async () => {
@@ -365,6 +407,20 @@ describe('notices: one line, never a filled box', () => {
     fireEvent.click(screen.getByTestId('chat-notice-price-action'));
     expect(onNewChat).toHaveBeenCalledTimes(1);
     expect(onNewChat).toHaveBeenCalledWith(CHAT);
+  });
+
+  it('a failed "New chat" is shown in the same one-line style with the existing "New chat hit an error", not swallowed', async () => {
+    const onNewChat = vi.fn().mockRejectedValue(new Error('boom'));
+    mount(snap([
+      { kind: 'user', text: 'q', warning: PRICE, warning_info: { kind: 'price_tier', prompt_tokens: 95_400, tier_tokens: 100_000, mult: 5 } },
+      { kind: 'assistant', text: 'a' },
+    ]), { onNewChat });
+    await screen.findByTestId('chat-turn-0');
+    fireEvent.click(screen.getByTestId('chat-notice-price-action'));
+    const line = await screen.findByTestId('chat-action-error');
+    expect(onNewChat).toHaveBeenCalledWith(CHAT);
+    expect(line.textContent).toBe('New chat hit an error');
+    expect(line.getAttribute('data-tone')).toBe('blocked');
   });
 
   it('a blocked send reads "Chat is full · 1.02M > 1M, nothing sent · New chat", with the server sentence as the title', async () => {

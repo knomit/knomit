@@ -593,7 +593,9 @@ describe('ChatFacet: events are routed by turn index', () => {
     await waitFor(() => expect(reads()).toBe(before + 1));
     expect(await screen.findByTestId('chat-approval-tu_9')).toBeInTheDocument();
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['first', 'second']);
-    expect(screen.getByTestId('chat-not-sent').textContent).toBe(`Not sent: ${CHAT_SEND_TIMEOUT}Retry`);
+    // The server has the turn: its text is in the transcript, so it is NOT also kept in the composer (Retry would send it twice).
+    expect(screen.queryByTestId('chat-not-sent')).toBeNull();
+    expect((screen.getByTestId('chat-input') as HTMLTextAreaElement).value).toBe('');
   });
 });
 

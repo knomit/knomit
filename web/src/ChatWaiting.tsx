@@ -22,8 +22,9 @@ export function SendingLine() {
  *  (`since`; the moment the page first saw the turn when it joined mid-way). It
  *  turns grey and reads "No response yet" once the elapsed time passes
  *  `expectedMs`, the slowest first reply this model has taken in this server
- *  run; with none observed (0) it never does. `thinking` is the reasoning
- *  summary so far, streamed under it. */
+ *  run; with none observed (0) it never does, and it never does once reasoning
+ *  text has arrived. `thinking` is the reasoning summary so far, streamed
+ *  under it. */
 export function ThinkingPlaceholder({ since, expectedMs, thinking }: { since?: number; expectedMs: number; thinking: string }) {
   const [joined] = useState(() => Date.now());
   const [now, setNow] = useState(() => Date.now());
@@ -33,7 +34,8 @@ export function ThinkingPlaceholder({ since, expectedMs, thinking }: { since?: n
   }, []);
   const start = since ?? joined;
   const elapsed = Math.max(0, now - start);
-  const stalled = expectedMs > 0 && elapsed > expectedMs;
+  // Reasoning that is streaming is a sign of life: only silence stalls.
+  const stalled = expectedMs > 0 && elapsed > expectedMs && thinking === '';
   return (
     <div data-testid="chat-thinking" data-stalled={stalled || undefined} style={{ margin: '8px 0' }}>
       <div style={{ ...think, color: stalled ? '#888' : '#b8a27a' }}>
