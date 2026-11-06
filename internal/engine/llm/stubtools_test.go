@@ -232,3 +232,51 @@ func TestLoop_StubCallWithValidArgumentsIsNotRun(t *testing.T) {
 	require.Equal(t, []hostCall{{"knomit_learn", `{"title":"valid"}`}}, r.calls, "only the call made after loading ran, once")
 	require.Equal(t, []string{"gate:knomit_learn", "host:knomit_learn"}, r.order)
 }
+
+// evictingModel evicts every unpinned tool, this turn's included, before each
+// request after the first: the shape of a tight budget that unloads a tool the
+// model had asked for, so its next call meets a stub again.
+type evictingModel struct {
+	*fakeModel
+	w *ToolWindow
+}
+
+func (e *evictingModel) Stream(ctx context.Context, s Snapshot, o StreamOptions, sink func(Event)) (*Response, error) {
+	if len(e.snaps) > 0 {
+		e.w.turnLoaded = Pinned{}
+		for {
+			if _, ok := e.w.EvictOne(nil); !ok {
+				break
+			}
+		}
+	}
+	return e.fakeModel.Stream(ctx, s, o, sink)
+}
+
+// The live shape across responses: the model calls the same stub with the same
+// arguments in three successive responses because the tool was unloaded in
+// between. Each answer is "call it again", which is not a failure of the
+// model's, so the turn is not ended by the repeated-failure guard. It goes on
+// to the model's text and ends normally, having run nothing.
+//
+// SABOTAGE: agent.go runCalls, window branch: replace `if stubSeen[skey] {`
+// with `if false {` -> the third answer trips ErrRepeatedFailure and this fails.
+func TestLoop_SameStubCallInThreeResponsesIsNotARepeatedFailure(t *testing.T) {
+	m := &fakeModel{steps: []fakeStep{
+		{resp: toolResp("s1", "knomit_learn", `{}`, Usage{})},
+		{resp: toolResp("s2", "knomit_learn", `{}`, Usage{})},
+		{resp: toolResp("s3", "knomit_learn", `{}`, Usage{})},
+		{resp: textResp("done", Usage{})},
+	}}
+	r := newRig(t, m, winTool("knomit_query", 100), winTool("knomit_learn", 300))
+	r.l.Model = &evictingModel{fakeModel: m, w: r.w}
+	res, err := r.l.RunTurn(context.Background(), "record")
+	require.NoError(t, err, "the turn ends with the model's text, not with ErrRepeatedFailure")
+	require.NotErrorIs(t, err, ErrRepeatedFailure)
+	require.Len(t, m.snaps, 4)
+	require.Equal(t, 3, res.ToolCalls)
+	require.Empty(t, r.calls, "no stub call ran")
+	for i, id := range []string{"s1", "s2", "s3"} {
+		require.Equal(t, fmt.Sprintf(NotLoadedCallResult, "knomit_learn"), resultText(m.snaps[i+1], id).Content, id)
+	}
+}
