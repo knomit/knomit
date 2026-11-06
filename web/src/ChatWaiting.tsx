@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { KnomitMark } from './ChatToolGroup';
 import {
@@ -45,9 +45,20 @@ export function ThinkingPlaceholder({ since, expectedMs, thinking }: { since?: n
           {waitCounter(Math.floor(elapsed / 1000))}
         </span>
       </div>
-      {thinking && <div data-testid="chat-thinking-summary" style={summary}>{thinking}</div>}
+      {thinking && <ThinkingSummary text={thinking} />}
     </div>
   );
+}
+
+/** The reasoning summary streamed so far: capped at four lines, scrolling
+ *  inside, and following the newest line as text arrives. */
+function ThinkingSummary({ text }: { text: string }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = box.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [text]);
+  return <div ref={box} data-testid="chat-thinking-summary" style={summary}>{text}</div>;
 }
 
 /** The neutral divider after a stop, and, on the latest turn, the two ways on. */
@@ -81,6 +92,8 @@ const tile: CSSProperties = {
 const summary: CSSProperties = {
   margin: '0 0 10px 31px', fontSize: 12.5, lineHeight: 1.55, color: '#7c7c7c', fontStyle: 'italic',
   borderLeft: '1px solid #262626', paddingLeft: 10, maxWidth: 560, whiteSpace: 'pre-wrap',
+  // Four lines (12.5px at 1.55), then it scrolls inside.
+  maxHeight: 12.5 * 1.55 * 4, overflowY: 'auto',
 };
 const divider: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 11.5, color: '#777' };
 const ghostBtn: CSSProperties = {

@@ -249,6 +249,32 @@ describe('the thinking placeholder', () => {
     expect(screen.getByTestId('chat-text').textContent).toBe('Answer');
   });
 
+  it('caps the streamed summary at four lines, scrolls inside it, and follows the newest line', async () => {
+    const heights = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
+    try {
+      const { answer } = mount(snap([]));
+      await screen.findByTestId('chat-input');
+      send('hello');
+      await answer(202, { turn: 0 });
+      const es = latestStream('/chats/chat-a/events')!;
+      act(() => { es.emit('thinking_delta', { text: 'line one\nline two\nline three\n', turn: 0 }); });
+      const box = screen.getByTestId('chat-thinking-summary');
+      // 4 lines of 12.5px text at line-height 1.55 = 77.5px, scrolling inside.
+      expect(box.style.maxHeight).toBe('77.5px');
+      expect(box.style.overflowY).toBe('auto');
+      expect(box.scrollTop).toBe(500);
+      // New text arrives: it scrolls to the newest again.
+      box.scrollTop = 10;
+      act(() => { es.emit('thinking_delta', { text: 'line four\nline five', turn: 0 }); });
+      expect(screen.getByTestId('chat-thinking-summary').scrollTop).toBe(500);
+      // It still folds away when the answer starts.
+      act(() => { es.emit('text_delta', { text: 'Answer', turn: 0 }); });
+      expect(screen.queryByTestId('chat-thinking-summary')).toBeNull();
+    } finally {
+      heights.mockRestore();
+    }
+  });
+
   it('the first tool_call replaces the placeholder', async () => {
     const { answer } = mount(snap([]));
     await screen.findByTestId('chat-input');

@@ -141,14 +141,15 @@ export const COMPOSER_HINT = 'Enter to send';
 export const CHAT_REPLY_PLACEHOLDER = 'Reply…';
 
 // ── APPROVED (2026-11-06, PR 2) ──
-/** The fixed follow-up the Continue button sends after a stop. Approved by the
- *  user on 2026-11-06. */
-export const CHAT_CONTINUE_MESSAGE = 'Continue.';
+// Chat UX v2, PR 2 (design sections 2 and 5). Approved by the user on
+// 2026-11-06: the design's copy-table strings for Waiting, Stop and Notices,
+// the counter "4s", the Esc keycap, "1 result" / "N results", "Not sent:
+// <reason> (<status>)", the bare "nothing sent", and the fixed Continue message.
+// The server's own sentences ("Send withdrawn", "the send was stopped before
+// the server accepted it") are in the Go handler, verbatim.
 
-// ── PENDING APPROVAL ──
-// Chat UX v2, PR 2 (design 2026-11-05-chat-ux-v2, sections 2 and 5). Every
-// string here is from the design's copy table unless its comment says it is
-// not. None has been approved yet.
+/** The fixed follow-up the Continue button sends after a stop. */
+export const CHAT_CONTINUE_MESSAGE = 'Continue.';
 
 /** Waiting for the reply: the unaccepted send, the placeholder, and the stall. */
 export const CHAT_SENDING = 'Sending…';
@@ -172,11 +173,17 @@ export const noticeOf = (n: string, m: string): string => `${n} of ${m}`;
 export const noticeTierNext = (model: string, mult: number): string =>
   `${model}'s higher price tier is next${mult > 0 ? ` (${parseFloat(mult.toFixed(2))}×)` : ''}`;
 export const NOTICE_NEW_CHAT = 'New chat';
-export const NOTICE_REASONING_CUT = 'Reasoning summary cut short';
-export const NOTICE_ANSWER_COMPLETE = 'the answer is complete';
 export const NOTICE_FULL = 'Chat is full';
 /** `<needed> > <window>, nothing sent`; with no known size, just `nothing sent`. */
 export const noticeFullRest = (needed: string, window: string): string =>
   `${needed && window ? `${needed} > ${window}, ` : ''}nothing sent`;
 export const NOT_SENT = 'Not sent';
 export const NOT_SENT_RETRY = 'Retry';
+
+// ── PENDING APPROVAL ──
+// Chat UX v2, PR 2: wording the user's PR 2 ruling did not list. Not approved yet.
+
+/** A tool's run time on a timeline row and in "N steps · T": 840ms, 1.9s, 22s, 1m 12s. */
+export const durationMs = (ms: number): string => `${ms}ms`;
+export const durationSeconds = (s: number): string => `${s}s`;
+export const durationMinutes = (m: number, s: number): string => `${m}m ${s}s`;

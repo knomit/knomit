@@ -26,6 +26,7 @@
 // POST, so a snapshot started after the POST was answered 2xx lists it; until
 // then the local turn is kept after the snapshot's turns. A POST that fails
 // takes its local turn out outright.
+import { durationMinutes, durationMs, durationSeconds } from './chatCopy';
 import type { ChatApproval, ChatCallSummary, ChatNotice, ChatSnapshot, ChatViewItem } from './chatApi';
 
 export interface ToolCall {
@@ -472,12 +473,12 @@ export function boundAfter(calls: ToolCall[], bound: string): string {
 
 /** A duration in ms, worded compactly: 840ms, 1.9s, 22s, 1m 12s. */
 export function formatDuration(ms: number): string {
-  if (ms < 1000) return `${Math.max(1, Math.round(ms))}ms`;
+  if (ms < 1000) return durationMs(Math.max(1, Math.round(ms)));
   const s = ms / 1000;
-  if (s < 10) return `${Math.round(s * 10) / 10}s`;
-  if (s < 60) return `${Math.round(s)}s`;
+  if (s < 10) return durationSeconds(Math.round(s * 10) / 10);
+  if (s < 60) return durationSeconds(Math.round(s));
   const m = Math.floor(s / 60);
-  return `${m}m ${Math.round(s - m * 60)}s`;
+  return durationMinutes(m, Math.round(s - m * 60));
 }
 
 /** The time the calls of a group took in all: the sum of the durations the
