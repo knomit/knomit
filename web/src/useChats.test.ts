@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { useChats } from './useChats';
 import { railState } from './chatRail';
+import { chatEventStreamCount } from './chatEvents';
 import { installFakeEventSource, uninstallFakeEventSource, latestStream, CHAT_EVENTS_STREAM } from './testEventSource';
 
 const A = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
@@ -126,6 +127,59 @@ describe('useChats', () => {
       act(() => { es.emit('chat_state', ev('idle', 'Say hi.', '2026-11-06T10:00:02Z')); });
       await act(async () => { release(); });
       expect(rowOf(result)).toMatchObject({ state: 'idle', title: 'Say hi.' });
+    });
+
+    const readCutBefore = (serverRow: object) => {
+      let release!: () => void;
+      vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(res => { release = () => res(listBody({ id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' }, serverRow)); })));
+      return () => release();
+    };
+
+    it('an add() that applied the stream\'s row beats a list read cut before it, with no event after the add', async () => {
+      const { result, es } = await setup([A]);
+      act(() => { es.emit('chat_state', ev('running', 'Say hi.', '2026-11-06T10:00:01Z')); });
+      const release = readCutBefore({ id: 'chat-b', provider: 'local', model: 'o1', title: 'o1', state: 'idle', turns: 0 });
+      act(() => { window.dispatchEvent(new Event('focus')); });
+      act(() => { result.current.add(B); });
+      await act(async () => { release(); });
+      expect(rowOf(result)).toMatchObject({ state: 'running', title: 'Say hi.' });
+    });
+
+    it('an add() with no stream row yields to a list read cut before it: the read\'s newer row wins (the stream dropped during the create)', async () => {
+      const { result } = await setup([A]);
+      const release = readCutBefore({ id: 'chat-b', provider: 'local', model: 'o1', title: 'Say hi.', state: 'running', turns: 1, last_activity: '2026-11-06T10:00:01Z' });
+      act(() => { window.dispatchEvent(new Event('focus')); }); // the reconnect's re-read
+      act(() => { result.current.add(B); }); // the POST answers late; nothing streamed
+      expect(rowOf(result).state).toBeUndefined();
+      await act(async () => { release(); });
+      expect(rowOf(result)).toMatchObject({ state: 'running', title: 'Say hi.' });
+    });
+
+    it('a reconnect (ready) forgets the record: add() after it gets the plain row, not the stale state', async () => {
+      const { result, es } = await setup([A]);
+      act(() => { es.emit('chat_state', ev('running', 'Say hi.', '2026-11-06T10:00:01Z')); });
+      act(() => { es.emit('ready', {}); });
+      act(() => { result.current.add(B); });
+      expect(rowOf(result).state).toBeUndefined();
+      expect(rowOf(result).title).toBeUndefined();
+    });
+
+    it('chat_end forgets the record: add() of that id gets the plain row', async () => {
+      const { result, es } = await setup([A]);
+      act(() => { es.emit('chat_state', ev('running', 'Say hi.', '2026-11-06T10:00:01Z')); });
+      act(() => { es.emit('chat_end', { chat: 'chat-b' }); });
+      act(() => { result.current.add(B); });
+      expect(rowOf(result).state).toBeUndefined();
+      expect(rowOf(result).title).toBeUndefined();
+    });
+
+    it('unmounting the hook closes the page stream (a watcher holds it only while mounted)', async () => {
+      const { unmount, es } = await setup([]);
+      expect(chatEventStreamCount()).toBe(1);
+      unmount();
+      await act(async () => { await Promise.resolve(); });
+      expect(chatEventStreamCount()).toBe(0);
+      expect(es.closedByClient).toBe(true);
     });
   });
 

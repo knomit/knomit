@@ -35,6 +35,8 @@ export function useChats(enabled = true): {
   const rev = useRef(0);
   const added = useRef(new Map<string, number>());
   const removed = useRef(new Map<string, number>());
+  // Chats whose add() applied a row from the stream's record.
+  const streamed = useRef(new Set<string>());
   const reloadRef = useRef<() => void>(() => {});
   // One map per list read still in flight: the rows chat_state updated meanwhile.
   const inFlight = useRef(new Set<Map<string, Partial<ChatInfo>>>());
@@ -53,9 +55,11 @@ export function useChats(enabled = true): {
         if (cancelled) return;
         const gone = (id: string) => (removed.current.get(id) ?? -1) > startedAt;
         setChats(prev => {
-          // A chat added after this read began is newer than the read's row for
-          // it: the add (with what the stream said) stands.
-          const mine = (id: string) => (added.current.get(id) ?? -1) > startedAt ? prev.find(p => p.id === id) : undefined;
+          // A chat added after this read began, whose add applied a row the
+          // stream carried, is newer than the read's row for it: the add stands.
+          // An add with no stream row knows nothing the read does not: the
+          // read's row stands (the stream may have dropped during the create).
+          const mine = (id: string) => (added.current.get(id) ?? -1) > startedAt && streamed.current.has(id) ? prev.find(p => p.id === id) : undefined;
           const out = list.filter(c => !gone(c.id)).map(c => mine(c.id) ?? (during.has(c.id) ? { ...c, ...during.get(c.id) } : c));
           for (const c of prev) {
             if ((added.current.get(c.id) ?? -1) > startedAt && !out.some(o => o.id === c.id)) out.push(c);
@@ -110,11 +114,13 @@ export function useChats(enabled = true): {
     // a turn) is its row: nothing is read again.
     const seen = latestChatState(c.id);
     const row = seen ? { ...c, ...patchOf(seen) } : c;
+    if (seen) streamed.current.add(c.id); else streamed.current.delete(c.id);
     setChats(prev => (prev.some(p => p.id === c.id) ? prev : [...prev, row]));
   }, []);
   const remove = useCallback((id: string) => {
     rev.current += 1;
     removed.current.set(id, rev.current);
+    streamed.current.delete(id);
     added.current.delete(id);
     setChats(prev => (prev.some(p => p.id === id) ? prev.filter(p => p.id !== id) : prev));
   }, []);
