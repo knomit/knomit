@@ -4258,8 +4258,9 @@ paths:
         goes out every 30 seconds. Events: `text_delta`, `thinking_delta`,
         `reasoning`, `tool_call` (state `running` then `done`), `approval`,
         `usage`, `warning`, `turn_done`, `turn_error`, `chat_state` (the
-        chat's rail row changed: `state` idle, running, awaiting_approval or
-        error, `turns`, `cost_usd`) and `chat_end`. A chat ends 60 seconds
+        chat's rail row changed: `title`, `state` idle, running,
+        awaiting_approval or error, `turns`, `cost_usd`, `last_activity`,
+        `started_at`; the same row `GET /chats` lists) and `chat_end`. A chat ends 60 seconds
         after the last page stream of its owner closes.
       operationId: streamChatEvents
       responses:
@@ -5907,6 +5908,12 @@ components:
         provider: { type: string }
         model: { type: string, description: "The model id; the identity" }
         name: { type: string, description: "The model's display name from the config; its id when none is given or the model is no longer configured" }
+        title: { type: string, description: "GET /chats rows only: the chat's first message, cut to about 60 characters; empty before the first turn" }
+        state: { type: string, enum: [idle, running, awaiting_approval, error], description: "GET /chats rows only: what the chat is doing now. error is the last turn failing; the person's own Stop is idle" }
+        turns: { type: integer, description: "GET /chats rows only: the number of user turns" }
+        cost_usd: { type: number, description: "GET /chats rows only: summed turn cost; absent when no turn was priced" }
+        last_activity: { type: string, format: date-time, description: "GET /chats rows only" }
+        started_at: { type: string, format: date-time, description: "GET /chats rows only" }
         _links: { type: object }
     Secret:
       type: object
