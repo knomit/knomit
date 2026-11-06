@@ -1,11 +1,13 @@
 package chat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,9 +18,10 @@ import (
 	"knomit/internal/engine/llm"
 )
 
-// chatStreamGrace is how long a chat lives with no events stream attached
-// (plan P11). A package variable so tests can shorten it; production never
-// changes it.
+// chatStreamGrace is how long a chat lives once its owner has no page events
+// stream attached (plan P11): the clock starts when the owner's LAST page
+// stream closes, or at creation when none is attached. A package variable so
+// tests can shorten it; production never changes it.
 var chatStreamGrace = 60 * time.Second
 
 // maxApprovalArgs bounds the arguments echoed in an approval event; a larger
@@ -141,9 +144,11 @@ type grantInfo struct {
 
 type callMeta struct{ action, pin string }
 
-// subscriber is one attached events stream.
-type subscriber struct {
-	ch chan []byte
+// pageSub is one attached page events stream (one per browser tab): it
+// carries the events of every chat its owner has, each tagged with its chat id.
+type pageSub struct {
+	owner string
+	ch    chan []byte
 }
 
 // chat is one live chat: its MCP session, loop, approvals, grants and temp
@@ -180,9 +185,18 @@ type chat struct {
 	pending    map[string]*pendingApproval
 	grants     map[grantKey]grantInfo
 	meta       map[string]callMeta
-	subs       map[*subscriber]struct{}
-	attached   int
-	grace      *time.Timer
+	// missedEnd is the last turn's terminal frame when no page stream was
+	// attached to take it; the next page stream to attach is sent it once,
+	// right after ready.
+	missedEnd  []byte
+	lastState  []byte    // the last chat_state frame body sent, to send only changes
+	title      string    // the first message, cut (see titleOf); empty until the first turn
+	startedAt  time.Time // when the chat was made
+	lastActive time.Time // the last turn start or row change
+	// afterGraceStep is a test seam: graceFired calls it after clearing the
+	// fired timer and before it counts the owner's streams.
+	afterGraceStep func()
+	grace          *time.Timer
 
 	// Per-request flags the truncation wording needs: whether the last
 	// request streamed text, and whether it streamed reasoning.
@@ -261,6 +275,7 @@ func (c *chat) Decide(ctx context.Context, call llm.ToolUse) (llm.Decision, erro
 	c.mu.Unlock()
 
 	c.emit("approval", p)
+	c.noteState()
 	select {
 	case d := <-p.ch:
 		switch d {
@@ -274,6 +289,7 @@ func (c *chat) Decide(ctx context.Context, call llm.ToolUse) (llm.Decision, erro
 		c.mu.Lock()
 		delete(c.pending, call.ID)
 		c.mu.Unlock()
+		c.noteState()
 		return llm.Decision{}, ctx.Err()
 	}
 }
@@ -300,6 +316,7 @@ func (c *chat) answerApproval(callID, decision string) (bool, error) {
 	delete(c.pending, callID)
 	c.mu.Unlock()
 	p.ch <- decision
+	c.noteState()
 	return true, nil
 }
 
@@ -350,56 +367,169 @@ func (c *chat) callMetaOf(callID string) (string, string) {
 
 // ---- events ----
 
-// emit sends one SSE event to every attached stream. A stream that cannot keep
-// up is dropped (its channel closed); the client reconnects and refetches.
+// tagChat puts the chat id first in the JSON object b. Every payload the chat
+// emits is an object.
+func tagChat(id string, b []byte) []byte {
+	tag := `{"chat":` + strconv.Quote(id)
+	if len(b) <= 2 {
+		return []byte(tag + "}")
+	}
+	return append([]byte(tag+","), b[1:]...)
+}
+
+// emit sends one SSE event, tagged with this chat's id, to every page stream
+// of the chat's owner. A stream that cannot keep up is dropped (its channel
+// closed); the client reconnects and reloads.
 func (c *chat) emit(kind string, data any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sendLocked(kind, data, false)
+}
+
+// emitEnd sends a turn's terminal event (turn_done or turn_error). If no page
+// stream took it, the frame is kept for the next page stream to attach, which
+// gets it right after ready: a turn can outlive the streams it started on, and
+// the end of a turn must reach the client once whichever stream is attached
+// then.
+func (c *chat) emitEnd(kind string, data any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sendLocked(kind, data, true)
+}
+
+// sendLocked requires c.mu. Lock order: c.mu, then manager.pageMu.
+func (c *chat) sendLocked(kind string, data any, terminal bool) {
 	b, err := json.Marshal(data)
 	if err != nil {
 		return
 	}
-	frame := []byte("event: " + kind + "\ndata: " + string(b) + "\n\n")
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for s := range c.subs {
-		select {
-		case s.ch <- frame:
-		default:
-			delete(c.subs, s)
-			close(s.ch)
+	frame := []byte("event: " + kind + "\ndata: " + string(tagChat(c.id, b)) + "\n\n")
+	c.lastActive = time.Now()
+	delivered := c.m.broadcast(c.owner, frame)
+	if terminal {
+		c.missedEnd = nil
+		if !delivered {
+			c.missedEnd = frame
 		}
 	}
 }
 
-// attach registers an events stream and cancels the grace timer. ok is false
-// when the chat has ended.
-func (c *chat) attach() (*subscriber, bool) {
+// rowState is the chat's row in the rail: what the chat_state event carries
+// (tagged with the chat id) and what a GET /chats row carries beside the chat's
+// identity, so the two never disagree.
+//
+// Title is the first message cut (empty before the first turn); State is
+// idle | running | awaiting_approval | error; Turns counts the user turns;
+// CostUSD sums them (absent without a price card); LastActivity and StartedAt
+// are RFC 3339 UTC.
+type rowState struct {
+	Title        string   `json:"title"`
+	State        string   `json:"state"`
+	Turns        int      `json:"turns"`
+	CostUSD      *float64 `json:"cost_usd,omitempty"`
+	LastActivity string   `json:"last_activity"`
+	StartedAt    string   `json:"started_at"`
+}
+
+// stateLocked requires c.mu.
+func (c *chat) stateLocked() rowState {
+	st := rowState{
+		Title: c.title, State: "idle",
+		LastActivity: c.lastActive.UTC().Format(time.RFC3339Nano), StartedAt: c.startedAt.UTC().Format(time.RFC3339Nano),
+	}
+	var cost float64
+	priced := false
+	for _, it := range c.view {
+		if it.Kind != "user" {
+			continue
+		}
+		st.Turns++
+		if it.CostUSD != nil {
+			cost += *it.CostUSD
+			priced = true
+		}
+	}
+	if priced {
+		st.CostUSD = &cost
+	}
+	switch {
+	case len(c.pending) > 0:
+		st.State = "awaiting_approval"
+	case c.running:
+		st.State = "running"
+	case c.turnAt < len(c.view) && c.view[c.turnAt].Kind == "user" && c.view[c.turnAt].Error != "" && !c.view[c.turnAt].Cancelled:
+		st.State = "error"
+	}
+	return st
+}
+
+// noteState sends chat_state when the chat's row changed since the last one.
+// Call it after any change to running, pending approvals, the turn count, the
+// turn's error or its cost; it must not be called with c.mu held.
+func (c *chat) noteState() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.ended {
-		return nil, false
+		return
 	}
-	s := &subscriber{ch: make(chan []byte, 256)}
-	c.subs[s] = struct{}{}
-	c.attached++
+	st := c.stateLocked()
+	// last_activity moves with every frame; only a change of the row itself is
+	// worth a chat_state.
+	key := st
+	key.LastActivity = ""
+	b, err := json.Marshal(key)
+	if err != nil || bytes.Equal(b, c.lastState) {
+		return
+	}
+	c.lastState = b
+	c.sendLocked("chat_state", st, false)
+}
+
+// adoptPage is what a newly attached page stream does to a chat: stop its
+// grace clock and take the terminal event no stream received.
+func (c *chat) adoptPage(s *pageSub) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ended {
+		return
+	}
 	if c.grace != nil {
 		c.grace.Stop()
 		c.grace = nil
 	}
-	return s, true
+	if c.missedEnd != nil && c.m.deliverTo(s, c.missedEnd) {
+		c.missedEnd = nil
+	}
 }
 
-// detach removes a stream; the last one out starts the grace timer.
-func (c *chat) detach(s *subscriber) {
+// startGrace starts the clock that ends the chat unless a page stream of its
+// owner is attached when it runs out.
+func (c *chat) startGrace() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.subs[s]; ok {
-		delete(c.subs, s)
-		close(s.ch)
+	if c.ended || c.grace != nil {
+		return
 	}
-	c.attached--
-	if c.attached <= 0 && !c.ended && c.grace == nil {
-		c.grace = time.AfterFunc(chatStreamGrace, func() { c.end("stream_grace") })
+	c.grace = time.AfterFunc(chatStreamGrace, c.graceFired)
+}
+
+func (c *chat) graceFired() {
+	// Clear the fired timer FIRST, then look at the streams: a stream that
+	// closes after the look finds no timer and starts a new one (startGrace
+	// returns early while c.grace is set), so the chat is never left with no
+	// stream and no clock.
+	c.mu.Lock()
+	c.grace = nil
+	hook := c.afterGraceStep
+	c.mu.Unlock()
+	if hook != nil {
+		hook()
 	}
+	// A stream may have attached while the timer was already running out.
+	if c.m.pageCount(c.owner) > 0 {
+		return
+	}
+	c.end("stream_grace")
 }
 
 // ---- the turn ----
@@ -474,9 +604,14 @@ func (c *chat) startTurn(text, sendID string) (int, error) {
 	c.turnAt = len(c.view)
 	turn := c.turnAt
 	c.view = append(c.view, viewItem{Kind: "user", Text: text, SendID: sendID})
+	if c.title == "" {
+		c.title = titleOf(text)
+	}
+	c.lastActive = time.Now()
 	c.turns.Add(1)
 	c.mu.Unlock()
 	c.store.appendTranscript(viewItem{Kind: "user", Text: text, SendID: sendID})
+	c.noteState()
 
 	go func() {
 		defer c.turns.Done()
@@ -524,22 +659,23 @@ func (c *chat) finishTurn(ctx context.Context, res *llm.TurnResult, err error) {
 	if ended {
 		return
 	}
+	c.noteState()
 	if err == nil {
-		c.emit("turn_done", map[string]any{
+		c.emitEnd("turn_done", map[string]any{
 			"turn": turn, "stop_reason": res.StopReason, "requests": res.Requests, "tool_calls": res.ToolCalls,
 			"usage": usageView(res.Usage), "cost_usd": res.Cost.USD,
 		})
 		return
 	}
 	if !truncatedBare && cancelled {
-		c.emit("turn_error", map[string]any{"message": msg, "cancelled": true, "turn": turn})
+		c.emitEnd("turn_error", map[string]any{"message": msg, "cancelled": true, "turn": turn})
 		return
 	}
 	out := map[string]any{"message": msg, "turn": turn}
 	if errInfo != nil {
 		out["error_info"] = errInfo
 	}
-	c.emit("turn_error", out)
+	c.emitEnd("turn_error", out)
 }
 
 func errString(err error) string {
@@ -671,6 +807,7 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 			out["cost_usd"] = ev.Cost.USD
 		}
 		c.emit("usage", out)
+		c.noteState()
 	case llm.LoopWarning:
 		text := priceWarningText(*ev.Warning)
 		info := &noticeView{
@@ -777,12 +914,6 @@ func (c *chat) end(reason string) {
 		}
 
 		c.emit("chat_end", map[string]string{"reason": reason})
-		c.mu.Lock()
-		for s := range c.subs {
-			delete(c.subs, s)
-			close(s.ch)
-		}
-		c.mu.Unlock()
 
 		if err := c.sess.Close(context.Background()); err != nil {
 			log.Warn().Err(err).Str("chat", c.id).Msg("chat: closing the MCP session failed")
@@ -794,3 +925,26 @@ func (c *chat) end(reason string) {
 }
 
 func (c *chat) String() string { return fmt.Sprintf("chat %s", c.id) }
+
+// chatTitleMax is how many characters of the first message the chat's title
+// keeps.
+const chatTitleMax = 60
+
+// titleOf is the chat's title: the first message with its whitespace collapsed,
+// cut to chatTitleMax characters (runes), at a word boundary when one falls in
+// the last 15, with an ellipsis when anything was cut.
+func titleOf(text string) string {
+	t := strings.Join(strings.Fields(text), " ")
+	r := []rune(t)
+	if len(r) <= chatTitleMax {
+		return t
+	}
+	cut := r[:chatTitleMax]
+	for i := len(cut) - 1; i >= chatTitleMax-15; i-- {
+		if cut[i] == ' ' {
+			cut = cut[:i]
+			break
+		}
+	}
+	return strings.TrimRight(string(cut), " ") + "\u2026"
+}

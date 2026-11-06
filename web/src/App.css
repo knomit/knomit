@@ -44,6 +44,7 @@ a { color: inherit; }
   .k-bar-tabs button { padding: 0 8px !important; flex-shrink: 0; }
   .k-bar-label { min-width: 96px !important; }
   .k-bar-name { min-width: 3ch; }
+  .k-bar-sub { display: none !important; }
   .k-bar-pill { display: none !important; }
   .k-chat-body { flex-direction: column !important; }
 }

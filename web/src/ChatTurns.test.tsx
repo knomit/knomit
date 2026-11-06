@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, fireEvent, cleanup, within } from '@testing-library/react';
 import { ChatFacet } from './ChatFacet';
 import { ChatPill } from './ChatPill';
-import { installFakeEventSource, uninstallFakeEventSource, latestStream } from './testEventSource';
+import { installFakeEventSource, uninstallFakeEventSource, chatStream } from './testEventSource';
 import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatSnapshot, ChatViewItem } from './chatApi';
 import { activitySummary, liveStep, activitySteps, costSession, toolVerb } from './chatCopy';
@@ -154,7 +154,7 @@ describe('the activity line on the page', () => {
   it('a live call without arguments shows no key argument, and falls back to the summary', async () => {
     mount(snap([{ kind: 'user', text: 'q' }], { running: true }));
     await screen.findByTestId('chat-turn-0');
-    act(() => { latestStream('/chats/chat-a/events')!.emit('tool_call', { id: 'tu_9', name: 'knomit_query', state: 'running', turn: 0 }); });
+    act(() => { chatStream('chat-a')!.emit('tool_call', { id: 'tu_9', name: 'knomit_query', state: 'running', turn: 0 }); });
     expect(screen.queryByTestId('chat-activity-live')).toBeNull();
     expect(summaryText()).toBe('Searched 1×');
     fireEvent.click(screen.getByTestId('chat-tool-group-toggle'));
@@ -243,7 +243,7 @@ describe('the top-bar pill and the composer meter', () => {
     await screen.findByTestId('chat-turn-0');
     expect(screen.getByTestId('chat-context-text').textContent).toBe('7.3K / 32.8K');
     // A live request lands (seq 2): its exact prompt is shown, and survives the read at the turn's end.
-    const es = latestStream('/chats/chat-a/events')!;
+    const es = chatStream('chat-a')!;
     act(() => { es.emit('usage', { usage: { input: 700, cache_read: 8000, cache_write: 300, output: 5 }, seq: 2, turn: 0 }); });
     expect(screen.getByTestId('chat-context-text').textContent).toBe('9K / 32.8K');
     await act(async () => { es.emit('turn_done', { turn: 0 }); });
@@ -322,7 +322,7 @@ describe('the streaming caret', () => {
   it('ends the streamed text until the turn ends', async () => {
     mount(snap([{ kind: 'user', text: 'q' }], { running: true }));
     await screen.findByTestId('chat-turn-0');
-    const es = latestStream('/chats/chat-a/events')!;
+    const es = chatStream('chat-a')!;
     act(() => { es.emit('text_delta', { text: 'Short answer', turn: 0 }); });
     const text = screen.getByTestId('chat-text');
     expect(within(text).getByTestId('chat-caret')).toBeInTheDocument();

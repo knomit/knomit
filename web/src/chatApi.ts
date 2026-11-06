@@ -3,16 +3,22 @@
 // fetchJSON and every event stream through openEventStream, which is what
 // makes the desktop's Wails transport work for chat too.
 import { fetchJSON, apiUrl } from './api';
-import { openEventStream } from './eventStream';
-import type { EventSourceLike } from './eventStream';
 import { CHAT_SEND_TIMEOUT } from './chatCopy';
 
 /** One live chat, as GET /chats lists it. */
 /** `name` is the model's display name; the server always sends it (the id when
  *  the config gives none), and a reader falls back to `model` when it is absent. */
-export interface ChatInfo { id: string; provider: string; model: string; name?: string;
+export interface ChatInfo {
+  id: string; provider: string; model: string; name?: string;
   /** Only on a chat created with its first message: that turn's view index. */
-  turn?: number }
+  turn?: number;
+  /** What GET /chats and the page stream's chat_state add for the rail (absent
+   *  on a chat just created). `title` is the first message, cut; `state` is what
+   *  the chat is doing now; `turns` counts the user turns; `cost_usd` is absent
+   *  when nothing was priced. */
+  title?: string; state?: ChatState; last_activity?: string; started_at?: string; turns?: number; cost_usd?: number;
+}
+export type ChatState = 'idle' | 'running' | 'awaiting_approval' | 'error';
 
 /** A model the picker offers: `name` is what a person sees (its id when the
  *  config gives none), `available` is the provider's own answer, `tools`
@@ -99,7 +105,8 @@ export async function listChatProviders(): Promise<ChatProvider[]> {
 
 export async function listChats(): Promise<ChatInfo[]> {
   const data = await fetchJSON<{ _embedded?: { chats?: ChatInfo[] } }>(chatsUrl());
-  return (data._embedded?.chats ?? []).map(({ id, provider, model, name }) => ({ id, provider, model, name }));
+  return (data._embedded?.chats ?? []).map(({ id, provider, model, name, title, state, last_activity, started_at, turns, cost_usd }) => (
+    { id, provider, model, name, title, state, last_activity, started_at, turns, cost_usd }));
 }
 
 /** Start a chat. With `message` the first turn starts in the same call, and the
@@ -166,12 +173,6 @@ export function deleteChat(id: string): Promise<void> {
   return noContent(chatUrl(id), { method: 'DELETE' });
 }
 
-/** The page is going away: end the chat. `keepalive` lets the request outlive
- *  the page. Fire and forget; the server's stream grace is the backstop. */
-export function endChatOnPageHide(id: string): void {
-  try { void fetch(chatUrl(id), { method: 'DELETE', keepalive: true }).catch(() => {}); } catch { /* going away */ }
-}
-
 export async function listChatGrants(id: string): Promise<ChatGrant[]> {
   const data = await fetchJSON<{ _embedded?: { grants?: ChatGrant[] } }>(`${chatUrl(id)}/grants`);
   return data._embedded?.grants ?? [];
@@ -197,10 +198,10 @@ export function getChatCall(id: string, callId: string): Promise<ChatCall> {
 
 /** The server's SSE event names (internal/edge/web/api/chat/chat.go). */
 export const CHAT_EVENT_NAMES = [
-  'ready', 'text_delta', 'thinking_delta', 'reasoning', 'tool_call', 'approval', 'usage', 'warning', 'turn_done', 'turn_error', 'chat_end',
+  'ready', 'text_delta', 'thinking_delta', 'reasoning', 'tool_call', 'approval', 'usage', 'warning', 'turn_done', 'turn_error', 'chat_state', 'chat_end',
 ] as const;
 export type ChatEventName = typeof CHAT_EVENT_NAMES[number];
 
-export function openChatEvents(id: string): EventSourceLike {
-  return openEventStream(`${chatUrl(id)}/events`);
-}
+/** The page's one events stream (see chatEvents.ts): every chat of the caller,
+ *  each event tagged with `chat`. */
+export const chatEventsUrl = (): string => `${chatsUrl()}/events`;

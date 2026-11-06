@@ -25,10 +25,10 @@ const eventsKeepalive = 30 * time.Second
 func (m *manager) routes(r chi.Router) {
 	r.Get("/chat-providers", m.handleProviders)
 	r.Get("/chats", m.handleList)
+	r.Get("/chats/events", m.handleEvents)
 	r.Post("/chats", m.handleCreate)
 	r.Get("/chats/{id}", m.handleGet)
 	r.Delete("/chats/{id}", m.handleDelete)
-	r.Get("/chats/{id}/events", m.handleEvents)
 	r.Post("/chats/{id}/turns", m.handleTurn)
 	r.Post("/chats/{id}/cancel", m.handleCancel)
 	r.Post("/chats/{id}/approvals/{callId}", m.handleApproval)
@@ -105,11 +105,25 @@ type chatItem struct {
 	Links    hal.LinkMap `json:"_links"`
 }
 
+// listItem is a chat as GET /chats lists it: its identity plus the same row the
+// chat_state event carries (title, state, turns, cost_usd, last_activity,
+// started_at).
+type listItem struct {
+	chatItem
+	rowState
+}
+
+func listItemOf(c *chat) listItem {
+	it := itemOf(c)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return listItem{chatItem: it, rowState: c.stateLocked()}
+}
+
 func chatLinks(id string) hal.LinkMap {
 	base := httpx.APIBase + "/chats/" + id
 	return hal.LinkMap{
 		"self":      {Href: base},
-		"events":    {Href: base + "/events"},
 		"turns":     {Href: base + "/turns"},
 		"cancel":    {Href: base + "/cancel"},
 		"approval":  {Href: base + "/approvals/{callId}", Templated: true},
@@ -198,19 +212,19 @@ func (m *manager) handleList(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items := []chatItem{}
+	items := []listItem{}
 	for _, c := range m.listFor(p.String()) {
-		items = append(items, itemOf(c))
+		items = append(items, listItemOf(c))
 	}
 	sortChatItems(items)
-	hal.WriteHAL(w, http.StatusOK, hal.CollectionView[chatItem]{
+	hal.WriteHAL(w, http.StatusOK, hal.CollectionView[listItem]{
 		Count:    len(items),
 		Links:    hal.LinkMap{"self": {Href: httpx.APIBase + "/chats"}},
-		Embedded: map[string][]chatItem{"chats": items},
+		Embedded: map[string][]listItem{"chats": items},
 	})
 }
 
-func sortChatItems(items []chatItem) {
+func sortChatItems(items []listItem) {
 	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
 }
 
@@ -328,23 +342,23 @@ func (m *manager) handleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleEvents is the page stream: one per browser tab, carrying the events
+// of every chat the caller has, each tagged with its chat id. A chat lives
+// while any page stream of its owner is attached.
 func (m *manager) handleEvents(w http.ResponseWriter, r *http.Request) {
-	c, ok := m.chatOf(w, r)
+	p, ok := caller(w, r)
 	if !ok {
 		return
 	}
-	sub, ok := c.attach()
-	if !ok {
-		hal.WriteProblem(w, http.StatusNotFound, "Not Found", "no such chat", r.URL.Path)
-		return
-	}
-	defer c.detach(sub)
+	sub := m.attachPage(p.String())
+	defer m.detachPage(sub)
 	stream, ok := httpx.StartSSE(w)
 	if !ok {
 		return
 	}
-	// Every connect starts with ready; the client then refetches the chat.
-	// There is no id: and no Last-Event-ID replay (plan P10).
+	// Every connect starts with ready, which is page-level: the client then
+	// reloads what it shows. There is no id: and no Last-Event-ID replay
+	// (plan P10).
 	if !stream.Write("event: ready\ndata: {}\n\n") {
 		return
 	}
@@ -353,6 +367,8 @@ func (m *manager) handleEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-m.life.Done():
 			return
 		case <-keepalive.C:
 			if !stream.Keepalive() {
