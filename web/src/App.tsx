@@ -1964,7 +1964,7 @@ export default function App() {
               <div key={c.id} data-testid={`chat-body-${c.id}`}
                 style={draftBody(!serverOpen && displayed.kind === 'chat' && displayed.id === c.id)}>
                 <ErrorBoundary variant="inline" label="The chat hit an error">
-                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} onOpenInBrowse={onOpenInBrowse} />
+                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} onOpenInBrowse={onOpenInBrowse} repos={repos} />
                 </ErrorBoundary>
               </div>
             ))}

@@ -3,8 +3,9 @@ import { repoHue } from './utils';
 import { GitBranchIcon, CopyIcon } from './icons';
 
 // RepoDot is the deterministic per-repo hue swatch (mirrors CreateLensForm's Dot).
-export const RepoDot = ({ repo }: { repo: string }) => (
-  <span style={{ width: 8, height: 8, borderRadius: '50%', background: repoHue(repo || '?'), flexShrink: 0 }} />
+// 8px by default; the chat's repo chip draws it at the mockup's 7px.
+export const RepoDot = ({ repo, size = 8, testId }: { repo: string; size?: number; testId?: string }) => (
+  <span data-testid={testId} style={{ width: size, height: size, borderRadius: '50%', background: repoHue(repo || '?'), flexShrink: 0 }} />
 );
 
 // BranchChip renders a blue git-branch chip with a mono branch label.

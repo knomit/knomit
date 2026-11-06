@@ -117,5 +117,47 @@ a { color: inherit; }
 .k-prose.k-chat-answer tr:last-child td { border-bottom: 0; }
 .k-chat-table-scroll { max-width: 100%; overflow-x: auto; margin: 0 0 12px; }
 
+/* Fact links (design §3; mockup .fp / .rp / .more / .hc). A resolved fact cited
+   in an answer: the type's glyph on its colour, then the title. */
+.k-fact-link {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 250px; vertical-align: -4px; height: 21px;
+  box-sizing: border-box; padding: 0 8px 0 4px; margin: 0; border-radius: 5px; background: #161a21; border: 1px solid #263041;
+  color: #cbd6e6; font-size: 12.5px; line-height: 1; white-space: nowrap; font-family: var(--k-font-body); font-weight: 400;
+  cursor: pointer; text-align: left;
+}
+.k-fact-link:hover, .k-fact-link:focus-visible { border-color: #4f6a96; background: #1b2332; color: #eef3fb; box-shadow: 0 0 0 3px rgba(110,168,254,.12); outline: none; }
+.k-fact-link.k-fact-link--open { border-color: #6ea8fe; background: #1b2436; }
+.k-fact-link-title { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.k-fact-link-glyph { width: 16px; height: 16px; border-radius: 4px; display: flex; align-items: center; justify-content: center; flex: none; }
+/* In the column narrowed beside the side panel, links in tables cap at 150px. */
+.k-chat-main--narrow .k-chat-answer td .k-fact-link { max-width: 150px; }
+.k-fact-more { font-size: 11.5px; color: #7a8aa0; margin-left: 4px; white-space: nowrap; }
+.k-repo-link {
+  display: inline-flex; align-items: center; gap: 5px; vertical-align: -3px; height: 20px; box-sizing: border-box; padding: 0 7px;
+  border-radius: 10px; border: 1px solid #2a2a2a; background: #151515; font-size: 12px; color: #c8c8c8; line-height: 1; white-space: nowrap;
+  font-family: var(--k-font-body);
+}
+.k-fact-card {
+  position: fixed; z-index: 50; width: 340px; box-sizing: border-box; display: block; white-space: normal; text-align: left;
+  background: #1b1b1d; border: 1px solid #333; border-radius: 9px; box-shadow: 0 14px 40px -10px rgba(0,0,0,.7); padding: 12px 13px;
+  font-family: var(--k-font-body); font-size: 12px; line-height: normal;
+}
+.k-fact-card-meta { display: flex; align-items: center; gap: 7px; font-size: 11px; color: #888; }
+.k-fact-card-type { font-family: var(--k-font-mono); font-size: 10px; padding: 1px 6px; border-radius: 3px; display: inline-flex; align-items: center; gap: 4px; }
+.k-fact-card-title { display: block; font-size: 13.5px; font-weight: 600; color: #f0f0f0; line-height: 1.4; margin: 6px 0 5px; }
+.k-fact-card-excerpt {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  font-size: 12px; color: #aaa; line-height: 1.5; margin-bottom: 9px;
+}
+.k-fact-card-path {
+  font-family: var(--k-font-mono); font-size: 10.5px; color: #666; border-top: 1px solid #2a2a2a; padding-top: 8px;
+  display: flex; align-items: center; gap: 8px;
+}
+.k-fact-card-path > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.k-fact-card-browse {
+  background: none; border: none; padding: 0; cursor: pointer; color: #8fb8ff; font-family: var(--k-font-body); font-size: 11.5px;
+  white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;
+}
+
 /* The streaming caret: until the turn ends. */
 .k-chat-caret { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: #e8c27a; border-radius: 1px; }

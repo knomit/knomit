@@ -1,5 +1,6 @@
 import type { Components } from 'react-markdown';
 import { markdownComponents, markdownPlugins } from './markdown';
+import { FactLink, FactLinksMore, RepoLink } from './ChatFactChip';
 
 // A table cell in a chat answer that is a bare number gets a 40x4px bar scaled
 // to the largest number in its column. A remark plugin finds the numbers and
@@ -71,6 +72,21 @@ export const chatLivePlugins = [...chatPlugins, remarkCaret];
 
 export const chatComponents: Components = {
   ...markdownComponents,
+  // Inline code remarkFactLinks marked: a resolved fact is a fact link, a repo
+  // name a repo chip. Every other code span is code.
+  code({ node: _node, children, ...rest }) {
+    void _node;
+    const { ['data-fact']: fact, ['data-repo']: repo, ...props } = rest as Record<string, unknown>;
+    if (typeof fact === 'string') return <FactLink handle={fact} />;
+    if (typeof repo === 'string') return <RepoLink name={repo} />;
+    return <code {...props}>{children}</code>;
+  },
+  span({ node: _node, children, ...rest }) {
+    void _node;
+    const { ['data-fact-more']: more, ...props } = rest as Record<string, unknown>;
+    if (more !== undefined) return <FactLinksMore>{children}</FactLinksMore>;
+    return <span {...props}>{children}</span>;
+  },
   // A table wider than the column (a long cell, and the column narrows beside
   // the side panel) scrolls inside its own box instead of being cut off at the
   // panel's edge.

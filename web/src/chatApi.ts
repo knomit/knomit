@@ -4,6 +4,7 @@
 // makes the desktop's Wails transport work for chat too.
 import { fetchJSON, apiUrl } from './api';
 import { CHAT_SEND_TIMEOUT } from './chatCopy';
+import type { ResolvedFact } from './chatFactLinks';
 
 /** One live chat, as GET /chats lists it. */
 /** `name` is the model's display name; the server always sends it (the id when
@@ -191,6 +192,14 @@ export function revokeChatGrant(id: string, grant: ChatGrant): Promise<void> {
  *  "trained"; absent when the model does not say) and whether Ollama reported
  *  it partly on the CPU after the first request. */
 export interface ChatContext { window: number; how?: string; spill: boolean; prompt_tokens?: number }
+
+/** POST /facts/resolve: the facts behind a turn's cited handles, in ONE call.
+ *  Handles the caller cannot read, or that name no fact, are left out. */
+export function resolveFactHandles(handles: string[]): Promise<ResolvedFact[]> {
+  return fetchJSON<ResolvedFact[]>(apiUrl('/api/v1/facts/resolve'), {
+    method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ handles }),
+  }).then(r => (Array.isArray(r) ? r : []));
+}
 
 export function getChatContext(id: string): Promise<ChatContext> {
   return fetchJSON<ChatContext>(`${chatUrl(id)}/context`);
