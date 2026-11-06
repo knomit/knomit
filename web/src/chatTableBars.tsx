@@ -48,6 +48,13 @@ export const chatPlugins = [...markdownPlugins, remarkTableBars];
 
 export const chatComponents: Components = {
   ...markdownComponents,
+  // A table wider than the column (a long cell, and the column narrows beside
+  // the side panel) scrolls inside its own box instead of being cut off at the
+  // panel's edge.
+  table({ node: _node, children, ...rest }) {
+    void _node;
+    return <div className="k-chat-table-scroll" data-testid="chat-table-scroll"><table {...rest}>{children}</table></div>;
+  },
   td({ node: _node, children, ...rest }) {
     void _node;
     const share = (rest as Record<string, unknown>)['data-bar'];

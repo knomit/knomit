@@ -287,6 +287,19 @@ describe('the user message and the answer', () => {
     expect(quote?.closest('.k-chat-user')).toBeNull();
   });
 
+  it('a table sits in its own horizontal scroll box, so a wide one is not cut off beside the side panel', async () => {
+    mount(snap([
+      { kind: 'user', text: 'x' },
+      { kind: 'assistant', text: '| a | b |\n|---|---|\n| 1 | 2 |' },
+    ]));
+    await screen.findByTestId('chat-turn-0');
+    const box = screen.getByTestId('chat-table-scroll');
+    expect(box.className).toBe('k-chat-table-scroll');
+    expect(box.children).toHaveLength(1);
+    expect(box.firstElementChild?.tagName).toBe('TABLE');
+    expect(box.closest('.k-chat-answer')).not.toBeNull();
+  });
+
   it('a bare number in a table cell gets a bar scaled to its column maximum', async () => {
     mount(snap([
       { kind: 'user', text: 'rank' },
