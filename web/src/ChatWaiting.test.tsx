@@ -494,7 +494,21 @@ describe('live tool detail', () => {
     expect(screen.getByTestId('chat-activity-steps').textContent).toBe('2 steps · 6s');
   });
 
-  it('a group with a call still running, or a server that sends no timestamps, shows no time', async () => {
+  // SABOTAGE: drop the `!c.endedMs` check in wallDurationMs -> red (a running call would count as ended at 0).
+  it('a group with a call still running shows no time yet, though an earlier call in it has finished', async () => {
+    mount(snap([
+      { kind: 'user', text: 'q' },
+      { kind: 'tool_call', id: 't1', name: 'knomit_query', state: 'done', arguments: {}, duration_ms: 1000, started_ms: 3_000_000, ended_ms: 3_001_000 },
+      { kind: 'tool_call', id: 't2', name: 'knomit_query', state: 'running', arguments: {}, started_ms: 3_002_000 },
+    ], { running: true }));
+    await screen.findByTestId('chat-turn-0');
+    expect(screen.getByTestId('chat-activity-steps').textContent).toBe('2 steps');
+    // ...and once the running call ends, the whole span shows.
+    act(() => { chatStream('chat-a')!.emit('tool_call', { id: 't2', name: 'knomit_query', state: 'done', duration_ms: 1000, started_ms: 3_002_000, ended_ms: 3_009_000, turn: 0 }); });
+    expect(screen.getByTestId('chat-activity-steps').textContent).toBe('2 steps · 9s');
+  });
+
+  it('a server that sends no timestamps shows no time', async () => {
     mount(snap([
       { kind: 'user', text: 'q' },
       { kind: 'tool_call', id: 't1', name: 'knomit_query', state: 'done', arguments: {}, duration_ms: 1000 },

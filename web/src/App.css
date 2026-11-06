@@ -80,7 +80,18 @@ a { color: inherit; }
   font-family: var(--k-font-display); font-size: 14.5px; font-weight: 600; border-bottom: none; color: #eee; }
 .k-chat-answer li::marker { color: #555; }
 .k-chat-answer strong { color: #f0f0f0; font-weight: 600; }
-/* A quote in an answer must not read as a user message: no ground, italic, a
+/* Block rhythm, as in the mockup's .ans: paragraphs 0 0 10px, headings 18px 0 6px
+   on the answer's own line height, lists 0 0 10px with 18px indent, 10px quotes.
+   Doubled class again, so it outranks .k-prose's 0.9em / 1.8em margins. */
+.k-prose.k-chat-answer p { margin: 0 0 10px; }
+.k-prose.k-chat-answer p:last-child { margin-bottom: 0; }
+.k-prose.k-chat-answer h1, .k-prose.k-chat-answer h2, .k-prose.k-chat-answer h3, .k-prose.k-chat-answer h4 { margin: 18px 0 6px; line-height: 1.65; }
+.k-prose.k-chat-answer ul, .k-prose.k-chat-answer ol { margin: 0 0 10px; padding-left: 18px; }
+.k-prose.k-chat-answer li { margin: 3px 0; }
+.k-prose.k-chat-answer blockquote { margin: 10px 0; }
+.k-prose.k-chat-answer blockquote p { margin: 0; }
+.k-prose.k-chat-answer > :first-child { margin-top: 0; }
+: no ground, italic, a
    thin rule. */
 .k-prose.k-chat-answer blockquote { background: none; font-style: italic; color: #9a9a9a; border-left: 1px solid #2c2c2c; padding: 0 0 0 12px; }
 /* A table: horizontal rules only, in a rounded frame. */

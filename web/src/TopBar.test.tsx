@@ -116,7 +116,7 @@ describe('TopBar — the target label', () => {
     render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse' }));
     const row = screen.getByTestId('toknomitr-bar');
     const text = (id: string) => screen.getByTestId(id);
-    const order = ['bar-brand', 'crumb-sep', 'target-label', 'facet-tabs'].map(text);
+    const order = ['bar-brand', 'crumb-sep', 'target-label', 'bar-divider', 'facet-tabs'].map(text);
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
@@ -124,8 +124,8 @@ describe('TopBar — the target label', () => {
     // A vertical rule, not a slash: the crumb is logo │ icon title.
     expect(text('crumb-sep')).toHaveTextContent('');
     expect(text('crumb-sep')).toHaveStyle({ width: '1px', background: '#1e1e1e' });
-    // The tabs follow the title directly; the hairline between them is only for the server pages.
-    expect(screen.queryByTestId('bar-divider')).toBeNull();
+    // The 18px hairline between a repo's crumb and its tabs is kept (only a chat's bar has none).
+    expect(text('bar-divider')).toHaveStyle({ width: '1px', height: '18px', background: '#1e1e1e' });
     expect(text('target-label')).toHaveTextContent(/^alpha$/);
     // The crumbs as the reader sees them, the word mark first.
     expect(row.textContent).toBe('knomitalphaBrowseActivitySettings');
@@ -576,6 +576,15 @@ describe('TopBar — a chat target', () => {
     expect(screen.queryByText('Activity')).toBeNull();
     expect(screen.getByTestId('facet-tab-chat')).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('target-label')).toHaveTextContent('claude-test-x');
+  });
+
+  // SABOTAGE: give an open chat the draft's amber title (label.color) -> red.
+  it('an open chat reads cream with an amber provider mark, and its tabs follow the title with no hairline; a draft stays amber', () => {
+    render(bar({ facets: ['chat', 'settings'], facet: 'chat', label: { kind: 'chat', name: 'Q3 review', id: 'chat-a', provider: { name: 'prov-a', kind: 'anthropic' } } }));
+    const label = screen.getByTestId('target-label');
+    expect(label).toHaveStyle({ color: '#f1e6cc', fontWeight: '500' });
+    expect(label.querySelector('svg')!.getAttribute('stroke') ?? label.querySelector('svg')!.getAttribute('fill')).toBe('#e8c27a');
+    expect(screen.queryByTestId('bar-divider')).toBeNull();
   });
 
   it('the crumb shows the model display name (not its id) for a chat that also carries its id', () => {

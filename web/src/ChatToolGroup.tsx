@@ -71,6 +71,7 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
     inForce = boundAfter([c], inForce);
   }
   const summary = activitySummary(calls.map((c, i) => ({ kind: toolKind(c.name), target: targets[i] })));
+  const wall = wallDurationMs(calls);
   const runningIdx = calls.findIndex(c => c.state === 'running');
   const runningCall = runningIdx >= 0 ? calls[runningIdx] : null;
   const liveText = live && runningCall && toolKind(runningCall.name) === 'query' && queryText(runningCall)
@@ -92,7 +93,7 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
               </span>
             )}
           <span data-testid="chat-activity-steps" style={steps}>
-            {activitySteps(calls.length)}{wallDurationMs(calls) > 0 && ` · ${formatDuration(wallDurationMs(calls))}`}
+            {activitySteps(calls.length)}{wall > 0 && ` · ${formatDuration(wall)}`}
           </span>
           <span aria-hidden="true" style={{ color: '#555', fontSize: 11, transform: open ? 'rotate(90deg)' : 'none', display: 'inline-block' }}>›</span>
         </button>
@@ -167,14 +168,14 @@ function ApprovalCard({ approval, onAnswer }: { approval: ChatApproval; onAnswer
 // The mockup's .actl: 12px #8a8a8a, 26px tall, as wide as its content, one line.
 const header: CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, maxWidth: '100%', background: 'transparent', border: 'none',
-  color: '#8a8a8a', fontSize: 12, padding: '5px 9px 5px 7px', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
+  color: '#8a8a8a', fontSize: 12, fontWeight: 400, padding: '5px 9px 5px 7px', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
   borderRadius: 6, whiteSpace: 'nowrap',
 };
 const tile: CSSProperties = {
   width: 16, height: 16, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
   background: '#1a231d', flexShrink: 0,
 };
-const steps: CSSProperties = { color: '#5a5a5a', fontSize: 10.5, fontFamily: 'var(--k-font-mono)', flexShrink: 0 };
+const steps: CSSProperties = { color: '#5a5a5a', fontSize: 10.5, fontWeight: 400, fontFamily: 'var(--k-font-mono)', flexShrink: 0 };
 const stopPill: CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 6, background: '#2b1c1c', color: '#f3c0c0', border: '1px solid #5c2a2a',
   borderRadius: 999, padding: '2px 10px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',

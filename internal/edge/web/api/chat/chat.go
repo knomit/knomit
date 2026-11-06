@@ -56,6 +56,11 @@ type viewItem struct {
 	// words a run of calls by its WALL time, first start to last end, which
 	// the sum of DurationMS overstates when calls overlap and understates
 	// when the model thinks between them.
+	//
+	// The span is wall time as the person experienced it, so it INCLUDES an
+	// approval wait: a declined call that waited 40s shows a 40s span but no
+	// DurationMS, because DurationMS is execution time only (it excludes the
+	// wait, and a call that did not run has none). The two differ by design.
 	StartedMS int64 `json:"started_ms,omitempty"`
 	EndedMS   int64 `json:"ended_ms,omitempty"`
 

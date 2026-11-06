@@ -63,6 +63,10 @@ describe('the activity summary (chatCopy.activitySummary)', () => {
   });
   it('a bind with no readable target reads "Bound"', () => {
     expect(words([{ kind: 'bind', target: '' }])).toBe('Bound');
+    // Binding to the same target twice (even with other calls between) is said once.
+    expect(words([{ kind: 'bind', target: 'all' }, { kind: 'query', target: 'all' }, { kind: 'bind', target: 'all' }])).toBe('Bound to all · searched 1× in all');
+    expect(words([{ kind: 'bind', target: 'all' }, { kind: 'bind', target: 'all' }])).toBe('Bound to all');
+    expect(words([{ kind: 'bind', target: '' }, { kind: 'bind', target: '' }])).toBe('Bound');
     // ...but never beside a bind that did name one: "Bound · Bound to all" says it twice.
     expect(words([{ kind: 'bind', target: '' }, { kind: 'bind', target: 'all' }])).toBe('Bound to all');
     expect(words([{ kind: 'bind', target: 'all' }, { kind: 'bind', target: '' }, { kind: 'query', target: 'all' }])).toBe('Bound to all · searched 1× in all');
