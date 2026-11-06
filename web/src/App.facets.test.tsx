@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, fireEvent, cleanup } from '@testing-library/react';
 import App from './App';
-import { installFakeEventSource, uninstallFakeEventSource, streamsMatching, latestStream } from './testEventSource';
+import { installFakeEventSource, uninstallFakeEventSource, streamsMatching, latestStream, chatStream } from './testEventSource';
 import { __resetRepoCreatesForTest } from './useRepoCreates';
 import { SUBSCRIPTION_TITLE } from './state';
 import { stubFleetFetch } from './fleetTestFetch';
@@ -1319,7 +1319,7 @@ describe('a chat target', () => {
     await mountApp();
     await createChatThroughTheForm();
     const es = await waitFor(() => {
-      const s = latestStream('/chats/chat-a/events');
+      const s = chatStream('chat-a');
       expect(s).toBeDefined();
       return s!;
     });
@@ -1335,9 +1335,9 @@ describe('a chat target', () => {
     chatRoutes([CHAT_A]);
     await mountApp();
     fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
-    await waitFor(() => expect(openStreams('/chats/chat-a/events')).toBe(1));
+    await waitFor(() => expect(openStreams('/chats/events')).toBe(1));
     fireEvent.click(screen.getByTestId('rail-repo-core-kb'));
     await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
-    expect(openStreams('/chats/chat-a/events')).toBe(1);
+    expect(openStreams('/chats/events')).toBe(1);
   });
 });

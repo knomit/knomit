@@ -4,9 +4,10 @@ import { ChatPanel } from './ChatPanel';
 import { ChatResultPanel } from './ChatResultPanel';
 import { ChatSettings } from './ChatSettings';
 import {
-  answerChatApproval, cancelChatTurn, endChatOnPageHide, getChat, getChatContext, openChatEvents, sendChatTurn,
+  answerChatApproval, cancelChatTurn, getChat, getChatContext, sendChatTurn,
 } from './chatApi';
 import type { ApprovalDecision, ChatApproval, ChatInfo, ChatNotice } from './chatApi';
+import { subscribeChatEvents } from './chatEvents';
 import { chatReducer, initialChatState, refusalReason, sessionCost } from './chatState';
 import type { ToolCall, UsagePayload } from './chatState';
 
@@ -16,9 +17,10 @@ const errText = (e: unknown): string => (e instanceof Error ? e.message : String
 const statusOf = (e: unknown): number | undefined => (e as { status?: number } | null)?.status;
 
 /**
- * useChatSession owns one chat's connection: the events stream (opened through
- * openEventStream, so the desktop's Wails transport carries it too), the
- * transcript reducer, and the actions. Every connect begins with `ready`, on
+ * useChatSession owns one chat's view: its subscription to the page's one
+ * events stream (chatEvents.ts, opened through openEventStream, so the
+ * desktop's Wails transport carries it too), the transcript reducer, and the
+ * actions. Every connect of that stream begins with a page-level `ready`, on
  * which the page refetches GET /chats/{id} and resets to it; there is no
  * replay. A chat the server no longer has ends the session (`onGone`).
  */
@@ -41,7 +43,6 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
   useEffect(() => { goneRef.current = onGone; }, [onGone]);
 
   useEffect(() => {
-    const es = openChatEvents(chatId);
     let closed = false;
     // Snapshot reads are COALESCED: one is in flight at a time. A trigger that
     // arrives meanwhile (a turn end, an event for a turn the page does not
@@ -75,13 +76,8 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
     refreshRef.current = refresh;
     const gone = () => { if (!closed) goneRef.current(chatId); };
     const turnOf = (d: Record<string, unknown>): number => Number(d.turn);
-    const on = (name: string, fn: (data: Record<string, unknown>) => void) => {
-      es.addEventListener(name, (e: MessageEvent) => {
-        let data: Record<string, unknown> = {};
-        try { data = e.data ? JSON.parse(e.data) as Record<string, unknown> : {}; } catch { return; }
-        fn(data);
-      });
-    };
+    const handlers = new Map<string, (data: Record<string, unknown>) => void>();
+    const on = (name: string, fn: (data: Record<string, unknown>) => void) => { handlers.set(name, fn); };
     on('ready', refresh);
     on('text_delta', d => dispatch({ kind: 'text_delta', text: String(d.text ?? ''), turn: turnOf(d) }));
     on('thinking_delta', d => dispatch({ kind: 'thinking_delta', text: String(d.text ?? ''), turn: turnOf(d) }));
@@ -115,23 +111,16 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
       refresh();
     });
     on('chat_end', () => { dispatch({ kind: 'chat_end' }); gone(); });
-    // A refused subscription is the server saying the chat is not there
-    // (404). A plain connection loss is retried by the stream itself, and the
-    // next `ready` refetches.
-    es.onerror = (e: unknown) => { if ((e as { status?: number } | null)?.status === 404) gone(); };
-    return () => { closed = true; es.close(); };
+    // A chat the server no longer has answers its snapshot read with a 404
+    // (gone above). A connection loss is retried by the stream itself, and the
+    // next `ready` refetches every chat on screen.
+    const off = subscribeChatEvents(chatId, (name, data) => handlers.get(name)?.(data));
+    return () => { closed = true; off(); };
   }, [chatId]);
 
   // An event named a turn the page has no turn for and no local turn could
   // take (a turn started elsewhere): read the snapshot.
   useEffect(() => { if (state.staleSeq > 0) refreshRef.current(); }, [state.staleSeq]);
-
-  // The page is going away: the chat is over (a chat lives as long as its tab).
-  useEffect(() => {
-    const onHide = () => endChatOnPageHide(chatId);
-    window.addEventListener('pagehide', onHide);
-    return () => window.removeEventListener('pagehide', onHide);
-  }, [chatId]);
 
   const send = useCallback((text: string) => {
     setActionError('');
