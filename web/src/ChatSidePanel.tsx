@@ -145,6 +145,6 @@ const browseBtn: CSSProperties = {
   fontSize: 11.5, color: '#b8c4d6', cursor: 'pointer',
 };
 const footer: CSSProperties = {
-  height: 28, flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 14px',
+  minHeight: 28, flexShrink: 0, display: 'flex', alignItems: 'center', padding: '4px 14px', boxSizing: 'border-box',
   borderTop: '1px solid #222', fontSize: 10.5, color: '#666', fontFamily: 'var(--k-font-mono)',
 };

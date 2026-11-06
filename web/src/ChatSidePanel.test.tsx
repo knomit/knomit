@@ -286,6 +286,9 @@ describe('the side panel in the chat page', () => {
     expect(rule('.k-chat-main')).toContain('min-width: 0');
     expect(rule('.k-chat-result')).toContain('flex-shrink: 0');
     expect(rule('.k-chat-result')).not.toMatch(/position:\s*(absolute|fixed)/);
+    // At a phone width the panel stacks above the chat at full width: the later
+    // base rule's max-width (60%) would otherwise win (seen in the browser: 225px of 375).
+    expect(css).toMatch(/@media \(max-width: 640px\)[\s\S]*\.k-chat-result \{ width: 100% !important; max-width: 100% !important;/);
     // Fact links in tables cap at 150px in the narrowed column, and an open one is marked.
     expect(css).toMatch(/\.k-chat-main--narrow table \.fp \{ max-width: 150px; \}/);
     expect(css).toMatch(/\.fp\.open \{ border-color: #6ea8fe; \}/);
