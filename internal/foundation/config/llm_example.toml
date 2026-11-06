@@ -22,6 +22,7 @@ effort = "medium"
 max_output_tokens = 64000
 thinking_display = "summarized"
 context_window = 1000000
+best_for = "Quick lookups and everyday questions" # optional: one line on the start screen's card
 [llm.providers.anthropic.model.claude-haiku-5-5.price]
 cache_read_mult = 0.1
 cache_write_5m_mult = 1.25
