@@ -71,11 +71,10 @@ a { color: inherit; }
 /* A quote in an answer must not read as a user message: no ground, italic, a
    thin rule. */
 .k-chat-answer blockquote { background: none; font-style: italic; color: #9a9a9a; border-left: 1px solid #2c2c2c; padding: 0 0 0 12px; }
-.k-chat-answer table { border: 1px solid #262626; border-radius: 8px; }
+.k-chat-answer table { display: table; width: 100%; border-collapse: separate; border-spacing: 0; border: 1px solid #262626; border-radius: 8px; overflow: hidden; }
 .k-chat-answer th { background: #171717; color: #999; font-size: 10.5px; text-transform: uppercase; border-color: #262626; padding: 8px 11px; }
 .k-chat-answer td { border-color: #262626; padding: 8px 11px; }
 
 /* The streaming caret: until the turn ends. */
 .k-chat-caret { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: text-bottom; background: #e8c27a;
-  animation: k-chat-blink 1s steps(2, start) infinite; }
-@keyframes k-chat-blink { to { visibility: hidden; } }
+ }

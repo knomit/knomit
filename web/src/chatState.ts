@@ -172,12 +172,15 @@ export function snapshotState(snap: ChatSnapshot, prev: ChatState = initialChatS
   const approvals: Record<string, ChatApproval> = {};
   for (const a of snap.pending_approvals ?? []) approvals[a.call_id] = a;
   // The snapshot carries each turn's usage SUMMED over its requests, not the
-  // last request's prompt size. A live usage event the snapshot does not yet
-  // include (its seq is higher) is the better number; otherwise the latest
-  // turn's sum stands in (an over-estimate for a turn of several requests).
+  // last request's prompt size. The live usage event of the latest request the
+  // snapshot includes (its seq at or below the snapshot's usage_seq) is the
+  // exact number, so it is kept. Without one (a chat the page joined mid-way),
+  // the latest turn's sum is averaged over its requests, taken as one more than
+  // its tool calls: an estimate until the server reports the last prompt's size.
   const lastTurn = [...turns].reverse().find(t => t.usage);
-  const fromSnapshot = lastTurn?.usage ? promptTokens(lastTurn.usage) : 0;
-  const keepLive = prev.ctxTokens > 0 && prev.lastUsageSeq > (snap.usage_seq ?? 0);
+  const calls = lastTurn ? lastTurn.parts.reduce((n, p) => n + (p.kind === 'group' ? p.calls.length : 0), 0) : 0;
+  const fromSnapshot = lastTurn?.usage ? Math.round(promptTokens(lastTurn.usage) / (calls + 1)) : 0;
+  const keepLive = prev.ctxTokens > 0 && prev.lastUsageSeq >= (snap.usage_seq ?? 0);
   return {
     turns, running: snap.running, approvals, ended: false,
     lastUsageSeq: snap.usage_seq ?? prev.lastUsageSeq, staleSeq: prev.staleSeq, loaded: true,

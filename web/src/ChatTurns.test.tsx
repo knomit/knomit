@@ -215,6 +215,22 @@ describe('the top-bar pill and the composer meter', () => {
     expect(screen.getAllByTestId('context-meter').map(m => m.getAttribute('data-pct'))).toEqual(['7', '7']);
   });
 
+  it('the context used is the latest request\'s prompt, kept across the snapshot read at the turn\'s end; a snapshot alone averages the summed turn over its requests', async () => {
+    // Joined mid-way: no live event yet. The turn's summed prompt (3 requests: 2 tool calls + 1) is averaged.
+    mount(snap([
+      { kind: 'user', text: 'q', usage: { input: 3000, cache_read: 15000, cache_write: 0, output: 9 } },
+      call('tu_1', 'knomit_repos', {}), call('tu_2', 'knomit_repos', {}), { kind: 'assistant', text: 'A' },
+    ], { usage_seq: 1 }), { [`GET ${BASE}/context`]: { body: { window: 32768, spill: false } } });
+    await screen.findByTestId('chat-turn-0');
+    expect(screen.getByTestId('chat-context-text').textContent).toBe('6K / 32.8K');
+    // A live request lands (seq 2): its exact prompt is shown, and survives the read at the turn's end.
+    const es = latestStream('/chats/chat-a/events')!;
+    act(() => { es.emit('usage', { usage: { input: 700, cache_read: 8000, cache_write: 300, output: 5 }, seq: 2, turn: 0 }); });
+    expect(screen.getByTestId('chat-context-text').textContent).toBe('9K / 32.8K');
+    await act(async () => { es.emit('turn_done', { turn: 0 }); });
+    expect(screen.getByTestId('chat-context-text').textContent).toBe('9K / 32.8K');
+  });
+
   it('the placeholder is Reply… once there is a turn', async () => {
     mount(snap([{ kind: 'user', text: 'one' }, { kind: 'assistant', text: 'A' }]));
     await screen.findByTestId('chat-turn-0');

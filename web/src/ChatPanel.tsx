@@ -176,7 +176,8 @@ const input: CSSProperties = {
   padding: '2px 2px 8px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none',
 };
 const composerRow: CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 12, fontSize: 11, fontFamily: 'var(--k-font-mono)', color: '#6a6a6a', minHeight: 28,
+  display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 4, columnGap: 12, whiteSpace: 'nowrap',
+  fontSize: 11, fontFamily: 'var(--k-font-mono)', color: '#6a6a6a', minHeight: 28,
 };
 const sendBtn = (active: boolean): CSSProperties => ({
   width: 28, height: 28, borderRadius: '50%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
