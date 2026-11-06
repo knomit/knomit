@@ -1309,9 +1309,11 @@ describe('a chat target', () => {
     await act(async () => { await new Promise(r => setTimeout(r, 30)); });
     expect(screen.getByTestId('rail-chat-chat-a')).toHaveAttribute('aria-current', 'true');
     expect(tabNames()).toEqual(['Chat', 'Settings']);
-    // The row came from add(), not from a re-read of the list.
+    // The row came from add(), not from a re-read of the list: the one further
+    // read only fills in the new row's state and title (its first events predate
+    // the page's subscription) and cannot replace the list.
     expect(fx.calls.filter(c => c.route === 'POST /api/v1/chats')).toHaveLength(1);
-    expect(fx.calls.filter(c => c.route === 'GET /api/v1/chats')).toHaveLength(1);
+    expect(fx.calls.filter(c => c.route === 'GET /api/v1/chats')).toHaveLength(2);
   });
 
   it('a pinned chat that leaves the list is unpinned: the view returns to the browse context', async () => {

@@ -27,6 +27,12 @@ export function useChats(enabled = true): {
   const added = useRef(new Map<string, number>());
   const removed = useRef(new Map<string, number>());
   const reloadRef = useRef<() => void>(() => {});
+  const readRowsRef = useRef<(ids: string[]) => void>(() => {});
+  const loadedRef = useRef(false);
+  // Chats add() made whose row the server has not yet been read for: a created
+  // chat answers with identity only, and its first events (a first message's
+  // running state and title) predate the page subscribing to it.
+  const unread = useRef(new Set<string>());
   // One map per list read still in flight: the rows chat_state updated meanwhile.
   const inFlight = useRef(new Set<Map<string, Partial<ChatInfo>>>());
 
@@ -50,12 +56,27 @@ export function useChats(enabled = true): {
           }
           return out;
         });
+        loadedRef.current = true;
         setLoaded(true);
       }).catch(() => {
         inFlight.current.delete(during);
         // An unreadable list leaves it as it was. Never loaded, so nothing is
         // unpinned on its account.
       });
+    };
+    // Read the server's rows for chats add() made, and patch just those: the
+    // list itself is not replaced, so a pinned chat never loses its row to it.
+    readRowsRef.current = (want: string[]) => {
+      const during = new Map<string, Partial<ChatInfo>>();
+      inFlight.current.add(during);
+      listChats().then(list => {
+        inFlight.current.delete(during);
+        if (cancelled) return;
+        setChats(prev => prev.map(c => {
+          const row = want.includes(c.id) ? list.find(l => l.id === c.id) : undefined;
+          return row ? { ...c, ...row, ...during.get(c.id) } : c;
+        }));
+      }).catch(() => { inFlight.current.delete(during); });
     };
     load();
     reloadRef.current = load;
@@ -72,6 +93,7 @@ export function useChats(enabled = true): {
   const ids = chats.map(c => c.id).join('\n');
   useEffect(() => {
     if (!enabled || ids === '') return;
+    const fresh = ids.split('\n').filter(id => unread.current.delete(id));
     // The connect-time `ready` is not a change (the list was just read); a
     // later one is a reconnect. `ready` reaches every subscriber, so one of them
     // (the first) answers it, not one per chat.
@@ -92,18 +114,24 @@ export function useChats(enabled = true): {
       for (const during of inFlight.current) during.set(id, patch);
       setChats(prev => prev.map(c => c.id !== id ? c : { ...c, ...patch }));
     }));
+    // Subscribed now, so nothing after this is missed: one read of their rows
+    // supplies what came before. (While the first list read is still in flight
+    // that read stands in for it.)
+    if (fresh.length > 0 && loadedRef.current) readRowsRef.current(fresh);
     return () => offs.forEach(off => off());
   }, [enabled, ids]);
 
   const add = useCallback((c: ChatInfo) => {
     rev.current += 1;
     added.current.set(c.id, rev.current);
+    unread.current.add(c.id);
     removed.current.delete(c.id);
     setChats(prev => (prev.some(p => p.id === c.id) ? prev : [...prev, c]));
   }, []);
   const remove = useCallback((id: string) => {
     rev.current += 1;
     removed.current.set(id, rev.current);
+    unread.current.delete(id);
     added.current.delete(id);
     setChats(prev => (prev.some(p => p.id === id) ? prev.filter(p => p.id !== id) : prev));
   }, []);
