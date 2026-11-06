@@ -44,6 +44,8 @@ export interface ChatViewItem {
   state?: 'running' | 'done'; is_error?: boolean;
   /** On a finished tool call: how long the tool ran, and its result in one number. */
   duration_ms?: number; summary?: ChatCallSummary;
+  /** When the call began and (once done) ended: Unix ms on the server's clock. */
+  started_ms?: number; ended_ms?: number;
   /** On a user item: the structured detail of `warning` and of `error`. */
   warning_info?: ChatNotice; error_info?: ChatNotice;
   /** On a user item: the send_id of the POST that started the turn (absent for a turn that came without one). */

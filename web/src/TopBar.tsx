@@ -152,10 +152,11 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
     : { kind: 'repo', name: state.repo });
   const label = {
     name: target.name,
-    color: target.kind === 'lens' ? LENS_ACCENT : target.kind === 'chat' ? CHAT_ACCENT : target.draft ? '#8ab6d6' : target.kind === 'fleet' ? FLEET_ACCENT : '#7c9',
+    // A chat draft is amber; an open chat's title is cream, with the provider mark in amber.
+    color: target.kind === 'lens' ? LENS_ACCENT : target.kind === 'chat' ? (target.draft ? CHAT_ACCENT : '#f1e6cc') : target.draft ? '#8ab6d6' : target.kind === 'fleet' ? FLEET_ACCENT : '#7c9',
     icon: target.kind === 'lens' ? <LayersIcon color="currentColor" size={13} />
       : target.kind === 'fleet' ? <FleetIcon color="currentColor" size={13} />
-        : target.kind === 'chat' ? <ProviderIcon kind={target.provider?.kind} name={target.provider?.name ?? ''} color="currentColor" size={13} />
+        : target.kind === 'chat' ? <ProviderIcon kind={target.provider?.kind} name={target.provider?.name ?? ''} color={CHAT_ACCENT} size={13} />
           : <BookIcon color="currentColor" size={13} />,
   };
   // Where the gear returns to from the server pages: the target under them,
@@ -229,16 +230,16 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
           </span>
         </div>
 
-        {/* ── Breadcrumb: knomit / target ──
+        {/* ── Crumb: knomit │ target ──
             Labels, not controls: nothing here opens anything, so they stay
             part of the drag region. The target is what the page below shows;
             over the server pages the word mark stands alone. */}
         {!serverOpen && (
           <>
-            <span className="k-bar-sep" data-testid="crumb-sep" aria-hidden="true" style={{ display: 'flex', alignItems: 'center', margin: '0 8px 0 12px', color: '#555', fontSize: 13, flexShrink: 0 }}>/</span>
+            <span className="k-bar-sep" data-testid="crumb-sep" aria-hidden="true" style={{ alignSelf: 'stretch', width: 1, margin: '0 14px 0 16px', background: '#1e1e1e', flexShrink: 0 }} />
             <span className="k-bar-label" data-testid="target-label" title={label.name ? (target.chip ? `${label.name} (${target.chip.text})` : target.sub ? `${label.name} · ${target.sub}` : label.name) : undefined} style={{
-              display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden',
-              fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
+              display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden', marginRight: target.kind === 'chat' ? 14 : 0,
+              fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap',
               color: label.color,
             }}>
               {label.icon}
@@ -256,7 +257,8 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
             </span>
           </>
         )}
-        {(server ? server.pages.length > 0 : facets.length > 0) && (
+        {/* The hairline between the crumb and the tabs. A chat's bar has none: the mockup's chat frames put the tabs right after the title. */}
+        {(server ? server.pages.length > 0 : facets.length > 0 && target.kind !== 'chat') && (
           <span className="k-bar-divider" data-testid="bar-divider" aria-hidden="true" style={{ alignSelf: 'center', width: 1, height: 18, margin: '0 14px', background: '#1e1e1e', flexShrink: 0 }} />
         )}
 

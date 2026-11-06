@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { CopyButton } from './fleetParts';
+import { CARD_GAP as GAP, cardSide } from './chatCardSide';
 import { cachedPercent, compactCount, formatCost } from './chatState';
 import type { TurnUsage } from './chatState';
 import {
@@ -27,11 +28,23 @@ export function ChatTurnFooter({ usage, costUsd, answer, sessionCostUsd, session
   sessionTurns: number;
 }) {
   const [hover, setHover] = useState(false);
+  const [side, setSide] = useState<'above' | 'below'>('above');
+  const usageEl = useRef<HTMLSpanElement>(null);
+  const card = useRef<HTMLDivElement>(null);
+  // The card opens above the footer (the mockup's direction, and clear of the
+  // composer on the latest turn) when the scrolling transcript has room for it
+  // there, and below otherwise: a card taller than the room above would have its
+  // first rows cut off by the transcript's top edge.
+  useLayoutEffect(() => {
+    if (!hover || !usageEl.current || !card.current) return;
+    setSide(cardSide(usageEl.current.getBoundingClientRect().top - scrollTop(usageEl.current), card.current.getBoundingClientRect().height));
+  }, [hover]);
   const pct = cachedPercent(usage);
   return (
     <div data-testid="chat-footer" style={footer}>
       {answer && <CopyButton text={answer} label="Copy" testid="chat-copy-answer" />}
       <span
+        ref={usageEl}
         data-testid="chat-usage" tabIndex={0} style={{ display: 'inline-flex', alignItems: 'center', gap: 10, position: 'relative', cursor: 'default' }}
         onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
         onFocus={() => setHover(true)} onBlur={() => setHover(false)}
@@ -45,7 +58,7 @@ export function ChatTurnFooter({ usage, costUsd, answer, sessionCostUsd, session
           <span data-testid="chat-cached">{cachedLabel(pct)}</span>
         </span>
         {hover && (
-          <div data-testid="chat-cost-card" role="tooltip" style={cardStyle}>
+          <div ref={card} data-testid="chat-cost-card" data-side={side} role="tooltip" style={side === 'above' ? cardStyle : { ...cardStyle, bottom: 'auto', top: 'calc(100% + 8px)' }}>
             <Row label={COST_ROW_INPUT} tokens={usage.input} testid="input" />
             <Row label={COST_ROW_CACHE_READ} tokens={usage.cacheRead} testid="cache-read" />
             <Row label={COST_ROW_CACHE_WRITE} tokens={usage.cacheWrite} testid="cache-write" />
@@ -58,6 +71,15 @@ export function ChatTurnFooter({ usage, costUsd, answer, sessionCostUsd, session
       </span>
     </div>
   );
+}
+
+/** The top edge of the nearest scrolling ancestor, or of the viewport. */
+function scrollTop(el: HTMLElement): number {
+  for (let n = el.parentElement; n; n = n.parentElement) {
+    const o = getComputedStyle(n).overflowY;
+    if (o === 'auto' || o === 'scroll') return n.getBoundingClientRect().top;
+  }
+  return 0;
 }
 
 function Row({ label, tokens, testid }: { label: string; tokens: number; testid: string }) {
@@ -79,10 +101,10 @@ function Total({ label, usd, testid, strong }: { label: string; usd: number | nu
 }
 
 const footer: CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, fontSize: 10.5, fontFamily: 'var(--k-font-mono)', color: '#555',
+  display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, fontSize: 10.5, fontFamily: 'var(--k-font-mono)', color: '#555',
 };
 const cardStyle: CSSProperties = {
-  position: 'absolute', left: 0, top: 'calc(100% + 8px)', zIndex: 5, minWidth: 230, padding: '10px 12px',
+  position: 'absolute', left: 0, bottom: `calc(100% + ${GAP}px)`, zIndex: 5, minWidth: 230, padding: '10px 12px',
   background: '#181818', border: '1px solid #2c2c2c', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,.5)',
   fontSize: 11, whiteSpace: 'nowrap', color: '#aaa',
 };

@@ -6,7 +6,7 @@ import { markdownComponents, markdownPlugins } from './markdown';
 // the column maxima (it sees the whole table) and tags each cell with its
 // share; the `td` component draws the bar.
 
-interface Node { type: string; value?: string; children?: Node[]; data?: { hProperties?: Record<string, string> } }
+interface Node { type: string; value?: string; children?: Node[]; data?: { hName?: string; hProperties?: Record<string, string | string[]> } }
 
 const NUMBER = /^[~≈]?\s*(-?\d+(?:\.\d+)?)$/;
 
@@ -43,8 +43,31 @@ function remarkTableBars() {
   return walk;
 }
 
+// The streaming caret goes INSIDE the text it follows: at the end of the last
+// paragraph (or heading, or list item), so it sits on the same line as the last
+// word. Only a block with no text to end (a table, a code block) gets a line of
+// its own.
+const CARET: Node = {
+  type: 'caret',
+  data: { hName: 'span', hProperties: { className: ['k-chat-caret'], 'data-testid': 'chat-caret', 'aria-hidden': 'true' } },
+};
+const INLINE_END = new Set(['paragraph', 'heading']);
+const WRAPS = new Set(['root', 'list', 'listItem', 'blockquote']);
+function placeCaret(n: Node): boolean {
+  if (INLINE_END.has(n.type)) { (n.children ??= []).push({ ...CARET }); return true; }
+  const last = WRAPS.has(n.type) ? n.children?.[n.children.length - 1] : undefined;
+  return !!last && placeCaret(last);
+}
+function remarkCaret() {
+  return (root: Node) => {
+    if (!placeCaret(root)) (root.children ??= []).push({ type: 'paragraph', children: [{ ...CARET }] });
+  };
+}
+
 /** The plugins and components a chat answer renders with. */
 export const chatPlugins = [...markdownPlugins, remarkTableBars];
+/** The same, for the block a turn is still streaming into: the caret follows its last word. */
+export const chatLivePlugins = [...chatPlugins, remarkCaret];
 
 export const chatComponents: Components = {
   ...markdownComponents,

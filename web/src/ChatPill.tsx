@@ -36,8 +36,8 @@ export function ChatPill({ chatId }: { chatId: string }) {
 }
 
 const pill: CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', gap: 10, alignSelf: 'center', marginRight: 10, padding: '3px 12px',
-  border: '1px solid #262626', borderRadius: 999, fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#8a8a8a',
+  display: 'inline-flex', alignItems: 'center', gap: 8, alignSelf: 'stretch', margin: '8px 10px 8px 0', padding: '0 9px',
+  border: '1px solid #262626', borderRadius: 12, fontFamily: 'var(--k-font-mono)', fontSize: 10.5, color: '#8a8a8a',
   whiteSpace: 'nowrap', flexShrink: 0,
 };
 const val: CSSProperties = { color: '#d0d0d0', fontWeight: 500 };

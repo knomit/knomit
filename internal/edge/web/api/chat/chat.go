@@ -54,6 +54,18 @@ type viewItem struct {
 	// summary of its result when one is cheap to compute.
 	DurationMS int64        `json:"duration_ms,omitempty"`
 	Summary    *callSummary `json:"summary,omitempty"`
+	// StartedMS is when the call began and EndedMS when it finished, as Unix
+	// milliseconds on the server's clock (EndedMS only once done). The page
+	// words a run of calls by its WALL time, first start to last end, which
+	// the sum of DurationMS overstates when calls overlap and understates
+	// when the model thinks between them.
+	//
+	// The span is wall time as the person experienced it, so it INCLUDES an
+	// approval wait: a declined call that waited 40s shows a 40s span but no
+	// DurationMS, because DurationMS is execution time only (it excludes the
+	// wait, and a call that did not run has none). The two differ by design.
+	StartedMS int64 `json:"started_ms,omitempty"`
+	EndedMS   int64 `json:"ended_ms,omitempty"`
 
 	// SendID, on a "user" item, is the send_id the page put on the POST that
 	// started the turn ("" for a turn that came without one). It is how the page
@@ -758,10 +770,11 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		tu := *ev.ToolUse
 		c.mu.Lock()
 		c.calls[tu.ID] = tu
-		c.view = append(c.view, viewItem{Kind: "tool_call", ID: tu.ID, Name: tu.Name, Arguments: tu.Args, State: "running"})
+		startedMS := nowMS()
+		c.view = append(c.view, viewItem{Kind: "tool_call", ID: tu.ID, Name: tu.Name, Arguments: tu.Args, State: "running", StartedMS: startedMS})
 		turn := c.turnAt
 		c.mu.Unlock()
-		out := map[string]any{"id": tu.ID, "name": tu.Name, "state": "running", "turn": turn}
+		out := map[string]any{"id": tu.ID, "name": tu.Name, "state": "running", "turn": turn, "started_ms": startedMS}
 		if len(tu.Args) > 0 && len(tu.Args) <= maxApprovalArgs {
 			out["arguments"] = tu.Args
 		}
@@ -782,10 +795,14 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 			ms = 1
 		}
 		sum := summarize(tu.Name, r.Content, r.IsError)
+		endedMS := nowMS()
+		var startedMS int64
 		for i := range c.view {
 			if c.view[i].Kind == "tool_call" && c.view[i].ID == r.ToolUseID {
 				c.view[i].State, c.view[i].IsError = "done", r.IsError
 				c.view[i].DurationMS, c.view[i].Summary, c.view[i].Loaded = ms, sum, loaded
+				c.view[i].EndedMS = endedMS
+				startedMS = c.view[i].StartedMS
 			}
 		}
 		turn := c.turnAt
@@ -793,7 +810,10 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		if err := c.store.putCall(r.ToolUseID, callRecord{Name: tu.Name, Arguments: tu.Args, Result: r.Content, IsError: r.IsError, Elided: r.Elided}); err != nil {
 			log.Warn().Err(err).Str("chat", c.id).Msg("chat: could not store a tool call")
 		}
-		done := map[string]any{"id": r.ToolUseID, "name": tu.Name, "state": "done", "is_error": r.IsError, "turn": turn}
+		done := map[string]any{"id": r.ToolUseID, "name": tu.Name, "state": "done", "is_error": r.IsError, "turn": turn, "ended_ms": endedMS}
+		if startedMS > 0 {
+			done["started_ms"] = startedMS
+		}
 		if ms > 0 {
 			done["duration_ms"] = ms
 		}
@@ -963,9 +983,14 @@ func (c *chat) end(reason string) {
 
 func (c *chat) String() string { return fmt.Sprintf("chat %s", c.id) }
 
+// nowMS is the server's clock in Unix milliseconds, for a tool call's
+// started_ms and ended_ms.
+func nowMS() int64 { return time.Now().UnixMilli() }
+
 // chatTitleMax is how many characters of the first message the chat's title
-// keeps.
-const chatTitleMax = 60
+// keeps. It is generous: the rail row and the crumb cut the title with CSS and
+// the rail tooltip shows it whole, so the server only bounds the payload.
+const chatTitleMax = 300
 
 // titleOf is the chat's title: the first message with its whitespace collapsed,
 // cut to chatTitleMax characters (runes), at a word boundary when one falls in

@@ -36,6 +36,8 @@ type snapshotView struct {
 		Text        string               `json:"text"`
 		ID          string               `json:"id"`
 		DurationMS  int64                `json:"duration_ms"`
+		StartedMS   int64                `json:"started_ms"`
+		EndedMS     int64                `json:"ended_ms"`
 		Summary     *struct{ Count int } `json:"summary"`
 		Warning     string               `json:"warning"`
 		WarningInfo map[string]any       `json:"warning_info"`
@@ -161,6 +163,13 @@ func TestChat_LiveToolCallCarriesArgumentsDurationAndSummary(t *testing.T) {
 
 	require.NotNil(t, done)
 	require.Greater(t, done["duration_ms"], float64(0), "the done event carries how long the tool ran")
+	// Wall-clock span, so the page can word a group by first start to last end:
+	// the running event names the start, the done event repeats it and names the end.
+	startedMS, endedMS := running["started_ms"].(float64), done["ended_ms"].(float64)
+	require.Greater(t, startedMS, float64(0), "the running event carries started_ms")
+	require.Equal(t, startedMS, done["started_ms"], "the done event repeats started_ms")
+	require.GreaterOrEqual(t, endedMS, startedMS)
+	require.NotContains(t, running, "ended_ms")
 	sum, ok := done["summary"].(map[string]any)
 	require.True(t, ok, "the done event carries a summary: %v", done)
 	var res struct {
@@ -176,6 +185,8 @@ func TestChat_LiveToolCallCarriesArgumentsDurationAndSummary(t *testing.T) {
 		if it.ID == "tu_q" {
 			found = true
 			require.Greater(t, it.DurationMS, int64(0))
+			require.Equal(t, int64(startedMS), it.StartedMS, "the snapshot and the live events say the same start")
+			require.Equal(t, int64(endedMS), it.EndedMS, "the snapshot and the live events say the same end")
 			require.NotNil(t, it.Summary)
 			require.Equal(t, len(res.Facts), it.Summary.Count)
 		}

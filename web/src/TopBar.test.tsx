@@ -95,10 +95,10 @@ describe('TopBar — the target label', () => {
     expect(screen.queryByTestId('toknomitr-lens-select')).toBeNull();
   });
 
-  it('is the second crumb: 13px/600, no left rule of its own (the divider follows it)', () => {
+  it('is the second crumb: 13px/500, the divider before it is its own element', () => {
     render(bar());
     const l = screen.getByTestId('target-label');
-    expect(l).toHaveStyle({ fontSize: '13px', fontWeight: '600' });
+    expect(l).toHaveStyle({ fontSize: '13px', fontWeight: '500' });
     expect(l.style.borderLeft).toBe('');
     expect(l.style.padding).toBe('');
   });
@@ -112,7 +112,7 @@ describe('TopBar — the target label', () => {
     expect(screen.queryByTestId('toknomitr-search')).toBeNull();
   });
 
-  it('reads knomit / target │ tabs, in that order, on one row', () => {
+  it('reads knomit │ target tabs, in that order, on one row', () => {
     render(bar({ facets: ['browse', 'activity', 'settings'], facet: 'browse' }));
     const row = screen.getByTestId('toknomitr-bar');
     const text = (id: string) => screen.getByTestId(id);
@@ -121,20 +121,23 @@ describe('TopBar — the target label', () => {
       expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
     expect(text('bar-brand')).toHaveTextContent(/^knomit$/);
-    expect(text('crumb-sep')).toHaveTextContent('/');
+    // A vertical rule, not a slash: the crumb is logo │ icon title.
+    expect(text('crumb-sep')).toHaveTextContent('');
+    expect(text('crumb-sep')).toHaveStyle({ width: '1px', background: '#1e1e1e' });
+    // The 18px hairline between a repo's crumb and its tabs is kept (only a chat's bar has none).
+    expect(text('bar-divider')).toHaveStyle({ width: '1px', height: '18px', background: '#1e1e1e' });
     expect(text('target-label')).toHaveTextContent(/^alpha$/);
     // The crumbs as the reader sees them, the word mark first.
-    expect(row.textContent).toBe('knomit/alphaBrowseActivitySettings');
+    expect(row.textContent).toBe('knomitalphaBrowseActivitySettings');
     // No host anywhere in the bar.
     expect(row.textContent).not.toContain('localhost');
     expect(screen.queryByTestId('server-host')).toBeNull();
   });
 
-  it('styles the word mark green/bold/15px and the separator #555; the divider is a 1px #1e1e1e hairline', () => {
+  it('styles the word mark green/bold/15px; the crumb rule and the server-pages divider are 1px #1e1e1e hairlines', () => {
     render(bar({ facets: ['browse'], facet: 'browse' }));
     expect(screen.getByTestId('bar-brand').lastElementChild).toHaveStyle({ color: '#7c9', fontSize: '15px', fontWeight: 'bold' });
-    expect(screen.getByTestId('crumb-sep')).toHaveStyle({ color: '#555' });
-    expect(screen.getByTestId('bar-divider')).toHaveStyle({ width: '1px', height: '18px', background: '#1e1e1e' });
+    expect(screen.getByTestId('crumb-sep')).toHaveStyle({ width: '1px', background: '#1e1e1e', alignSelf: 'stretch' });
   });
 
   it('the mark is followed by the word "knomit", and the bar names no host', () => {
@@ -161,6 +164,8 @@ describe('TopBar — the target label', () => {
     const row = screen.getByTestId('toknomitr-bar');
     expect(row.textContent).toBe('knomitLogsAccess');
     expect(row.textContent).not.toContain('localhost');
+    expect(screen.getByTestId('bar-divider')).toHaveStyle({ width: '1px', height: '18px', background: '#1e1e1e' });
+    expect(screen.getByTestId('bar-divider').className).toBe('k-bar-divider');
     const order = ['bar-brand', 'bar-divider', 'server-tabs'].map(i => screen.getByTestId(i));
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -510,7 +515,6 @@ describe('TopBar at a narrow width', () => {
     expect(label.className).toBe('k-bar-label');
     expect(label.title).toBe('alpha');
     expect(screen.getByTestId('crumb-sep').className).toBe('k-bar-sep');
-    expect(screen.getByTestId('bar-divider').className).toBe('k-bar-divider');
     expect(tabs.className).toBe('k-bar-tabs');
     // The strip shrinks and scrolls inside itself rather than push the label out.
     expect(tabs.style.flexShrink).toBe('1');
@@ -572,6 +576,15 @@ describe('TopBar — a chat target', () => {
     expect(screen.queryByText('Activity')).toBeNull();
     expect(screen.getByTestId('facet-tab-chat')).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('target-label')).toHaveTextContent('claude-test-x');
+  });
+
+  // SABOTAGE: give an open chat the draft's amber title (label.color) -> red.
+  it('an open chat reads cream with an amber provider mark, and its tabs follow the title with no hairline; a draft stays amber', () => {
+    render(bar({ facets: ['chat', 'settings'], facet: 'chat', label: { kind: 'chat', name: 'Q3 review', id: 'chat-a', provider: { name: 'prov-a', kind: 'anthropic' } } }));
+    const label = screen.getByTestId('target-label');
+    expect(label).toHaveStyle({ color: '#f1e6cc', fontWeight: '500' });
+    expect(label.querySelector('svg')!.getAttribute('stroke') ?? label.querySelector('svg')!.getAttribute('fill')).toBe('#e8c27a');
+    expect(screen.queryByTestId('bar-divider')).toBeNull();
   });
 
   it('the crumb shows the model display name (not its id) for a chat that also carries its id', () => {

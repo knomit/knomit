@@ -454,11 +454,11 @@ describe('live tool detail', () => {
     mount(snap([{ kind: 'user', text: 'q' }], { running: true }));
     await screen.findByTestId('chat-thinking');
     const es = chatStream('chat-a')!;
-    act(() => { es.emit('tool_call', { id: 't1', name: 'knomit_query', state: 'running', arguments: { text: 'OWASP Q3', binding: 'h1' }, turn: 0 }); });
+    act(() => { es.emit('tool_call', { id: 't1', name: 'knomit_query', state: 'running', started_ms: 1_000_000, arguments: { text: 'OWASP Q3', binding: 'h1' }, turn: 0 }); });
     expect(screen.getByTestId('chat-activity-live').textContent).toBe('Searching for "OWASP Q3"…');
     expect(screen.getByTestId('chat-activity-steps').textContent).toBe('1 step');
 
-    act(() => { es.emit('tool_call', { id: 't1', name: 'knomit_query', state: 'done', duration_ms: 1900, summary: { count: 24 }, turn: 0 }); });
+    act(() => { es.emit('tool_call', { id: 't1', name: 'knomit_query', state: 'done', duration_ms: 1900, started_ms: 1_000_000, ended_ms: 1_001_900, summary: { count: 24 }, turn: 0 }); });
     expect(screen.getByTestId('chat-activity-steps').textContent).toBe('1 step · 1.9s');
     fireEvent.click(screen.getByTestId('chat-tool-group-toggle'));
     expect(screen.getByTestId('chat-tool-arg-t1').textContent).toBe('OWASP Q3');
@@ -466,19 +466,56 @@ describe('live tool detail', () => {
     expect(screen.getByTestId('chat-tool-time-t1').textContent).toBe('1.9s');
   });
 
-  it('a snapshot carries the same: the result size and duration on the row, the sum in the line', async () => {
+  it('a snapshot carries the same: the result size and duration on the row, the WALL time in the line', async () => {
     mount(snap([
       { kind: 'user', text: 'q' },
-      { kind: 'tool_call', id: 't1', name: 'knomit_query', state: 'done', arguments: { text: 'a' }, duration_ms: 1900, summary: { count: 1 } },
-      { kind: 'tool_call', id: 't2', name: 'knomit_query', state: 'done', arguments: { text: 'b' }, duration_ms: 22_000, summary: { count: 24 } },
+      { kind: 'tool_call', id: 't1', name: 'knomit_query', state: 'done', arguments: { text: 'a' }, duration_ms: 1900, started_ms: 1_000_000, ended_ms: 1_001_900, summary: { count: 1 } },
+      { kind: 'tool_call', id: 't2', name: 'knomit_query', state: 'done', arguments: { text: 'b' }, duration_ms: 22_000, started_ms: 1_001_000, ended_ms: 1_023_000, summary: { count: 24 } },
       { kind: 'assistant', text: 'done' },
     ]));
     await screen.findByTestId('chat-turn-0');
-    expect(screen.getByTestId('chat-activity-steps').textContent).toBe('2 steps · 24s');
+    // Overlapping calls: 1.9s + 22s summed would read 24s; first start to last end is 23s.
+    expect(screen.getByTestId('chat-activity-steps').textContent).toBe('2 steps · 23s');
     fireEvent.click(screen.getByTestId('chat-tool-group-toggle'));
     expect(screen.getByTestId('chat-tool-size-t1').textContent).toBe('1 result');
     expect(screen.getByTestId('chat-tool-size-t2').textContent).toBe('24 results');
     expect(screen.getByTestId('chat-tool-time-t2').textContent).toBe('22s');
+  });
+
+  it('the line shows the wall time across a gap between calls, not the sum of the tools', async () => {
+    mount(snap([
+      { kind: 'user', text: 'q' },
+      { kind: 'tool_call', id: 't1', name: 'knomit_query', state: 'done', arguments: {}, duration_ms: 1000, started_ms: 2_000_000, ended_ms: 2_001_000 },
+      { kind: 'tool_call', id: 't2', name: 'knomit_query', state: 'done', arguments: {}, duration_ms: 1000, started_ms: 2_005_000, ended_ms: 2_006_000 },
+      { kind: 'assistant', text: 'done' },
+    ]));
+    await screen.findByTestId('chat-turn-0');
+    // The tools ran 2s in all; from the first start to the last end took 6s.
+    expect(screen.getByTestId('chat-activity-steps').textContent).toBe('2 steps · 6s');
+  });
+
+  // SABOTAGE: drop the `!c.endedMs` check in wallDurationMs -> red (a running call would count as ended at 0).
+  it('a group with a call still running shows no time yet, though an earlier call in it has finished', async () => {
+    mount(snap([
+      { kind: 'user', text: 'q' },
+      { kind: 'tool_call', id: 't1', name: 'knomit_query', state: 'done', arguments: {}, duration_ms: 1000, started_ms: 3_000_000, ended_ms: 3_001_000 },
+      { kind: 'tool_call', id: 't2', name: 'knomit_query', state: 'running', arguments: {}, started_ms: 3_002_000 },
+    ], { running: true }));
+    await screen.findByTestId('chat-turn-0');
+    expect(screen.getByTestId('chat-activity-steps').textContent).toBe('2 steps');
+    // ...and once the running call ends, the whole span shows.
+    act(() => { chatStream('chat-a')!.emit('tool_call', { id: 't2', name: 'knomit_query', state: 'done', duration_ms: 1000, started_ms: 3_002_000, ended_ms: 3_009_000, turn: 0 }); });
+    expect(screen.getByTestId('chat-activity-steps').textContent).toBe('2 steps · 9s');
+  });
+
+  it('a server that sends no timestamps shows no time', async () => {
+    mount(snap([
+      { kind: 'user', text: 'q' },
+      { kind: 'tool_call', id: 't1', name: 'knomit_query', state: 'done', arguments: {}, duration_ms: 1000 },
+      { kind: 'assistant', text: 'done' },
+    ]));
+    await screen.findByTestId('chat-turn-0');
+    expect(screen.getByTestId('chat-activity-steps').textContent).toBe('1 step');
   });
 
   it('a call that did not run has no result size or duration', async () => {
@@ -542,6 +579,8 @@ describe('notices: one line, never a filled box', () => {
     expect(line.getAttribute('data-tone')).toBe('blocked');
     expect(line.textContent).toBe('Chat is full·1.02M > 1M, nothing sent·New chat');
     expect(line.getAttribute('title')).toBe(sentence);
+    // The figures are mono, as in the mockup's .num.
+    expect(screen.getByTestId('chat-notice-full-rest')).toHaveStyle({ fontFamily: 'var(--k-font-mono)', fontSize: '10.5px' });
   });
 
   it('with only the window known (the provider refused), it still says nothing was sent', async () => {

@@ -7,7 +7,7 @@ import { ChatTurnFooter } from './ChatTurnFooter';
 import { ContextMeter } from './ChatPill';
 import { TurnNotices, NoticeLine } from './ChatNotice';
 import { SendingLine, ThinkingPlaceholder, StoppedMark } from './ChatWaiting';
-import { chatPlugins, chatComponents } from './chatTableBars';
+import { chatPlugins, chatLivePlugins, chatComponents } from './chatTableBars';
 import { boundAfter, compactCount, sessionCost } from './chatState';
 import type { ChatState, ChatTurn, ToolCall } from './chatState';
 import type { ApprovalDecision } from './chatApi';
@@ -39,6 +39,9 @@ export interface ChatContextUse { used: number; window: number }
 
 /** The column the transcript and the composer share. */
 const COLUMN: CSSProperties = { width: 740, maxWidth: 'calc(100% - 48px)', margin: '0 auto' };
+/** The transcript hangs from the composer: a short one sits at the bottom of its box (the auto top margin
+ *  collapses to nothing once it is taller than the box, so it scrolls as before). */
+const TRANSCRIPT_COLUMN: CSSProperties = { ...COLUMN, margin: 'auto auto 0' };
 
 /**
  * ChatPanel is the conversation, in a centered column: each turn's message (a
@@ -149,7 +152,7 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   return (
     <div ref={root} data-testid="chat-panel" style={panel}>
       <div ref={scroller} data-testid="chat-transcript" style={transcript}>
-        <div style={COLUMN}>
+        <div style={TRANSCRIPT_COLUMN}>
           {state.turns.map((t, ti) => {
             const live = state.running && ti === state.turns.length - 1;
             const blocks = blocksOf(t);
@@ -171,8 +174,7 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
                   if (b.kind === 'text') {
                     return (
                       <div key={b.key} data-testid="chat-text" className="k-prose k-chat-answer">
-                        <ReactMarkdown remarkPlugins={chatPlugins} components={chatComponents}>{b.text}</ReactMarkdown>
-                        {live && b === lastBlock && <span data-testid="chat-caret" className="k-chat-caret" aria-hidden="true" />}
+                        <ReactMarkdown remarkPlugins={live && b === lastBlock ? chatLivePlugins : chatPlugins} components={chatComponents}>{b.text}</ReactMarkdown>
                       </div>
                     );
                   }
@@ -259,7 +261,7 @@ function shown(el: HTMLElement | null): boolean {
 }
 
 const panel: CSSProperties = { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 };
-const transcript: CSSProperties = { flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 0' };
+const transcript: CSSProperties = { flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 0', display: 'flex', flexDirection: 'column' };
 const turnBox = (sep: boolean): CSSProperties => ({ padding: '18px 0 14px', ...(sep ? { borderTop: '1px solid #1c1c1c' } : {}) });
 const composer: CSSProperties = { background: '#171717', border: '1px solid #2e2e2e', borderRadius: 12, padding: '10px 12px 8px' };
 const input: CSSProperties = {

@@ -40,6 +40,9 @@ export interface ToolCall {
    *  call (the done event and the snapshot); absent for a call that did not run. */
   durationMs?: number;
   summary?: ChatCallSummary;
+  /** When the call began, and once it is done when it ended: Unix ms, the server's clock. */
+  startedMs?: number;
+  endedMs?: number;
   /** The tools a call to the loader loaded (only on that call). */
   loaded?: string[];
 }
@@ -118,7 +121,7 @@ export type ChatEvent =
   | { kind: 'send_failed'; sendId: number }
   | { kind: 'text_delta'; text: string; turn: number }
   | { kind: 'thinking_delta'; text: string; turn: number }
-  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; arguments?: unknown; duration_ms?: number; summary?: ChatCallSummary; loaded?: string[]; turn: number }
+  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; arguments?: unknown; duration_ms?: number; summary?: ChatCallSummary; loaded?: string[]; started_ms?: number; ended_ms?: number; turn: number }
   | { kind: 'approval'; approval: ChatApproval }
   | { kind: 'approval_answered'; callId: string }
   | { kind: 'usage'; usage: UsagePayload; cost_usd?: number; seq?: number; turn: number }
@@ -182,7 +185,8 @@ function addItem(turns: ChatTurn[], item: ChatViewItem, at: number): void {
   const t = turns[turns.length - 1];
   if (item.kind === 'assistant') { t.parts.push({ kind: 'text', text: item.text ?? '' }); return; }
   const c: ToolCall = { id: item.id ?? '', name: item.name ?? '', state: item.state ?? 'done', isError: !!item.is_error, ...(item.arguments !== undefined ? { args: item.arguments } : {}),
-    ...(item.duration_ms ? { durationMs: item.duration_ms } : {}), ...(item.summary ? { summary: item.summary } : {}), ...(item.loaded?.length ? { loaded: item.loaded } : {}) };
+    ...(item.duration_ms ? { durationMs: item.duration_ms } : {}), ...(item.summary ? { summary: item.summary } : {}), ...(item.loaded?.length ? { loaded: item.loaded } : {}),
+    ...(item.started_ms ? { startedMs: item.started_ms } : {}), ...(item.ended_ms ? { endedMs: item.ended_ms } : {}) };
   const last = t.parts[t.parts.length - 1];
   if (last?.kind === 'group') last.calls.push(c); else t.parts.push({ kind: 'group', calls: [c] });
 }
@@ -264,6 +268,7 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
                   ...c, state: e.state, isError: !!e.is_error,
                   ...(e.arguments !== undefined && c.args === undefined ? { args: e.arguments } : {}),
                   ...(e.duration_ms ? { durationMs: e.duration_ms } : {}), ...(e.summary ? { summary: e.summary } : {}),
+                  ...(e.started_ms ? { startedMs: e.started_ms } : {}), ...(e.ended_ms ? { endedMs: e.ended_ms } : {}),
                   ...(e.loaded?.length ? { loaded: e.loaded } : {}),
                 }),
               }
@@ -273,6 +278,7 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
         const c: ToolCall = {
           id: e.id, name: e.name, state: e.state, isError: !!e.is_error, ...(e.arguments !== undefined ? { args: e.arguments } : {}),
           ...(e.duration_ms ? { durationMs: e.duration_ms } : {}), ...(e.summary ? { summary: e.summary } : {}), ...(e.loaded?.length ? { loaded: e.loaded } : {}),
+          ...(e.started_ms ? { startedMs: e.started_ms } : {}), ...(e.ended_ms ? { endedMs: e.ended_ms } : {}),
         };
         const last = t.parts[t.parts.length - 1];
         const parts = last?.kind === 'group'
@@ -506,9 +512,15 @@ export function formatDuration(ms: number): string {
   return durationMinutes(m, Math.round(s - m * 60));
 }
 
-/** The time the calls of a group took in all: the sum of the durations the
- *  server reported; 0 when none reported one. */
-export const totalDurationMs = (calls: ToolCall[]): number => calls.reduce((n, c) => n + (c.durationMs ?? 0), 0);
+/** The WALL time of a group of calls: the first start to the last end, on the
+ *  server's clock. It is not the sum of the tools' own durations: calls that
+ *  overlap would count twice, and the gaps where the model thought between them
+ *  would not count at all. 0 while any call is still running or has no
+ *  timestamps (a server that sends none), so the line then shows no time. */
+export function wallDurationMs(calls: ToolCall[]): number {
+  if (!calls.length || calls.some(c => !c.startedMs || !c.endedMs)) return 0;
+  return Math.max(...calls.map(c => c.endedMs!)) - Math.min(...calls.map(c => c.startedMs!));
+}
 
 /** A token count to three significant digits, for a notice: 95K, 100K, 1.02M. */
 export function noticeCount(n: number): string {

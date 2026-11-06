@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import { markdownPlugins, markdownComponents } from './markdown';
 import type { ChatApproval, ApprovalDecision } from './chatApi';
 import type { ToolCall } from './chatState';
-import { LOADER_TOOL, toolRowLabel, toolKind, callTarget, boundAfter, keyArg, queryText, formatDuration, totalDurationMs } from './chatState';
+import { LOADER_TOOL, toolRowLabel, toolKind, callTarget, boundAfter, keyArg, queryText, formatDuration, wallDurationMs } from './chatState';
 import {
   APPROVAL_ALLOW, APPROVAL_DECLINE, APPROVAL_ALLOW_SESSION, APPROVAL_TARGET_UNRESOLVED, CHAT_STOP,
   loadedToolsRow, activitySummary, activitySteps, liveStep, toolVerb, resultCount,
@@ -32,7 +32,7 @@ export function KnomitMark({ size = 16 }: { size?: number }) {
   );
 }
 
-const segs = (list: SummarySeg[]) => list.map((s, i) => (s.strong ? <strong key={i} style={{ color: '#e4e4e4', fontWeight: 600 }}>{s.text}</strong> : <span key={i}>{s.text}</span>));
+const segs = (list: SummarySeg[]) => list.map((s, i) => (s.strong ? <strong key={i} style={{ color: '#bbb', fontWeight: 500 }}>{s.text}</strong> : <span key={i}>{s.text}</span>));
 
 /**
  * ChatToolGroup is a run of consecutive tool calls drawn as ONE ACTIVITY LINE:
@@ -71,30 +71,31 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
     inForce = boundAfter([c], inForce);
   }
   const summary = activitySummary(calls.map((c, i) => ({ kind: toolKind(c.name), target: targets[i] })));
+  const wall = wallDurationMs(calls);
   const runningIdx = calls.findIndex(c => c.state === 'running');
   const runningCall = runningIdx >= 0 ? calls[runningIdx] : null;
   const liveText = live && runningCall && toolKind(runningCall.name) === 'query' && queryText(runningCall)
     ? liveStep(targets[runningIdx], queryText(runningCall)) : null;
 
   return (
-    <div data-testid="chat-tool-group" data-open={open} data-live={live || undefined} style={{ margin: '8px 0' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div data-testid="chat-tool-group" data-open={open} data-live={live || undefined} style={{ margin: '0 0 10px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: 'max-content', maxWidth: '100%' }}>
         <button type="button" data-testid="chat-tool-group-toggle" aria-expanded={open}
           onClick={() => setOpened(o => !o)} style={header}>
           <span style={tile}><KnomitMark /></span>
           {liveText
             ? <span data-testid="chat-activity-live" style={{ color: AMBER }}>{segs(liveText)}</span>
             : (
-              <span data-testid="chat-activity-summary" style={{ color: live ? AMBER : '#a8a8a8' }}>
+              <span data-testid="chat-activity-summary" style={{ color: live ? AMBER : '#8a8a8a', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {summary.map((piece, i) => (
                   <span key={i}>{i > 0 && ' · '}{segs(piece)}</span>
                 ))}
               </span>
             )}
           <span data-testid="chat-activity-steps" style={steps}>
-            {activitySteps(calls.length)}{totalDurationMs(calls) > 0 && ` · ${formatDuration(totalDurationMs(calls))}`}
+            {activitySteps(calls.length)}{wall > 0 && ` · ${formatDuration(wall)}`}
           </span>
-          <span aria-hidden="true" style={{ color: '#666', fontSize: 11, transform: open ? 'rotate(90deg)' : 'none', display: 'inline-block' }}>›</span>
+          <span aria-hidden="true" style={{ color: '#555', fontSize: 11, transform: open ? 'rotate(90deg)' : 'none', display: 'inline-block' }}>›</span>
         </button>
         {live && onStop && (
           <button type="button" data-testid="chat-activity-stop" onClick={onStop} style={stopPill}>
@@ -164,16 +165,17 @@ function ApprovalCard({ approval, onAnswer }: { approval: ChatApproval; onAnswer
   );
 }
 
+// The mockup's .actl: 12px #8a8a8a, 26px tall, as wide as its content, one line.
 const header: CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, background: 'transparent', border: 'none',
-  color: '#a8a8a8', fontSize: 13, padding: '3px 8px 3px 6px', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
-  borderRadius: 6,
+  display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, maxWidth: '100%', background: 'transparent', border: 'none',
+  color: '#8a8a8a', fontSize: 12, fontWeight: 400, padding: '5px 9px 5px 7px', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
+  borderRadius: 6, whiteSpace: 'nowrap',
 };
 const tile: CSSProperties = {
   width: 16, height: 16, borderRadius: 4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-  background: 'rgba(119,204,153,.12)', flexShrink: 0,
+  background: '#1a231d', flexShrink: 0,
 };
-const steps: CSSProperties = { color: '#5c5c5c', fontSize: 11, fontFamily: 'var(--k-font-mono)' };
+const steps: CSSProperties = { color: '#5a5a5a', fontSize: 10.5, fontWeight: 400, fontFamily: 'var(--k-font-mono)', flexShrink: 0 };
 const stopPill: CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 6, background: '#2b1c1c', color: '#f3c0c0', border: '1px solid #5c2a2a',
   borderRadius: 999, padding: '2px 10px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',

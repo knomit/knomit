@@ -1,11 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { ChatStartForm } from './ChatStartForm';
 import { costTier } from './chatState';
 import type { ChatProvider } from './chatApi';
 import {
-  CHAT_NO_MODELS, START_HEADING, START_HINT, START_INTRO, SUGGEST_BIND, SUGGEST_CHANGED, startPlaceholder,
-  suggestContradictions, suggestReview,
+  CHAT_NO_MODELS, START_HEADING, START_HINT, START_INTRO, startPlaceholder,
 } from './chatCopy';
 
 // Every number on a card is a value the server sent; the fixtures use odd
@@ -150,16 +149,6 @@ describe('ChatStartForm', () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ provider: 'anthropic', model: 'a1', message: 'go' });
   });
 
-  it('suggestion chips fill the composer and do not send', () => {
-    const fetchMock = stubCreate();
-    render(<ChatStartForm providers={providers} repoNames={['r-one', 'r-two']} onCreated={vi.fn()} />);
-    const chips = within(screen.getByTestId('chat-suggestions')).getAllByRole('button').map(b => b.textContent);
-    expect(chips).toEqual([SUGGEST_CHANGED, SUGGEST_BIND, suggestReview('r-one'), suggestContradictions('r-two')]);
-    fireEvent.click(screen.getByText(SUGGEST_BIND));
-    expect(screen.getByTestId('chat-start-input')).toHaveValue(SUGGEST_BIND);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it('shows the server\'s refusal, keeps the text and starts no chat', async () => {
     vi.stubGlobal('fetch', vi.fn(async () =>
       new Response(JSON.stringify({ title: 'Cannot start the chat', detail: 'no key' }), { status: 422 })));
@@ -200,5 +189,30 @@ describe('ChatStartForm', () => {
     rerender(<ChatStartForm providers={providers} onCreated={vi.fn()} onCancel={onCancel} />);
     fireEvent.click(screen.getByTestId('chat-cancel'));
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('docks the composer: Start chat sits outside the scrolling card grid, so it is reachable without scrolling', () => {
+    render(<ChatStartForm providers={providers} onCreated={vi.fn()} onCancel={vi.fn()} />);
+    const scroll = screen.getByTestId('chat-start-scroll');
+    const dock = screen.getByTestId('chat-start-dock');
+    // The cards scroll; the dock is a sibling of that scroller, never inside it.
+    expect(scroll.style.overflowY).toBe('auto');
+    expect(dock.style.flexGrow).toBe('0');
+    expect(dock.style.flexShrink).toBe('0');
+    expect(scroll.contains(dock)).toBe(false);
+    expect(scroll.contains(screen.getByTestId('chat-model-anthropic-a1'))).toBe(true);
+    for (const id of ['chat-start-go', 'chat-start-input', 'chat-cancel']) {
+      expect(dock.contains(screen.getByTestId(id))).toBe(true);
+      expect(scroll.contains(screen.getByTestId(id))).toBe(false);
+    }
+  });
+
+  it('Cancel sits in the composer action row, left of Start chat; there are no suggestion chips', () => {
+    render(<ChatStartForm providers={providers} onCreated={vi.fn()} onCancel={vi.fn()} />);
+    const cancel = screen.getByTestId('chat-cancel');
+    const go = screen.getByTestId('chat-start-go');
+    expect(cancel.parentElement).toBe(go.parentElement);
+    expect(cancel.compareDocumentPosition(go) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByTestId('chat-suggestions')).toBeNull();
   });
 });
