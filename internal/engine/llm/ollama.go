@@ -364,7 +364,7 @@ type ollamaCallRef struct{ name, id string }
 // name and wire id under its knomit id for the results that follow.
 func ollamaAssistant(e Entry, names map[string]ollamaCallRef) ollamaMsg {
 	m := ollamaMsg{Role: "assistant"}
-	var text []string
+	var text, thinking []string
 	for _, b := range e.Blocks {
 		switch b.Kind {
 		case BlockText:
@@ -375,8 +375,8 @@ func ollamaAssistant(e Entry, names map[string]ollamaCallRef) ollamaMsg {
 			var n struct {
 				Thinking string `json:"thinking"`
 			}
-			if b.Reasoning != nil && json.Unmarshal(b.Reasoning.Native, &n) == nil {
-				m.Thinking += n.Thinking
+			if b.Reasoning != nil && json.Unmarshal(b.Reasoning.Native, &n) == nil && n.Thinking != "" {
+				thinking = append(thinking, n.Thinking)
 			}
 		case BlockToolUse:
 			id := b.ToolUse.ID
@@ -389,6 +389,9 @@ func ollamaAssistant(e Entry, names map[string]ollamaCallRef) ollamaMsg {
 		}
 	}
 	m.Content = strings.Join(text, "")
+	// Runs are separated by a newline so a boundary between two runs does not
+	// glue their words together. A single run is sent unchanged.
+	m.Thinking = strings.Join(thinking, "\n")
 	return m
 }
 
