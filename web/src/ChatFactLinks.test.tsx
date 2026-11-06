@@ -6,6 +6,7 @@ import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatSnapshot } from './chatApi';
 import { typeStyles, repoHue } from './utils';
 import { PANEL_OPEN_IN_BROWSE } from './chatCopy';
+import { TypeIcon } from './icons';
 
 const CHAT = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
 const BASE = '/api/v1/chats/chat-a';
@@ -97,6 +98,11 @@ describe('chat fact links', () => {
     const svg = tile.querySelector('svg')!;
     expect(svg.getAttribute('width')).toBe('11');
     expect(svg.getAttribute('stroke')).toBe(typeStyles.policy.color);
+    // The glyph IS the policy TypeIcon (not another type's drawn in policy's colour).
+    const ref = render(<TypeIcon type="policy" color={typeStyles.policy.color} size={11} />).container.querySelector('svg')!;
+    expect(svg.outerHTML).toBe(ref.outerHTML);
+    const other = render(<TypeIcon type="observation" color={typeStyles.policy.color} size={11} />).container.querySelector('svg')!;
+    expect(svg.outerHTML).not.toBe(other.outerHTML);
     // The commit hash did not resolve: it is still a code span, with its text.
     const codes = [...turn0.querySelectorAll('code')].map(c => c.textContent);
     expect(codes).toContain('deadbeef');
