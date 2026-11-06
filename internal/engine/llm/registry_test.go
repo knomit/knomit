@@ -60,6 +60,22 @@ func fakeOllama(t *testing.T, caps map[string][]string, trained int) *httptest.S
 	return srv
 }
 
+// The display name comes from the config at read time: a named model shows its
+// name, an unnamed one its id, and a provider or model no longer configured its id.
+func TestRegistry_ModelNameFromConfig(t *testing.T) {
+	reg := NewRegistry(map[string]config.LLMProviderConfig{
+		"prov": {Kind: "ollama", Host: "http://127.0.0.1:1", Models: []string{"o1", "o2"},
+			Entries: []config.LLMModelEntry{{ID: "o1", Name: "Ollama One"}, {ID: "o2"}}},
+	})
+	require.Equal(t, "Ollama One", reg.ModelName("prov", "o1"))
+	require.Equal(t, "o2", reg.ModelName("prov", "o2"))
+	require.Equal(t, "gone", reg.ModelName("prov", "gone"))
+	require.Equal(t, "o1", reg.ModelName("nope", "o1"))
+	st := reg.List(context.Background())
+	require.Equal(t, "Ollama One", st[0].Models[0].Name)
+	require.Equal(t, "o1", st[0].Models[0].ID, "the id stays the identity")
+}
+
 func TestRegistry_ListMarksUnavailableAndToolless(t *testing.T) {
 	an, _ := fakeAnthropicModels(t, "a1")
 	ol := fakeOllama(t, map[string][]string{"o1": {"completion"}}, 8192)
@@ -70,11 +86,11 @@ func TestRegistry_ListMarksUnavailableAndToolless(t *testing.T) {
 	got := r.List(context.Background())
 	require.Equal(t, []ProviderStatus{
 		{Name: "anthropic", Kind: "anthropic", Models: []ModelStatus{
-			{ID: "a1", Available: true, Tools: true},
-			{ID: "a2", Available: false, Reason: "not offered by the provider"},
+			{ID: "a1", Name: "a1",Available: true, Tools: true},
+			{ID: "a2", Name: "a2",Available: false, Reason: "not offered by the provider"},
 		}},
 		{Name: "local", Kind: "ollama", Models: []ModelStatus{
-			{ID: "o1", Available: true, Tools: false, Reason: "model does not support tool calling (capabilities: completion)"},
+			{ID: "o1", Name: "o1",Available: true, Tools: false, Reason: "model does not support tool calling (capabilities: completion)"},
 		}},
 	}, got)
 }
@@ -94,8 +110,8 @@ func TestRegistry_APIKeyEnvHoldingAKeyMakesOnlyThatProviderUnavailable(t *testin
 	got := r.List(context.Background())
 	want := fmt.Sprintf(config.APIKeyEnvNotANameMessage, "prov-x")
 	require.Equal(t, []ProviderStatus{
-		{Name: "prov-x", Kind: "anthropic", Models: []ModelStatus{{ID: "a1", Reason: want}, {ID: "a2", Reason: want}}},
-		{Name: "prov-y", Kind: "anthropic", Models: []ModelStatus{{ID: "a3", Available: true, Tools: true}}},
+		{Name: "prov-x", Kind: "anthropic", Models: []ModelStatus{{ID: "a1", Name: "a1",Reason: want}, {ID: "a2", Name: "a2",Reason: want}}},
+		{Name: "prov-y", Kind: "anthropic", Models: []ModelStatus{{ID: "a3", Name: "a3",Available: true, Tools: true}}},
 	}, got)
 	for i := 0; i+8 <= len(key); i++ {
 		require.NotContains(t, want, key[i:i+8])
@@ -121,8 +137,8 @@ func TestRegistry_APIKeyEnvBadButAnotherKeySourceSetStaysAvailable(t *testing.T)
 	})
 	got := r.List(context.Background())
 	require.Equal(t, []ProviderStatus{
-		{Name: "prov-f", Kind: "anthropic", Models: []ModelStatus{{ID: "a1", Available: true, Tools: true}}},
-		{Name: "prov-k", Kind: "anthropic", Models: []ModelStatus{{ID: "a2", Available: true, Tools: true}}},
+		{Name: "prov-f", Kind: "anthropic", Models: []ModelStatus{{ID: "a1", Name: "a1",Available: true, Tools: true}}},
+		{Name: "prov-k", Kind: "anthropic", Models: []ModelStatus{{ID: "a2", Name: "a2",Available: true, Tools: true}}},
 	}, got)
 	for _, p := range []string{"prov-f", "prov-k"} {
 		m, err := r.Open(context.Background(), p, map[string]string{"prov-f": "a1", "prov-k": "a2"}[p])

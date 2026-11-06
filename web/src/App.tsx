@@ -1949,6 +1949,7 @@ export default function App() {
                   target={state.context.kind === 'repo'
                     ? { kind: 'repo', uid: currentRepoInfo?.uid ?? '' }
                     : { kind: 'lens', uid: lenses.find(l => l.name === (state.context.kind === 'lens' ? state.context.name : ''))?.uid ?? '' }}
+                  chatProviders={chatProviders ?? []}
                 />
               </ErrorBoundary>
             )}
