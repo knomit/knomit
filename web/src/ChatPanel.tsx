@@ -48,7 +48,7 @@ const TRANSCRIPT_COLUMN: CSSProperties = { ...COLUMN, margin: 'auto auto 0' };
  * faint strip), its activity line, its final text as markdown, and a cost
  * footer; the server's price-tier warning; and the rounded box to write in.
  */
-export function ChatPanel({ state, selectedId, actionError, notSent, landed, modelName, context, onSend, onStop, onSelect, onAnswer, onNewChat }: {
+export function ChatPanel({ state, selectedId, actionError, notSent, landed, modelName, tierAt, context, onSend, onStop, onSelect, onAnswer, onNewChat }: {
   state: ChatState;
   selectedId: string | null;
   /** The last failed cancel or answer. */
@@ -60,6 +60,8 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   landed?: { text: string } | null;
   /** The chat model's display name, for the notices. */
   modelName: string;
+  /** The model's price card's first-tier boundary in prompt tokens; 0 with one tier or no card. */
+  tierAt: number;
   context: ChatContextUse;
   onSend: (text: string) => void;
   onStop: () => void;
@@ -189,7 +191,8 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
                 )}
                 <TurnNotices turn={t} modelName={modelName} onNewChat={onNewChat} />
                 {t.usage && !live && (
-                  <ChatTurnFooter usage={t.usage} costUsd={t.costUsd} answer={answer}
+                  <ChatTurnFooter usage={t.usage} costUsd={t.costUsd} costRows={t.costRows} highTier={t.highTier}
+                    turnNumber={ti + 1} modelName={modelName} tierAt={tierAt} answer={answer}
                     sessionCostUsd={total} sessionTurns={state.turns.length} />
                 )}
               </div>

@@ -47,6 +47,8 @@ export interface ToolCall {
   loaded?: string[];
 }
 export type ChatPart = { kind: 'text'; text: string } | { kind: 'group'; calls: ToolCall[] };
+/** A turn's cost in USD by token kind; the four add up to the turn's cost. */
+export interface CostRows { input: number; cacheRead: number; cacheWrite: number; output: number }
 export interface TurnUsage { input: number; cacheRead: number; cacheWrite: number; output: number }
 export interface ChatTurn {
   /** The person's message; empty for a turn the page joined mid-way. */
@@ -59,6 +61,10 @@ export interface ChatTurn {
   usage: TurnUsage | null;
   /** Estimated USD; null when no request of the turn was priced (no price card). */
   costUsd: number | null;
+  /** The same cost by token kind; null without a price card. */
+  costRows: CostRows | null;
+  /** A request of this turn fell in the model's higher price tier. */
+  highTier: boolean;
   /** The loop's message when the turn ended in an error (a refusal, a limit). */
   error: string | null;
   /** The server's price-tier warning for this turn, verbatim. */
@@ -124,7 +130,7 @@ export type ChatEvent =
   | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; arguments?: unknown; duration_ms?: number; summary?: ChatCallSummary; loaded?: string[]; started_ms?: number; ended_ms?: number; turn: number }
   | { kind: 'approval'; approval: ChatApproval }
   | { kind: 'approval_answered'; callId: string }
-  | { kind: 'usage'; usage: UsagePayload; cost_usd?: number; seq?: number; turn: number }
+  | { kind: 'usage'; usage: UsagePayload; cost_usd?: number; cost_rows?: UsagePayload; high_tier?: boolean; seq?: number; turn: number }
   | { kind: 'warning'; message: string; notice?: ChatNotice; turn: number }
   | { kind: 'turn_done'; turn: number }
   /** The person pressed Stop: the turn is over here whatever the stream says. */
@@ -134,7 +140,7 @@ export type ChatEvent =
 
 export const initialChatState: ChatState = { turns: [], running: false, approvals: {}, ended: false, lastUsageSeq: 0, staleSeq: 0, loaded: false, ctxTokens: 0, expectedFirstTokenMs: 0 };
 
-const newTurn = (user = ''): ChatTurn => ({ user, parts: [], usage: null, costUsd: null, error: null, warning: null, warningInfo: null, errorInfo: null, stopped: false, thinking: '' });
+const newTurn = (user = ''): ChatTurn => ({ user, parts: [], usage: null, costUsd: null, costRows: null, highTier: false, error: null, warning: null, warningInfo: null, errorInfo: null, stopped: false, thinking: '' });
 
 /** route finds the turn a live event names. A turn index the page has no turn
  *  for is the local unconfirmed turn's (the server's next turn), which learns
@@ -172,6 +178,10 @@ function addItem(turns: ChatTurn[], item: ChatViewItem, at: number): void {
     t.at = at;
     if (item.usage) t.usage = { input: item.usage.input, cacheRead: item.usage.cache_read, cacheWrite: item.usage.cache_write, output: item.usage.output };
     t.costUsd = item.cost_usd ?? null;
+    t.costRows = item.cost_rows
+      ? { input: item.cost_rows.input, cacheRead: item.cost_rows.cache_read, cacheWrite: item.cost_rows.cache_write, output: item.cost_rows.output }
+      : null;
+    t.highTier = !!item.high_tier;
     t.warning = item.warning || null;
     t.warningInfo = item.warning_info ?? null;
     // A cancelled turn is the person's own Stop: no error, the page shows it as stopped.
@@ -308,6 +318,11 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
             cacheWrite: u.cacheWrite + e.usage.cache_write, output: u.output + e.usage.output,
           },
           costUsd: e.cost_usd === undefined ? t.costUsd : (t.costUsd ?? 0) + e.cost_usd,
+          costRows: e.cost_rows === undefined ? t.costRows : {
+            input: (t.costRows?.input ?? 0) + e.cost_rows.input, cacheRead: (t.costRows?.cacheRead ?? 0) + e.cost_rows.cache_read,
+            cacheWrite: (t.costRows?.cacheWrite ?? 0) + e.cost_rows.cache_write, output: (t.costRows?.output ?? 0) + e.cost_rows.output,
+          },
+          highTier: t.highTier || !!e.high_tier,
         };
       });
     }

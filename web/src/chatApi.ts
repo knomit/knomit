@@ -53,6 +53,8 @@ export interface ChatViewItem {
   /** On a user item: how the turn it opens went (see chat.go viewItem). */
   usage?: { input: number; cache_read: number; cache_write: number; output: number };
   cost_usd?: number; warning?: string; error?: string; cancelled?: boolean;
+  /** The turn's cost by token kind (adds up to cost_usd), and whether any request fell in the higher price tier. */
+  cost_rows?: { input: number; cache_read: number; cache_write: number; output: number }; high_tier?: boolean;
   /** On the call to the loader tool: the tools that call loaded. */
   loaded?: string[];
 }
@@ -190,7 +192,7 @@ export function revokeChatGrant(id: string, grant: ChatGrant): Promise<void> {
 /** The chat model's context window, how it was resolved ("config", "memory",
  *  "trained"; absent when the model does not say) and whether Ollama reported
  *  it partly on the CPU after the first request. */
-export interface ChatContext { window: number; how?: string; spill: boolean; prompt_tokens?: number }
+export interface ChatContext { window: number; how?: string; spill: boolean; prompt_tokens?: number; /** The price card's first-tier boundary in prompt tokens; absent with one tier or no card. */ tier_tokens?: number }
 
 export function getChatContext(id: string): Promise<ChatContext> {
   return fetchJSON<ChatContext>(`${chatUrl(id)}/context`);

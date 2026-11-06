@@ -274,9 +274,10 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onOpenInBrowse }: {
   // The model's context window, for the composer's meter and the top bar's
   // pill. A chat whose window cannot be read keeps 0 (no "/ window", no fill).
   const [ctxWindow, setWindow] = useState(0);
+  const [tierAt, setTierAt] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    getChatContext(chat.id).then(c => { if (!cancelled) setWindow(c.window); }).catch(() => { /* no meter denominator */ });
+    getChatContext(chat.id).then(c => { if (!cancelled) { setWindow(c.window); setTierAt(c.tier_tokens ?? 0); } }).catch(() => { /* no meter denominator */ });
     return () => { cancelled = true; };
   }, [chat.id]);
   // The top bar sits outside this component: hand it what the pill shows.
@@ -294,7 +295,7 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onOpenInBrowse }: {
       <div data-testid="chat-facet" style={{ flex: 1, minHeight: 0, display: facet === 'chat' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
         <div data-testid="chat-columns" data-chat-scope className="k-chat-body">
           <div className={openEntry ? 'k-chat-main k-chat-main--narrow' : 'k-chat-main'} data-panel={openEntry ? 'open' : 'closed'}>
-            <ChatPanel state={state} selectedId={selectedId} actionError={newChatError || actionError} notSent={notSent} landed={landed} modelName={chat.name || chat.model}
+            <ChatPanel state={state} selectedId={selectedId} actionError={newChatError || actionError} notSent={notSent} landed={landed} modelName={chat.name || chat.model} tierAt={tierAt}
               context={{ used: state.ctxTokens, window: ctxWindow }}
               onSend={send} onStop={stop} onSelect={onSelect} onAnswer={answer}
               onNewChat={onNewChat ? () => {

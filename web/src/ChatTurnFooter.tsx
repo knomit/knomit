@@ -3,10 +3,10 @@ import type { CSSProperties } from 'react';
 import { CopyButton } from './fleetParts';
 import { CARD_GAP as GAP, cardSide } from './chatCardSide';
 import { cachedPercent, compactCount, formatCost } from './chatState';
-import type { TurnUsage } from './chatState';
+import type { CostRows, TurnUsage } from './chatState';
 import {
   COST_IN, COST_OUT, cachedLabel, COST_ROW_INPUT, COST_ROW_CACHE_READ, COST_ROW_CACHE_WRITE, COST_ROW_OUTPUT,
-  COST_THIS_TURN, COST_UNPRICED, costSession,
+  COST_THIS_TURN, COST_UNPRICED, costCardHeader, costSession,
 } from './chatCopy';
 
 /**
@@ -15,12 +15,23 @@ import {
  * (cache_read / (input + cache_read + cache_write)). Hovering (or focusing) it
  * opens a card with the four token counts, this turn's cost and the session's.
  *
- * The cost of each of the four rows is NOT shown: the server sends one summed
- * cost per turn and no prices, so a per-row split would be a guess.
+ * The card opens with "Turn N · <model> · tier ≤100K" and each of the four rows
+ * shows its own cost. The server computes the rows (each request at its own price
+ * tier) and they add up to the turn's cost; the page does no pricing of its own.
  */
-export function ChatTurnFooter({ usage, costUsd, answer, sessionCostUsd, sessionTurns }: {
+export function ChatTurnFooter({ usage, costUsd, costRows, highTier, turnNumber, modelName, tierAt, answer, sessionCostUsd, sessionTurns }: {
   usage: TurnUsage;
   costUsd: number | null;
+  /** The cost by token kind; null without a price card. */
+  costRows: CostRows | null;
+  /** A request of this turn fell in the higher price tier. */
+  highTier: boolean;
+  /** 1-based number of this turn in the chat. */
+  turnNumber: number;
+  /** The model's display name (its configured label, else its id). */
+  modelName: string;
+  /** The price card's first-tier boundary in prompt tokens; 0 with one tier or no card. */
+  tierAt: number;
   /** The answer's text, which the copy icon copies. */
   answer: string;
   sessionCostUsd: number | null;
@@ -59,10 +70,15 @@ export function ChatTurnFooter({ usage, costUsd, answer, sessionCostUsd, session
         </span>
         {hover && (
           <div ref={card} data-testid="chat-cost-card" data-side={side} role="tooltip" style={side === 'above' ? cardStyle : { ...cardStyle, bottom: 'auto', top: 'calc(100% + 8px)' }}>
-            <Row label={COST_ROW_INPUT} tokens={usage.input} testid="input" />
-            <Row label={COST_ROW_CACHE_READ} tokens={usage.cacheRead} testid="cache-read" />
-            <Row label={COST_ROW_CACHE_WRITE} tokens={usage.cacheWrite} testid="cache-write" />
-            <Row label={COST_ROW_OUTPUT} tokens={usage.output} testid="output" />
+            <div data-testid="chat-cost-header" style={{ fontFamily: 'var(--k-font-body)', fontSize: 11, color: '#888', marginBottom: 8 }}>
+              {costCardHeader(turnNumber, modelName, tierAt, highTier)}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: '5px 14px' }}>
+              <Row label={COST_ROW_INPUT} tokens={usage.input} usd={costRows?.input} testid="input" />
+              <Row label={COST_ROW_CACHE_READ} tokens={usage.cacheRead} usd={costRows?.cacheRead} testid="cache-read" />
+              <Row label={COST_ROW_CACHE_WRITE} tokens={usage.cacheWrite} usd={costRows?.cacheWrite} testid="cache-write" />
+              <Row label={COST_ROW_OUTPUT} tokens={usage.output} usd={costRows?.output} testid="output" />
+            </div>
             <div style={{ borderTop: '1px solid #2a2a2a', margin: '8px 0 6px' }} />
             <Total label={COST_THIS_TURN} usd={costUsd} testid="turn" strong />
             <Total label={costSession(sessionTurns)} usd={sessionCostUsd} testid="session" />
@@ -82,11 +98,16 @@ function scrollTop(el: HTMLElement): number {
   return 0;
 }
 
-function Row({ label, tokens, testid }: { label: string; tokens: number; testid: string }) {
+const rowNum: CSSProperties = { color: '#c8c8c8', fontFamily: 'var(--k-font-mono)', fontSize: 10.5, textAlign: 'right' };
+
+/** One row of the card: label, token count, and (with a price card) its cost. A row
+ *  without a price still takes its grid cell, so the columns stay aligned. */
+function Row({ label, tokens, usd, testid }: { label: string; tokens: number; usd: number | undefined; testid: string }) {
   return (
-    <div data-testid={`chat-cost-row-${testid}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 24, padding: '2px 0' }}>
-      <span style={{ color: '#7a7a7a' }}>{label}</span>
-      <span data-testid={`chat-cost-tokens-${testid}`} style={{ color: '#aaa' }}>{tokens.toLocaleString('en-US')}</span>
+    <div data-testid={`chat-cost-row-${testid}`} style={{ display: 'contents' }}>
+      <span style={{ color: '#6a6a6a', fontFamily: 'var(--k-font-body)', fontSize: 11 }}>{label}</span>
+      <span data-testid={`chat-cost-tokens-${testid}`} style={rowNum}>{tokens.toLocaleString('en-US')}</span>
+      {usd === undefined ? <span /> : <span data-testid={`chat-cost-usd-${testid}`} style={rowNum}>{formatCost(usd)}</span>}
     </div>
   );
 }
