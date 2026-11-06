@@ -77,7 +77,8 @@ tags:
     description: |
       The web chat: an in-process model that reaches knomit only through its
       own MCP tools. Chats are owned by the principal that started them, live
-      while an events stream is attached (60 s grace), and ask before any
+      while a page events stream of their owner is attached (60 s grace after
+      the owner's last one closes), and ask before any
       tool call that writes.
   - name: secrets
     description: |
@@ -4235,28 +4236,31 @@ paths:
         Ends the chat: a blocked approval and a running turn unwind, the MCP
         session records `ended_at`, and the temp files are removed. The
         persistent session log stays. A chat also ends 60 seconds after its
-        last events stream detaches, or when the server stops.
+        last page events stream closes, or when the server stops.
       operationId: deleteChat
       responses:
         "204": { description: Ended }
         "404": { $ref: "#/components/responses/Problem" }
 
-  /chats/{id}/events:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema: { type: string }
+  /chats/events:
     get:
       tags: [chat]
-      summary: Stream a chat's events (SSE)
+      summary: Stream the caller's chat events (SSE), one stream per page
       description: |
-        Server-sent events. Every connect starts with `event: ready`; the
-        client then refetches `GET /chats/{id}`. There is no `id:` and no
-        Last-Event-ID replay. A `: keepalive` comment goes out every 30
-        seconds. Events: `text_delta`, `reasoning`, `tool_call` (state
-        `running` then `done`), `approval`, `usage`, `warning`, `turn_done`,
-        `turn_error` and `chat_end`.
+        Server-sent events for ALL the caller's chats on one connection (a
+        browser allows few HTTP/1.1 connections per origin, so a stream per
+        chat starves the page). Every event's data is an object that carries
+        `chat`, the chat id, next to its other fields. Every connect starts
+        with a page-level `event: ready` (no `chat`); the client then
+        reloads what it shows with `GET /chats/{id}`. A turn end no stream
+        received is sent to the next stream right after `ready`, once. There
+        is no `id:` and no Last-Event-ID replay. A `: keepalive` comment
+        goes out every 30 seconds. Events: `text_delta`, `thinking_delta`,
+        `reasoning`, `tool_call` (state `running` then `done`), `approval`,
+        `usage`, `warning`, `turn_done`, `turn_error`, `chat_state` (the
+        chat's rail row changed: `state` idle, running, awaiting_approval or
+        error, `turns`, `cost_usd`) and `chat_end`. A chat ends 60 seconds
+        after the last page stream of its owner closes.
       operationId: streamChatEvents
       responses:
         "200":
@@ -4264,7 +4268,6 @@ paths:
           content:
             text/event-stream:
               schema: { type: string }
-        "404": { $ref: "#/components/responses/Problem" }
 
   /chats/{id}/turns:
     parameters:

@@ -3,8 +3,6 @@
 // fetchJSON and every event stream through openEventStream, which is what
 // makes the desktop's Wails transport work for chat too.
 import { fetchJSON, apiUrl } from './api';
-import { openEventStream } from './eventStream';
-import type { EventSourceLike } from './eventStream';
 import { CHAT_SEND_TIMEOUT } from './chatCopy';
 
 /** One live chat, as GET /chats lists it. */
@@ -166,12 +164,6 @@ export function deleteChat(id: string): Promise<void> {
   return noContent(chatUrl(id), { method: 'DELETE' });
 }
 
-/** The page is going away: end the chat. `keepalive` lets the request outlive
- *  the page. Fire and forget; the server's stream grace is the backstop. */
-export function endChatOnPageHide(id: string): void {
-  try { void fetch(chatUrl(id), { method: 'DELETE', keepalive: true }).catch(() => {}); } catch { /* going away */ }
-}
-
 export async function listChatGrants(id: string): Promise<ChatGrant[]> {
   const data = await fetchJSON<{ _embedded?: { grants?: ChatGrant[] } }>(`${chatUrl(id)}/grants`);
   return data._embedded?.grants ?? [];
@@ -197,10 +189,10 @@ export function getChatCall(id: string, callId: string): Promise<ChatCall> {
 
 /** The server's SSE event names (internal/edge/web/api/chat/chat.go). */
 export const CHAT_EVENT_NAMES = [
-  'ready', 'text_delta', 'thinking_delta', 'reasoning', 'tool_call', 'approval', 'usage', 'warning', 'turn_done', 'turn_error', 'chat_end',
+  'ready', 'text_delta', 'thinking_delta', 'reasoning', 'tool_call', 'approval', 'usage', 'warning', 'turn_done', 'turn_error', 'chat_state', 'chat_end',
 ] as const;
 export type ChatEventName = typeof CHAT_EVENT_NAMES[number];
 
-export function openChatEvents(id: string): EventSourceLike {
-  return openEventStream(`${chatUrl(id)}/events`);
-}
+/** The page's one events stream (see chatEvents.ts): every chat of the caller,
+ *  each event tagged with `chat`. */
+export const chatEventsUrl = (): string => `${chatsUrl()}/events`;

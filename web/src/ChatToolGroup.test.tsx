@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, fireEvent, cleanup, within } from '@testing-library/react';
 import { ChatFacet } from './ChatFacet';
 import { ChatToolGroup } from './ChatToolGroup';
-import { installFakeEventSource, uninstallFakeEventSource, latestStream } from './testEventSource';
+import { installFakeEventSource, uninstallFakeEventSource, chatStream } from './testEventSource';
 import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatApproval, ChatSnapshot } from './chatApi';
 import { APPROVAL_TARGET_UNRESOLVED } from './chatCopy';
@@ -69,7 +69,7 @@ describe('approvals in a tool row', () => {
     render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} />);
     await screen.findByTestId('chat-tool-group');
     expect(screen.queryByTestId('chat-approval-tu_2')).toBeNull();
-    act(() => { latestStream('/chats/chat-a/events')!.emit('approval', learn); });
+    act(() => { chatStream('chat-a')!.emit('approval', learn); });
     expect(await screen.findByTestId('chat-approval-tu_2')).toBeInTheDocument();
   });
 

@@ -25,10 +25,10 @@ const eventsKeepalive = 30 * time.Second
 func (m *manager) routes(r chi.Router) {
 	r.Get("/chat-providers", m.handleProviders)
 	r.Get("/chats", m.handleList)
+	r.Get("/chats/events", m.handleEvents)
 	r.Post("/chats", m.handleCreate)
 	r.Get("/chats/{id}", m.handleGet)
 	r.Delete("/chats/{id}", m.handleDelete)
-	r.Get("/chats/{id}/events", m.handleEvents)
 	r.Post("/chats/{id}/turns", m.handleTurn)
 	r.Post("/chats/{id}/cancel", m.handleCancel)
 	r.Post("/chats/{id}/approvals/{callId}", m.handleApproval)
@@ -109,7 +109,6 @@ func chatLinks(id string) hal.LinkMap {
 	base := httpx.APIBase + "/chats/" + id
 	return hal.LinkMap{
 		"self":      {Href: base},
-		"events":    {Href: base + "/events"},
 		"turns":     {Href: base + "/turns"},
 		"cancel":    {Href: base + "/cancel"},
 		"approval":  {Href: base + "/approvals/{callId}", Templated: true},
@@ -328,23 +327,23 @@ func (m *manager) handleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleEvents is the page stream: one per browser tab, carrying the events
+// of every chat the caller has, each tagged with its chat id. A chat lives
+// while any page stream of its owner is attached.
 func (m *manager) handleEvents(w http.ResponseWriter, r *http.Request) {
-	c, ok := m.chatOf(w, r)
+	p, ok := caller(w, r)
 	if !ok {
 		return
 	}
-	sub, ok := c.attach()
-	if !ok {
-		hal.WriteProblem(w, http.StatusNotFound, "Not Found", "no such chat", r.URL.Path)
-		return
-	}
-	defer c.detach(sub)
+	sub := m.attachPage(p.String())
+	defer m.detachPage(sub)
 	stream, ok := httpx.StartSSE(w)
 	if !ok {
 		return
 	}
-	// Every connect starts with ready; the client then refetches the chat.
-	// There is no id: and no Last-Event-ID replay (plan P10).
+	// Every connect starts with ready, which is page-level: the client then
+	// reloads what it shows. There is no id: and no Last-Event-ID replay
+	// (plan P10).
 	if !stream.Write("event: ready\ndata: {}\n\n") {
 		return
 	}
@@ -353,6 +352,8 @@ func (m *manager) handleEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-m.life.Done():
 			return
 		case <-keepalive.C:
 			if !stream.Keepalive() {

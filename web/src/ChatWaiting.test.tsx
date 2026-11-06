@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, fireEvent, cleanup, waitFor, within } from '@testing-library/react';
 import { ChatFacet } from './ChatFacet';
-import { installFakeEventSource, uninstallFakeEventSource, latestStream } from './testEventSource';
+import { installFakeEventSource, uninstallFakeEventSource, chatStream } from './testEventSource';
 import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatSnapshot, ChatViewItem } from './chatApi';
 import { CHAT_CONTINUE_MESSAGE } from './chatCopy';
@@ -237,7 +237,7 @@ describe('Stop', () => {
     expect(screen.getByTestId('chat-stopped')).toBeInTheDocument();
     // The server then says the turn finished normally (the stop lost the race): not stopped.
     fx.set(`GET ${BASE}`, { body: snap([{ kind: 'user', text: 'q' }, { kind: 'assistant', text: 'part. done.' }]) });
-    await act(async () => { latestStream('/chats/chat-a/events')!.emit('turn_done', { turn: 0 }); await new Promise(r => setTimeout(r, 20)); });
+    await act(async () => { chatStream('chat-a')!.emit('turn_done', { turn: 0 }); await new Promise(r => setTimeout(r, 20)); });
     expect(screen.queryByTestId('chat-stopped')).toBeNull();
   });
 });
@@ -368,7 +368,7 @@ describe('the thinking placeholder', () => {
     await screen.findByTestId('chat-input');
     send('hello');
     await answer(202, { turn: 0 });
-    const es = latestStream('/chats/chat-a/events')!;
+    const es = chatStream('chat-a')!;
     await tick(1000);
     act(() => { es.emit('thinking_delta', { text: 'Comparing blast radius…', turn: 0 }); });
     await tick(9000); // 10 s in, twice the expected 5000 ms
@@ -393,7 +393,7 @@ describe('the thinking placeholder', () => {
     await screen.findByTestId('chat-input');
     send('hello');
     await answer(202, { turn: 0 });
-    const es = latestStream('/chats/chat-a/events')!;
+    const es = chatStream('chat-a')!;
     act(() => { es.emit('thinking_delta', { text: 'Comparing blast radius: ', turn: 0 }); es.emit('thinking_delta', { text: 'the registry reaches every tenant.', turn: 0 }); });
     expect(screen.getByTestId('chat-thinking-summary').textContent).toBe('Comparing blast radius: the registry reaches every tenant.');
     act(() => { es.emit('text_delta', { text: 'Answer', turn: 0 }); });
@@ -409,7 +409,7 @@ describe('the thinking placeholder', () => {
       await screen.findByTestId('chat-input');
       send('hello');
       await answer(202, { turn: 0 });
-      const es = latestStream('/chats/chat-a/events')!;
+      const es = chatStream('chat-a')!;
       act(() => { es.emit('thinking_delta', { text: 'line one\nline two\nline three\n', turn: 0 }); });
       const box = screen.getByTestId('chat-thinking-summary');
       // 4 lines of 12.5px text at line-height 1.55 = 77.5px, scrolling inside.
@@ -434,7 +434,7 @@ describe('the thinking placeholder', () => {
     send('hello');
     await answer(202, { turn: 0 });
     expect(screen.getByTestId('chat-thinking')).toBeInTheDocument();
-    act(() => { latestStream('/chats/chat-a/events')!.emit('tool_call', { id: 't1', name: 'knomit_repos', state: 'running', turn: 0 }); });
+    act(() => { chatStream('chat-a')!.emit('tool_call', { id: 't1', name: 'knomit_repos', state: 'running', turn: 0 }); });
     expect(screen.queryByTestId('chat-thinking')).toBeNull();
     expect(screen.getByTestId('chat-tool-group')).toBeInTheDocument();
   });
@@ -453,7 +453,7 @@ describe('live tool detail', () => {
   it('a running query shows Searching … for "<q>"… from the live arguments; done adds the result size and duration', async () => {
     mount(snap([{ kind: 'user', text: 'q' }], { running: true }));
     await screen.findByTestId('chat-thinking');
-    const es = latestStream('/chats/chat-a/events')!;
+    const es = chatStream('chat-a')!;
     act(() => { es.emit('tool_call', { id: 't1', name: 'knomit_query', state: 'running', arguments: { text: 'OWASP Q3', binding: 'h1' }, turn: 0 }); });
     expect(screen.getByTestId('chat-activity-live').textContent).toBe('Searching for "OWASP Q3"…');
     expect(screen.getByTestId('chat-activity-steps').textContent).toBe('1 step');
