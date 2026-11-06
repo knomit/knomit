@@ -1888,7 +1888,7 @@ export default function App() {
             {drafts.chat && (
               <div data-testid="draft-chat" style={draftBody(!serverOpen && draftShownKind === 'chat')}>
                 <ErrorBoundary variant="inline" label="New chat hit an error">
-                  <ChatStartForm providers={chatProviders ?? []} onCreated={onChatCreated} onCancel={onCancelDraft} />
+                  <ChatStartForm providers={chatProviders ?? []} repoNames={repos.map(r => r.name)} onCreated={onChatCreated} onCancel={onCancelDraft} />
                 </ErrorBoundary>
               </div>
             )}

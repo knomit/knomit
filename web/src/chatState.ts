@@ -371,6 +371,12 @@ export function compactCount(n: number): string {
   return String(n);
 }
 
+/** The cost mark of a model, from its input price per MTok: `$` under $1, `$$`
+ *  under $3, otherwise `$$$`. */
+export function costTier(inputPerMTok: number): 1 | 2 | 3 {
+  return inputPerMTok < 1 ? 1 : inputPerMTok < 3 ? 2 : 3;
+}
+
 /** sessionCost sums the turns' estimated costs; null when no turn was priced. */
 export function sessionCost(turns: ChatTurn[]): number | null {
   const priced = turns.filter(t => t.costUsd !== null);
