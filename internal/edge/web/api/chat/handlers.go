@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -14,6 +15,7 @@ import (
 	"knomit/internal/edge/web/httpx"
 	"knomit/internal/engine/llm"
 	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/config"
 )
 
 // eventsKeepalive is how often an idle events stream gets a comment frame
@@ -47,12 +49,52 @@ type modelView struct {
 	// ExpectedFirstTokenMS is the slowest time to a first reply this model took
 	// in this server run; absent until one has been observed.
 	ExpectedFirstTokenMS int64 `json:"expected_first_token_ms,omitempty"`
+
+	// Start-screen details, all from config or the provider (llm.ModelStatus).
+	BestFor       string     `json:"best_for,omitempty"`
+	ContextWindow int        `json:"context_window,omitempty"`
+	Effort        string     `json:"effort,omitempty"`
+	Price         *priceView `json:"price,omitempty"`
+	NumCtx        int        `json:"num_ctx,omitempty"`        // ollama
+	ParameterSize string     `json:"parameter_size,omitempty"` // ollama
+	Quantization  string     `json:"quantization,omitempty"`   // ollama
+	KeepAlive     string     `json:"keep_alive,omitempty"`     // ollama
+}
+
+// priceView is a model's configured price card.
+type priceView struct {
+	Tiers            []tierView `json:"tiers"`
+	CacheReadMult    float64    `json:"cache_read_mult"`
+	CacheWrite5mMult float64    `json:"cache_write_5m_mult"`
+	WarnPromptTokens int        `json:"warn_prompt_tokens"`
+}
+
+type tierView struct {
+	UpToPromptTokens int     `json:"up_to_prompt_tokens"` // 0: no upper bound
+	InputPerMTok     float64 `json:"input_per_mtok"`
+	OutputPerMTok    float64 `json:"output_per_mtok"`
+}
+
+func priceOf(c *config.LLMPriceCard) *priceView {
+	if c == nil {
+		return nil
+	}
+	v := &priceView{Tiers: []tierView{}, CacheReadMult: c.CacheReadMult, CacheWrite5mMult: c.CacheWrite5mMult, WarnPromptTokens: c.WarnPromptTokens}
+	for _, t := range c.Tiers {
+		v.Tiers = append(v.Tiers, tierView{UpToPromptTokens: t.UpToPromptTokens, InputPerMTok: t.InputPerMTok, OutputPerMTok: t.OutputPerMTok})
+	}
+	return v
 }
 
 type providerView struct {
-	Name   string      `json:"name"`
-	Kind   string      `json:"kind"`
-	Models []modelView `json:"models"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	// Host is where an Ollama provider runs; KeySource is the NAME of the env
+	// var an anthropic provider reads its key from. Neither is ever a secret.
+	Host      string      `json:"host,omitempty"`
+	KeySource string      `json:"key_source,omitempty"`
+	Reachable bool        `json:"reachable"`
+	Models    []modelView `json:"models"`
 }
 
 type chatItem struct {
@@ -129,9 +171,14 @@ func (m *manager) handleProviders(w http.ResponseWriter, r *http.Request) {
 	var out []providerView
 	if m.reg != nil {
 		for _, p := range m.reg.List(r.Context()) {
-			pv := providerView{Name: p.Name, Kind: p.Kind, Models: []modelView{}}
+			pv := providerView{Name: p.Name, Kind: p.Kind, Host: p.Host, KeySource: p.KeySource, Reachable: p.Reachable, Models: []modelView{}}
 			for _, ms := range p.Models {
-				pv.Models = append(pv.Models, modelView{ID: ms.ID, Name: ms.Name, Available: ms.Available, Tools: ms.Tools, Reason: ms.Reason, ExpectedFirstTokenMS: m.expectedFirstTokenMS(p.Name, ms.ID)})
+				pv.Models = append(pv.Models, modelView{
+					ID: ms.ID, Name: ms.Name, Available: ms.Available, Tools: ms.Tools, Reason: ms.Reason,
+					ExpectedFirstTokenMS: m.expectedFirstTokenMS(p.Name, ms.ID),
+					BestFor:              ms.BestFor, ContextWindow: ms.ContextWindow, Effort: ms.Effort, Price: priceOf(ms.Price),
+					NumCtx: ms.NumCtx, ParameterSize: ms.ParameterSize, Quantization: ms.Quantization, KeepAlive: ms.KeepAlive,
+				})
 			}
 			out = append(out, pv)
 		}
@@ -167,9 +214,24 @@ func sortChatItems(items []chatItem) {
 	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
 }
 
+// startFirstTurn starts a new chat's first turn, as POST /turns starts one. A
+// variable so a test can refuse it (a real refusal needs the chat to end in
+// the instant between its creation and this call).
+var startFirstTurn = func(c *chat, text string) (int, error) { return c.startTurn(text, "") }
+
 type createRequest struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
+	// Message, when present, is the chat's first turn: it starts exactly as
+	// POST /chats/{id}/turns would start it.
+	Message string `json:"message"`
+}
+
+// createdView is the 201 body: the chat, plus the view index of the first turn
+// when a message was sent with it (the same index the 202 of /turns carries).
+type createdView struct {
+	chatItem
+	Turn *int `json:"turn,omitempty"`
 }
 
 func (m *manager) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -178,7 +240,7 @@ func (m *manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createRequest
-	if !httpx.DecodeJSON(w, r, &req, 1<<16) {
+	if !httpx.DecodeJSON(w, r, &req, 1<<20) {
 		return
 	}
 	if req.Provider == "" || req.Model == "" {
@@ -210,7 +272,20 @@ func (m *manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Cannot start the chat", err.Error(), r.URL.Path)
 		return
 	}
-	hal.WriteHALCreated(w, httpx.APIBase+"/chats/"+c.id, itemOf(c))
+	out := createdView{chatItem: itemOf(c)}
+	// A message of only whitespace is no message: the chat is created empty.
+	if message := strings.TrimSpace(req.Message); message != "" {
+		turn, err := startFirstTurn(c, message)
+		if err != nil {
+			// The chat cannot take its first turn (it ended). Do not leave it
+			// behind: the caller was told nothing was created.
+			c.end("first turn refused")
+			hal.WriteProblem(w, http.StatusServiceUnavailable, "Chat unavailable", "the chat ended before its first message could start", r.URL.Path)
+			return
+		}
+		out.Turn = &turn
+	}
+	hal.WriteHALCreated(w, httpx.APIBase+"/chats/"+c.id, out)
 }
 
 type chatView struct {

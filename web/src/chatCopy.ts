@@ -144,7 +144,8 @@ export const CHAT_REPLY_PLACEHOLDER = 'Reply…';
 // Chat UX v2, PR 2 (design sections 2 and 5). Approved by the user on
 // 2026-11-06: the design's copy-table strings for Waiting, Stop and Notices,
 // the counter "4s", the Esc keycap, "1 result" / "N results", "Not sent:
-// <reason> (<status>)", the bare "nothing sent", and the fixed Continue message.
+// <reason> (<status>)", the bare "nothing sent", the duration formats ("840ms",
+// "1.9s", "22s", "1m 12s"), and the fixed Continue message.
 // The server's own sentences ("Send withdrawn", "the send was stopped before
 // the server accepted it") are in the Go handler, verbatim.
 
@@ -180,10 +181,57 @@ export const noticeFullRest = (needed: string, window: string): string =>
 export const NOT_SENT = 'Not sent';
 export const NOT_SENT_RETRY = 'Retry';
 
-// ── PENDING APPROVAL ──
-// Chat UX v2, PR 2: wording the user's PR 2 ruling did not list. Not approved yet.
-
 /** A tool's run time on a timeline row and in "N steps · T": 840ms, 1.9s, 22s, 1m 12s. */
 export const durationMs = (ms: number): string => `${ms}ms`;
 export const durationSeconds = (s: number): string => `${s}s`;
 export const durationMinutes = (m: number, s: number): string => `${m}m ${s}s`;
+
+
+// ── APPROVED (2026-11-06) ──
+// Chat UX v2, PR 5 (design section 1, the start screen). Approved by the user
+// on 2026-11-06: every section 1 string of the design's copy table, "free" on
+// Ollama cards, the labels Context, Effort, Cost, Size, Keep alive, "none" and
+// "cloud ·", and the formats "$x / MTok", "N tokens" and "N (num_ctx)". The
+// strings the design gives are marked "design"; the rest are the mockup's
+// wording (P1-new-chat.png).
+
+/** design: the heading and the line under it. */
+export const START_HEADING = 'Start a chat';
+export const START_INTRO = 'Pick a model, then ask. It can read every repo and lens you can; anything that writes asks you first.';
+/** design: the composer. `name` is the selected model's display name. */
+export const startPlaceholder = (name: string): string => `Ask ${name} about your knowledge…`;
+export const START_HINT = 'Enter to start · Shift+Enter for a new line';
+export const START_BUTTON = 'Start chat';
+/** design: the reachability word beside a provider. */
+export const PROVIDER_CONNECTED = 'connected';
+export const PROVIDER_RUNNING = 'running';
+/** design: the card's tags. "Price tier at 100K": the number is the model's own first tier. */
+export const TAG_DEFAULT = 'Default';
+export const TAG_TOOLS = 'Tools';
+export const TAG_OLLAMA = 'Ollama';
+export const TAG_NO_TOOLS = 'No tools';
+export const tagPriceTier = (at: string): string => `Price tier at ${at}`;
+/** design: the cost mark of a model that costs nothing. */
+export const COST_FREE = 'free';
+/** design, Suggestions. {repo} is a repo the reader has. */
+export const SUGGEST_CHANGED = 'What changed in knomit-kb this week?';
+export const SUGGEST_BIND = 'Bind to the all lens';
+export const suggestReview = (repo: string): string => `Review open items in ${repo}`;
+export const suggestContradictions = (repo: string): string => `Find contradictions in ${repo}`;
+
+/** Reused from approved PR 1 copy: "Input", "Output" and "Cache read" are
+ *  COST_ROW_INPUT, COST_ROW_OUTPUT and COST_ROW_CACHE_READ. From the mockup: */
+export const STAT_CONTEXT = 'Context';
+export const STAT_EFFORT = 'Effort';
+export const STAT_COST = 'Cost';
+export const STAT_SIZE = 'Size';
+export const STAT_KEEP_ALIVE = 'Keep alive';
+/** A price: "$0.10 / MTok". */
+export const perMTok = (usd: string): string => `${usd} / MTok`;
+/** An Ollama model's cost. */
+export const COST_NONE = 'none';
+/** A context window: "1M tokens", "32K (num_ctx)". */
+export const contextTokens = (n: string): string => `${n} tokens`;
+export const contextNumCtx = (n: string): string => `${n} (num_ctx)`;
+/** The cloud provider's "where it runs" prefix: "cloud · ANTHROPIC_API_KEY". */
+export const PROVIDER_CLOUD = 'cloud';

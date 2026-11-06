@@ -147,6 +147,8 @@ type LLMModelConfig struct {
 	Effort          string `toml:"effort"` // low|medium|high|xhigh|max; always sent
 	MaxOutputTokens int    `toml:"max_output_tokens"`
 	ThinkingDisplay string `toml:"thinking_display"` // summarized|omitted
+	// BestFor is one line the start screen shows on the model's card; optional.
+	BestFor string `toml:"best_for"`
 	// ContextWindow is this model's window in tokens (anthropic). It comes
 	// from config, not code: Haiku, Sonnet and Opus 5.5 are 1M.
 	ContextWindow int           `toml:"context_window"`

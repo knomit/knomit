@@ -10,13 +10,25 @@ import { CHAT_SEND_TIMEOUT } from './chatCopy';
 /** One live chat, as GET /chats lists it. */
 /** `name` is the model's display name; the server always sends it (the id when
  *  the config gives none), and a reader falls back to `model` when it is absent. */
-export interface ChatInfo { id: string; provider: string; model: string; name?: string }
+export interface ChatInfo { id: string; provider: string; model: string; name?: string;
+  /** Only on a chat created with its first message: that turn's view index. */
+  turn?: number }
 
 /** A model the picker offers: `name` is what a person sees (its id when the
  *  config gives none), `available` is the provider's own answer, `tools`
  *  whether it can call tools, `reason` says why a model is unusable. */
-export interface ChatModelOption { id: string; name?: string; available: boolean; tools: boolean; reason?: string }
-export interface ChatProvider { name: string; kind: string; models: ChatModelOption[] }
+export interface ChatPriceTier { up_to_prompt_tokens: number; input_per_mtok: number; output_per_mtok: number }
+/** A model's configured price card (the server sends it; no price lives in the page). */
+export interface ChatPrice { tiers: ChatPriceTier[]; cache_read_mult: number; cache_write_5m_mult: number; warn_prompt_tokens: number }
+export interface ChatModelOption {
+  id: string; name?: string; available: boolean; tools: boolean; reason?: string;
+  best_for?: string; context_window?: number; effort?: string; price?: ChatPrice;
+  /** Ollama only. */
+  num_ctx?: number; parameter_size?: string; quantization?: string; keep_alive?: string;
+}
+/** `host` is where an Ollama provider runs; `key_source` is the NAME of the
+ *  env var an Anthropic key is read from (never the key). */
+export interface ChatProvider { name: string; kind: string; host?: string; key_source?: string; reachable?: boolean; models: ChatModelOption[] }
 
 /** A row of GET /chats/{id}'s transcript. Tool results are not in it: they are
  *  fetched lazily from the call (getChatCall). */
@@ -88,9 +100,12 @@ export async function listChats(): Promise<ChatInfo[]> {
   return (data._embedded?.chats ?? []).map(({ id, provider, model, name }) => ({ id, provider, model, name }));
 }
 
-export async function createChat(provider: string, model: string): Promise<ChatInfo> {
-  const c = await fetchJSON<ChatInfo>(chatsUrl(), { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ provider, model }) });
-  return { id: c.id, provider: c.provider, model: c.model, name: c.name };
+/** Start a chat. With `message` the first turn starts in the same call, and the
+ *  result carries that turn's index. */
+export async function createChat(provider: string, model: string, message?: string): Promise<ChatInfo> {
+  const body = message ? { provider, model, message } : { provider, model };
+  const c = await fetchJSON<ChatInfo>(chatsUrl(), { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body) });
+  return { id: c.id, provider: c.provider, model: c.model, name: c.name, ...(c.turn !== undefined ? { turn: c.turn } : {}) };
 }
 
 export function getChat(id: string): Promise<ChatSnapshot> {

@@ -6,7 +6,7 @@ import type { RepoInfo } from './api';
 import { BookIcon, FleetIcon, GearIcon, LayersIcon, ProviderIcon } from './icons';
 import { noMouseFocus } from './utils';
 import { useMatFocus } from './matFocus';
-import { otherRepoFailing } from './facets';
+import { CHAT_ACCENT, FLEET_ACCENT, otherRepoFailing } from './facets';
 import { ChatPill } from './ChatPill';
 import type { Facet, ServerPage, TargetLabel } from './facets';
 
@@ -146,13 +146,13 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
   // The label names the DISPLAYED target, which is the browse context unless a
   // settings-only target is pinned or a draft is on screen. A draft is named
   // by what it will create, in the create flow's blue (a lens draft in the
-  // lens accent).
+  // lens accent, a chat draft in the chat amber).
   const target: TargetLabel = given ?? (lensCtx
     ? { kind: 'lens', name: state.context.kind === 'lens' ? state.context.name : '' }
     : { kind: 'repo', name: state.repo });
   const label = {
     name: target.name,
-    color: target.kind === 'lens' ? LENS_ACCENT : target.draft ? '#8ab6d6' : target.kind === 'fleet' ? FLEET_ACCENT : target.kind === 'chat' ? CHAT_ACCENT : '#7c9',
+    color: target.kind === 'lens' ? LENS_ACCENT : target.kind === 'chat' ? CHAT_ACCENT : target.draft ? '#8ab6d6' : target.kind === 'fleet' ? FLEET_ACCENT : '#7c9',
     icon: target.kind === 'lens' ? <LayersIcon color="currentColor" size={13} />
       : target.kind === 'fleet' ? <FleetIcon color="currentColor" size={13} />
         : target.kind === 'chat' ? <ProviderIcon kind={target.provider?.kind} name={target.provider?.name ?? ''} color="currentColor" size={13} />
@@ -372,9 +372,6 @@ const tabBadge: CSSProperties = {
 
 // The spec's lens accent, for the label.
 const LENS_ACCENT = '#b9a6f0';
-// The fleet's teal (Q5): its row, its crumb and the master chip.
-const FLEET_ACCENT = '#8ad6c8';
-const CHAT_ACCENT = '#e8c27a';
 
 // The label's state chip: the rail's chip geometry, in the spec's tones —
 // archive warm, error red, creating blue.
