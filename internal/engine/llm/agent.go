@@ -513,6 +513,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 	}
 	var results []Block
 	var approvals []Approval
+	stubSeen := map[string]bool{} // stub calls answered "call it again" in this response, by name and arguments
 	answer := func(c ToolUse, content string, isErr bool) {
 		tr := &ToolResult{ToolUseID: c.ID, Content: content, IsError: isErr}
 		results = append(results, Block{Kind: BlockToolResult, ToolResult: tr})
@@ -557,8 +558,21 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 				// The loader, or a call to a tool the model had not loaded:
 				// answered here, run by nobody, so it needs no approval. The
 				// loader's decision is recorded as auto; a not-run call has none.
-				out := l.Window.Run(c, l.Builder.Snapshot(), l.roomLeft, l.pinnedTools())
-				l.emitToolChanges(res)
+				stub := c.Name != LoadToolsName
+				skey := callKey(c)
+				var out ToolOutcome
+				if stub && stubSeen[skey] {
+					// An identical stub call already in this response: one
+					// episode. The tool is loaded; the instruction to call
+					// again was given once, with the first.
+					out = ToolOutcome{Content: fmt.Sprintf(AlreadyLoadedResult, c.Name), IsError: true}
+				} else {
+					out = l.Window.Run(c, l.Builder.Snapshot(), l.roomLeft, l.pinnedTools())
+					l.emitToolChanges(res)
+					if stub && out.Content == fmt.Sprintf(NotLoadedCallResult, c.Name) {
+						stubSeen[skey] = true
+					}
+				}
 				if c.Name == LoadToolsName {
 					approvals = append(approvals, Approval{ToolUseID: c.ID, Decision: "auto"})
 					if l.Log != nil {
@@ -567,6 +581,13 @@ func (l *Loop) runCalls(ctx context.Context, calls []ToolUse, res *TurnResult, m
 				}
 				answer(c, out.Content, out.IsError)
 				l.logCall(c, out.Content, out.IsError)
+				if stubSeen[skey] {
+					// A call that took the not-loaded path is not a failure of
+					// the model's: the tool is loaded and the call is to be
+					// made again. It breaks a streak and never extends one.
+					guard.reset()
+					continue
+				}
 				if n := guard.observe(c, out); n >= RepeatFailureLimit {
 					abort(i+1, SkippedResult)
 					return results, approvals, repeatedFailure(c.Name, n, truncateForMessage(out.Content, 300))

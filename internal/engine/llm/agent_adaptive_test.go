@@ -23,6 +23,7 @@ type rig struct {
 	events []LoopEvent
 	log    *recLog
 	allow  bool
+	fail   bool   // when set, every host call fails with its out text
 	out    string // when set, what every host call returns instead of "result of <name>"
 }
 
@@ -33,7 +34,7 @@ func (r *rig) CallTool(_ context.Context, name string, args json.RawMessage) (To
 		return ToolOutcome{}, fmt.Errorf("unknown tool %q", name)
 	}
 	if r.out != "" {
-		return ToolOutcome{Content: r.out}, nil
+		return ToolOutcome{Content: r.out, IsError: r.fail}, nil
 	}
 	return ToolOutcome{Content: "result of " + name}, nil
 }

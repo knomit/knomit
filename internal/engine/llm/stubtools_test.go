@@ -122,3 +122,67 @@ func TestLoop_StubCallsInOneBatchAreAllAnsweredAndNoneRun(t *testing.T) {
 	}
 	require.Empty(t, hook1Stubs(m.snaps[1]), "both are loaded now")
 }
+
+func stubBatch(ids ...string) *Response {
+	var calls []ToolUse
+	for _, id := range ids {
+		calls = append(calls, ToolUse{ID: id, Name: "knomit_learn", Args: json.RawMessage(`{}`)})
+	}
+	return multiResp(Usage{}, calls...)
+}
+
+// The live repro (acceptance run 3): one response carries three identical
+// knomit_learn({}) stub calls. They are one episode, not three failures: the
+// tool loads once, the model reads "call it again" once, every tool_use is
+// still paired, the turn stays alive and the real call that follows runs.
+//
+// SABOTAGE: agent.go runCalls, window branch: observe the stub outcome with
+// guard.observe again -> the turn ends with ErrRepeatedFailure and this fails.
+func TestLoop_ThreeIdenticalStubCallsAreOneEpisodeNotAFailureStreak(t *testing.T) {
+	m := &fakeModel{steps: []fakeStep{
+		{resp: stubBatch("a", "b", "c")},
+		{resp: toolResp("real", "knomit_learn", `{"facts":[1]}`, Usage{})},
+		{resp: textResp("done", Usage{})},
+	}}
+	r := newRig(t, m, winTool("knomit_query", 100), winTool("knomit_learn", 300))
+	_, err := r.l.RunTurn(context.Background(), "record this")
+	require.NoError(t, err, "the turn is not ended by the repeated-failure guard")
+	require.Len(t, m.snaps, 3)
+
+	for _, id := range []string{"a", "b", "c"} {
+		require.NotNil(t, resultText(m.snaps[1], id), "%s is paired", id)
+	}
+	require.Equal(t, fmt.Sprintf(NotLoadedCallResult, "knomit_learn"), resultText(m.snaps[1], "a").Content)
+	for _, id := range []string{"b", "c"} {
+		require.Equal(t, fmt.Sprintf(AlreadyLoadedResult, "knomit_learn"), resultText(m.snaps[1], id).Content,
+			"the duplicates do not repeat the call-again instruction")
+	}
+	loads := 0
+	for _, e := range r.events {
+		if e.Kind == LoopToolsChanged {
+			loads++
+		}
+	}
+	require.Equal(t, 1, loads, "the tool loads once")
+	require.Equal(t, []hostCall{{"knomit_learn", `{"facts":[1]}`}}, r.calls, "the real call ran, the stubs did not")
+	require.Equal(t, "result of knomit_learn", resultText(m.snaps[2], "real").Content)
+}
+
+// A real call that fails is still counted: three identical failures in an
+// adaptive chat end the turn, exactly as in a static one.
+//
+// SABOTAGE: agent.go runCalls, delete the closing `guard.observe` block ->
+// fails (the turn runs on).
+func TestLoop_RealFailingCallsStillTripTheGuardInAnAdaptiveChat(t *testing.T) {
+	var steps []fakeStep
+	steps = append(steps, fakeStep{resp: stubBatch("s1")})
+	for i := 1; i <= 5; i++ {
+		steps = append(steps, fakeStep{resp: toolResp(fmt.Sprintf("r%d", i), "knomit_learn", `{"a":1}`, Usage{})})
+	}
+	m := &fakeModel{steps: steps}
+	r := newRig(t, m, winTool("knomit_query", 100), winTool("knomit_learn", 300))
+	r.out, r.fail = "category is required", true
+	_, err := r.l.RunTurn(context.Background(), "record this")
+	require.ErrorIs(t, err, ErrRepeatedFailure)
+	require.Len(t, r.calls, RepeatFailureLimit, "the stub call did not count, the real ones did")
+}
