@@ -31,6 +31,8 @@ type snapshotView struct {
 	ExpectedFirstTokenMS int64 `json:"expected_first_token_ms"`
 	Items                []struct {
 		Kind        string               `json:"kind"`
+		SendID      string               `json:"send_id"`
+		Text        string               `json:"text"`
 		ID          string               `json:"id"`
 		DurationMS  int64                `json:"duration_ms"`
 		Summary     *struct{ Count int } `json:"summary"`
@@ -351,6 +353,44 @@ func TestChat_ExpectedFirstTokenIsTheSlowestObserved(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "fast"))
 	drive(t, h, "uid:501", id, s, nil)
 	require.Equal(t, first, h.snapshot("uid:501", id).ExpectedFirstTokenMS, "a faster reply does not lower the slowest")
+}
+
+// The snapshot's user item carries the send id of the POST that started it: the
+// exact identity the page matches its own send by. Another send's turn, and a
+// turn that came without an id, do not carry ours.
+func TestChat_SnapshotUserItemCarriesItsSendID(t *testing.T) {
+	h := newHarness(t)
+	h.queue("a1", textStep("one", usage), textStep("two", usage), textStep("three", usage))
+	id := h.create("uid:501", "a1")
+	s := h.attach("uid:501", id)
+	require.Equal(t, http.StatusAccepted, h.sendTurn("uid:501", id, "from this tab", "tab-A-1"))
+	drive(t, h, "uid:501", id, s, nil)
+	require.Equal(t, http.StatusAccepted, h.sendTurn("uid:501", id, "from another tab", "tab-B-7"))
+	drive(t, h, "uid:501", id, s, nil)
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "no id at all"))
+	drive(t, h, "uid:501", id, s, nil)
+
+	var got [][2]string
+	for _, it := range h.snapshot("uid:501", id).Items {
+		if it.Kind == "user" {
+			got = append(got, [2]string{it.Text, it.SendID})
+		}
+	}
+	require.Equal(t, [][2]string{{"from this tab", "tab-A-1"}, {"from another tab", "tab-B-7"}, {"no id at all", ""}}, got)
+}
+
+// A send withdrawn by a timeout's cancel, whose POST then arrives late, starts
+// no turn: the snapshot never lists its id, so the page's restored text is the
+// only copy.
+func TestChat_LateArrivingPostAfterATimeoutCancelLeavesNoTurn(t *testing.T) {
+	h := newHarness(t)
+	m := h.queue("a1", textStep("never", usage))
+	id := h.create("uid:501", "a1")
+	require.Equal(t, http.StatusNoContent, h.cancelSend("uid:501", id, "late-1"))
+	require.Equal(t, http.StatusConflict, h.sendTurn("uid:501", id, "late text", "late-1"))
+	snap := h.snapshot("uid:501", id)
+	require.Empty(t, snap.Items)
+	require.Empty(t, m.requests())
 }
 
 // A second Stop for the same send changes nothing: one entry, still withdrawn once.

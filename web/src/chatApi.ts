@@ -40,6 +40,8 @@ export interface ChatViewItem {
   duration_ms?: number; summary?: ChatCallSummary;
   /** On a user item: the structured detail of `warning` and of `error`. */
   warning_info?: ChatNotice; error_info?: ChatNotice;
+  /** On a user item: the send_id of the POST that started the turn (absent for a turn that came without one). */
+  send_id?: string;
   /** On a user item: how the turn it opens went (see chat.go viewItem). */
   usage?: { input: number; cache_read: number; cache_write: number; output: number };
   cost_usd?: number; warning?: string; error?: string; cancelled?: boolean;

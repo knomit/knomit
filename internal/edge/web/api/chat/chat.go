@@ -49,6 +49,11 @@ type viewItem struct {
 	DurationMS int64        `json:"duration_ms,omitempty"`
 	Summary    *callSummary `json:"summary,omitempty"`
 
+	// SendID, on a "user" item, is the send_id the page put on the POST that
+	// started the turn ("" for a turn that came without one). It is how the page
+	// tells whether ITS send landed: an exact identity, not a count of messages.
+	SendID string `json:"send_id,omitempty"`
+
 	// On a "user" item only: what the page shows for the turn it opens, so a
 	// snapshot is the whole truth about the turn and the page patches nothing.
 	Usage   *turnUsage `json:"usage,omitempty"`    // summed over the turn's requests
@@ -468,10 +473,10 @@ func (c *chat) startTurn(text, sendID string) (int, error) {
 	c.turnBegan, c.firstSeen = time.Now(), false
 	c.turnAt = len(c.view)
 	turn := c.turnAt
-	c.view = append(c.view, viewItem{Kind: "user", Text: text})
+	c.view = append(c.view, viewItem{Kind: "user", Text: text, SendID: sendID})
 	c.turns.Add(1)
 	c.mu.Unlock()
-	c.store.appendTranscript(viewItem{Kind: "user", Text: text})
+	c.store.appendTranscript(viewItem{Kind: "user", Text: text, SendID: sendID})
 
 	go func() {
 		defer c.turns.Done()

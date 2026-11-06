@@ -30,8 +30,6 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
   const [notSent, setNotSent] = useState<{ text: string; reason: string } | null>(null);
   // A send the person had stopped (its text was put back in the composer) that the server accepted after all.
   const [landed, setLanded] = useState<{ text: string } | null>(null);
-  // The server turns the page knew when each send went out, to tell whether a snapshot lists that send.
-  const turnsBefore = useRef(new Map<number, number>());
   const goneRef = useRef(onGone);
   const sendSeq = useRef(0);
   // The id each send goes out under, so a Stop can name it to the server; and
@@ -138,15 +136,16 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
     return () => window.removeEventListener('pagehide', onHide);
   }, [chatId]);
 
-  /** Whether the server accepted send `sendId`: read the snapshot and see
-   *  whether it lists one more person message than the page knew when the send
-   *  went out. The snapshot is applied either way. */
+  /** Whether the server accepted send `sendId`: the snapshot's user items carry
+   *  the send_id of the POST that started them, so ours is there or it is not.
+   *  Nothing is counted: another tab's turn, this tab's earlier turns and a
+   *  queued POST cannot be mistaken for it. The snapshot is applied either way. */
   const accepted = useCallback((sendId: number): Promise<boolean> => getChat(chatId).then(snapshot => {
-    const known = turnsBefore.current.get(sendId) ?? 0;
-    const listed = snapshot.items.filter(i => i.kind === 'user').length;
-    if (listed > known) acceptedRef.current.add(sendId);
+    const wire = wireIds.current.get(sendId);
+    const yes = wire !== undefined && snapshot.items.some(i => i.kind === 'user' && i.send_id === wire);
+    if (yes) acceptedRef.current.add(sendId);
     dispatch({ kind: 'ready', snapshot, confirmed: [...acceptedRef.current] });
-    return listed > known;
+    return yes;
   }), [chatId]);
   const send = useCallback((text: string) => {
     setActionError('');
@@ -155,7 +154,6 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
     const sendId = ++sendSeq.current;
     const wire = `${tag}-${sendId}`;
     wireIds.current.set(sendId, wire);
-    turnsBefore.current.set(sendId, stateRef.current.turns.filter(t => !t.local).length);
     dispatch({ kind: 'user', text, sendId });
     sendChatTurn(chatId, text, wire).then(body => {
       acceptedRef.current.add(sendId);
@@ -177,11 +175,15 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
       if (statusOf(e) === 404) { goneRef.current(chatId); return; }
       const reason = `${refusalReason(errText(e))}${statusOf(e) ? ` (${statusOf(e)})` : ''}`;
       if (statusOf(e) !== undefined) { setNotSent({ text, reason }); return; }
-      // No status means no answer (a timeout, a dropped connection): the server
-      // may have appended the turn anyway. Ask it: if it has the turn, the
-      // text is in the transcript and must not also wait in the composer (Retry
-      // would send it twice).
-      accepted(sendId).then(yes => { if (!yes) setNotSent({ text, reason }); })
+      // No status means no answer (a timeout, a dropped connection): the POST
+      // may still be on its way. Stop it by name first, so a late arrival is
+      // refused (and one the server already runs under this id is ended), then
+      // ask which: if the snapshot lists this send_id the text is in the
+      // transcript and must not also wait in the composer (Retry would send it
+      // twice); if not, it is the only copy and goes back.
+      cancelChatTurn(chatId, wire).catch(() => { /* unreachable: the snapshot read below says what is true */ })
+        .then(() => accepted(sendId))
+        .then(yes => { if (!yes) setNotSent({ text, reason }); })
         .catch(() => { setNotSent({ text, reason }); refreshRef.current(); });
     });
   }, [chatId, tag, accepted]);

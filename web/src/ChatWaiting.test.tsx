@@ -5,6 +5,7 @@ import { installFakeEventSource, uninstallFakeEventSource, latestStream } from '
 import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatSnapshot, ChatViewItem } from './chatApi';
 import { CHAT_CONTINUE_MESSAGE } from './chatCopy';
+import { SEND_TIMEOUT_MS } from './chatApi';
 import { chatReducer, initialChatState, snapshotState, formatDuration, noticeCount, refusalReason } from './chatState';
 import type { ChatEvent } from './chatState';
 
@@ -31,7 +32,10 @@ function mount(s: ChatSnapshot, opts: { facet?: 'chat' | 'settings'; onNewChat?:
     if (init?.method === 'POST' && url.endsWith('/turns')) {
       void inner(input, init); // recorded by the stub
       turn.pending = true;
-      return new Promise<Response>(r => { turn.resolve = r; });
+      return new Promise<Response>((r, rej) => {
+        turn.resolve = r;
+        init.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')));
+      });
     }
     return inner(input, init);
   }));
@@ -112,11 +116,26 @@ describe('Stop', () => {
     fireEvent.click(screen.getByTestId('chat-stop'));
     expect(composer().value).toBe('Retract only the ones in knomit-kb');
     await waitFor(() => expect(calls('/cancel')).toHaveLength(1));
-    // The server had already taken the turn (and the cancel ended it): the POST answers 202, the snapshot lists it.
-    fx.set(`GET ${BASE}`, { body: snap([{ kind: 'user', text: 'Retract only the ones in knomit-kb', cancelled: true, error: 'The turn was cancelled.' }]) });
+    // The server had already taken the turn (and the cancel ended it): the POST answers 202, the snapshot lists it under OUR send id.
+    const sendId = (calls('/turns')[0].body as { send_id: string }).send_id;
+    fx.set(`GET ${BASE}`, { body: snap([{ kind: 'user', text: 'Retract only the ones in knomit-kb', send_id: sendId, cancelled: true, error: 'The turn was cancelled.' }]) });
     await answer(202, { turn: 0 });
     await waitFor(() => expect(composer().value).toBe(''));
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['Retract only the ones in knomit-kb']);
+    expect(screen.queryByTestId('chat-not-sent')).toBeNull();
+  });
+
+  it('a Stop that lost the race, but the snapshot holds only ANOTHER tab\'s user item: the restored text stays (it is the only copy)', async () => {
+    const { fx, calls, answer } = mount(snap([{ kind: 'user', text: 'earlier' }, { kind: 'assistant', text: 'a' }]));
+    await screen.findByTestId('chat-turn-0');
+    send('my words');
+    fireEvent.click(screen.getByTestId('chat-stop'));
+    await waitFor(() => expect(calls('/cancel')).toHaveLength(1));
+    // One MORE user item than before, but it is another tab's send, not ours: a count would have taken it for ours.
+    fx.set(`GET ${BASE}`, { body: snap([{ kind: 'user', text: 'earlier' }, { kind: 'assistant', text: 'a' }, { kind: 'user', text: 'typed in another tab', send_id: 'other-tab-1' }]) });
+    await answer(202, { turn: 2 });
+    await new Promise(r => setTimeout(r, 50));
+    expect(composer().value).toBe('my words');
     expect(screen.queryByTestId('chat-not-sent')).toBeNull();
   });
 
@@ -127,7 +146,8 @@ describe('Stop', () => {
     fireEvent.click(screen.getByTestId('chat-stop'));
     type('first draft\nand more');
     await waitFor(() => expect(calls('/cancel')).toHaveLength(1));
-    fx.set(`GET ${BASE}`, { body: snap([{ kind: 'user', text: 'first draft', cancelled: true, error: 'The turn was cancelled.' }]) });
+    const sendId = (calls('/turns')[0].body as { send_id: string }).send_id;
+    fx.set(`GET ${BASE}`, { body: snap([{ kind: 'user', text: 'first draft', send_id: sendId, cancelled: true, error: 'The turn was cancelled.' }]) });
     await answer(202, { turn: 0 });
     await waitFor(() => expect(composer().value).toBe('and more'));
   });
@@ -214,6 +234,58 @@ describe('Stop', () => {
     fx.set(`GET ${BASE}`, { body: snap([{ kind: 'user', text: 'q' }, { kind: 'assistant', text: 'part. done.' }]) });
     await act(async () => { latestStream('/chats/chat-a/events')!.emit('turn_done', { turn: 0 }); await new Promise(r => setTimeout(r, 20)); });
     expect(screen.queryByTestId('chat-stopped')).toBeNull();
+  });
+});
+
+describe('a send that times out: the snapshot decides, by send_id', () => {
+  const EARLIER: ChatViewItem[] = [{ kind: 'user', text: 'earlier', send_id: 'old-1' }, { kind: 'assistant', text: 'a' }];
+
+  /** Send `text` into a non-empty chat, let the 15 s bound pass with the POST unanswered, and return what the page did. */
+  async function timeOut(after: (sendId: string) => ChatViewItem[]) {
+    const m = mount(snap(EARLIER));
+    await screen.findByTestId('chat-turn-0');
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    try {
+      send('my words');
+      const sendId = (m.calls('/turns')[0].body as { send_id: string }).send_id;
+      m.fx.set(`GET ${BASE}`, { body: snap(after(sendId)) });
+      await act(async () => { await vi.advanceTimersByTimeAsync(SEND_TIMEOUT_MS + 1); });
+      return { ...m, sendId };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it('(a) the snapshot holds ANOTHER tab\'s user item and not ours: the text is restored and "Not sent" shows', async () => {
+    const { calls, sendId } = await timeOut(() => [...EARLIER, { kind: 'user', text: 'typed in another tab', send_id: 'other-tab-1' }]);
+    await waitFor(() => expect(screen.getByTestId('chat-not-sent')).toBeInTheDocument());
+    await waitFor(() => expect(composer().value).toBe('my words'));
+    expect(screen.getByTestId('chat-not-sent').textContent).toBe('Not sent: no answerRetry');
+    // The send was stopped by name, so a late arrival cannot start a turn.
+    expect(calls('/cancel').map(c => c.body)).toEqual([{ send_id: sendId }]);
+    // Both the person's earlier turn and the other tab's are in the transcript, ours is not.
+    expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['earlier', 'typed in another tab']);
+  });
+
+  it('(b) a non-empty transcript in which OURS landed: the text is not restored and nothing says "Not sent"', async () => {
+    const { calls, sendId } = await timeOut(id => [...EARLIER, { kind: 'user', text: 'my words', send_id: id }]);
+    await waitFor(() => expect(screen.getAllByTestId('chat-user')).toHaveLength(2));
+    await new Promise(r => setTimeout(r, 50));
+    expect(composer().value).toBe('');
+    expect(screen.queryByTestId('chat-not-sent')).toBeNull();
+    expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['earlier', 'my words']);
+    expect(calls('/cancel').map(c => c.body)).toEqual([{ send_id: sendId }]);
+  });
+
+  it('(c) after the timeout the late POST arrives: it is refused (409 Send withdrawn), so no duplicate turn and the restored text stays', async () => {
+    const { answer, calls } = await timeOut(() => EARLIER);
+    await waitFor(() => expect(screen.getByTestId('chat-not-sent')).toBeInTheDocument());
+    await waitFor(() => expect(composer().value).toBe('my words'));
+    await answer(409, { title: 'Send withdrawn', detail: 'the send was stopped before the server accepted it' });
+    expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['earlier']);
+    expect(composer().value).toBe('my words');
+    expect(screen.getByTestId('chat-not-sent').textContent).toBe('Not sent: no answerRetry');
+    expect(calls('/turns')).toHaveLength(1);
   });
 });
 
