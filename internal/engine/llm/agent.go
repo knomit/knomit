@@ -168,8 +168,30 @@ type PriceCard struct {
 // used: Usage.CacheWrite5m at CacheWrite5mMult and Usage.CacheWrite1h at
 // CacheWrite1hMult. Any part of Usage.CacheWrite the adapter did not split is
 // priced at the 5m multiplier, the API's default TTL.
+//
+// Rows is the same figure split by token kind, and USD is exactly their sum, so
+// a page that shows the rows and the total cannot disagree. High is set when
+// the request fell in the higher price tier (a summed Cost: when any did).
 type Cost struct {
-	USD float64
+	USD  float64
+	Rows CostRows
+	High bool
+}
+
+// CostRows is a cost in USD by token kind. CacheWrite covers both TTLs.
+type CostRows struct {
+	Input, CacheRead, CacheWrite, Output float64
+}
+
+// Add sums two costs; the rows add by kind.
+func (c Cost) Add(o Cost) Cost {
+	return Cost{
+		USD: c.USD + o.USD, High: c.High || o.High,
+		Rows: CostRows{
+			Input: c.Rows.Input + o.Rows.Input, CacheRead: c.Rows.CacheRead + o.Rows.CacheRead,
+			CacheWrite: c.Rows.CacheWrite + o.Rows.CacheWrite, Output: c.Rows.Output + o.Rows.Output,
+		},
+	}
 }
 
 // Estimate prices u. A nil card has no prices and returns the zero Cost.
@@ -178,16 +200,18 @@ func (c *PriceCard) Estimate(u Usage) Cost {
 		return Cost{}
 	}
 	in, out := c.InputPerMTok, c.OutputPerMTok
-	if c.TierTokens > 0 && promptTokens(u) > int64(c.TierTokens) {
+	high := c.TierTokens > 0 && promptTokens(u) > int64(c.TierTokens)
+	if high {
 		in, out = c.HighInputPerMTok, c.HighOutputPerMTok
 	}
 	unsplit := max(u.CacheWrite-u.CacheWrite5m-u.CacheWrite1h, 0)
-	usd := float64(u.Input)*in +
-		float64(u.CacheRead)*in*c.CacheReadMult +
-		float64(u.CacheWrite5m+unsplit)*in*c.CacheWrite5mMult +
-		float64(u.CacheWrite1h)*in*c.CacheWrite1hMult +
-		float64(u.Output)*out
-	return Cost{USD: usd / 1e6}
+	rows := CostRows{
+		Input:      float64(u.Input) * in / 1e6,
+		CacheRead:  float64(u.CacheRead) * in * c.CacheReadMult / 1e6,
+		CacheWrite: (float64(u.CacheWrite5m+unsplit)*in*c.CacheWrite5mMult + float64(u.CacheWrite1h)*in*c.CacheWrite1hMult) / 1e6,
+		Output:     float64(u.Output) * out / 1e6,
+	}
+	return Cost{USD: rows.Input + rows.CacheRead + rows.CacheWrite + rows.Output, Rows: rows, High: high}
 }
 
 // promptTokens is everything the request sent as input.
@@ -856,7 +880,7 @@ func (l *Loop) account(res *TurnResult, snap Snapshot, resp *Response) {
 	res.Usage.CacheWrite1h += u.CacheWrite1h
 	if l.Price != nil {
 		c := l.Price.Estimate(u)
-		res.Cost.USD += c.USD
+		res.Cost = res.Cost.Add(c)
 		ev.Cost = &c
 	}
 	if l.Log != nil {
