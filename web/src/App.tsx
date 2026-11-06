@@ -1451,6 +1451,22 @@ export default function App() {
     addChat(chat);
     dispatchView({ type: 'SELECT_PINNED', target: { kind: 'chat', id: chat.id }, available: facetsFor({ kind: 'chat', id: chat.id }, repos, lenses, creates) });
   }), [addChat, dispatchView, repos, lenses, creates]);
+  // The chat side panel's "Open in Browse": switch to the repository, then
+  // open the fact once its branch has landed (a context switch clears it).
+  const pendingBrowse = useRef<{ repo: string; path: string } | null>(null);
+  const openPendingBrowse = useCallback(() => {
+    const p = pendingBrowse.current;
+    const cur = stateRef.current;
+    if (!p || cur.context.kind !== 'repo' || cur.context.repo !== p.repo || !cur.branch) return;
+    pendingBrowse.current = null;
+    navigate({ view: 'library', factPath: p.path, reveal: true });
+  }, [navigate]);
+  const onOpenInBrowse = useCallback((repo: string, path: string) => {
+    pendingBrowse.current = { repo, path };
+    onSelectTarget({ kind: 'repo', repo });
+    openPendingBrowse();
+  }, [onSelectTarget, openPendingBrowse]);
+  useEffect(() => { openPendingBrowse(); }, [state.context, state.branch, openPendingBrowse]);
   // The fleet row: the fleet target, pinned over the context with its own
   // tabs (Members, Activity, Settings).
   const onPickFleet = useCallback(() => {
@@ -1930,7 +1946,7 @@ export default function App() {
               <div key={c.id} data-testid={`chat-body-${c.id}`}
                 style={draftBody(!serverOpen && displayed.kind === 'chat' && displayed.id === c.id)}>
                 <ErrorBoundary variant="inline" label="The chat hit an error">
-                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} />
+                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} onOpenInBrowse={onOpenInBrowse} />
                 </ErrorBoundary>
               </div>
             ))}
