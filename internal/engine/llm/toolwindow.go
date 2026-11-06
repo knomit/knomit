@@ -38,8 +38,8 @@ const LoadToolsName = "load_tools"
 // Loader and result copy: approved by the user (design section 7, C1 to C5).
 // The model reads these, so they are constants, not inline strings.
 const (
-	// LoaderDescription starts the loader's description; the catalogue follows.
-	LoaderDescription = "Your knomit tools are not all loaded. Call this with the names of the tools you need and their full definitions are added so you can call them in your next step. Load every tool you will need at once. Tools you have not loaded cannot be called. This only loads definitions; it changes nothing in the knowledge base. Catalogue:"
+	// LoaderDescription starts the loader's description; the name catalogue follows.
+	LoaderDescription = "Some knomit tools are listed with only a short description; their full definitions are not loaded yet. Call this with the names of the tools you need and their full definitions are added so you can call them in your next step. Calling a listed tool directly also loads it, but that call is not run, so call it again. This only loads definitions; it changes nothing in the knowledge base. Tool names:"
 	// LoaderNamesParamDescription describes the loader's names parameter (C4).
 	LoaderNamesParamDescription = `Tool names from the catalogue, for example ["knomit_query", "knomit_explain"].`
 

@@ -326,3 +326,9 @@ func TestWindow_EvictionFreesTheRoomTheGrowthNeeds(t *testing.T) {
 	after := w.Project(snap).Record().Tokens[HookTools]
 	require.LessOrEqual(t, after-before, free, "the request grew by no more than the room that was free")
 }
+
+// The loader's description is user-approved copy; it changes on the user's
+// word only.
+func TestLoaderDescription_IsTheApprovedCopy(t *testing.T) {
+	require.Equal(t, "Some knomit tools are listed with only a short description; their full definitions are not loaded yet. Call this with the names of the tools you need and their full definitions are added so you can call them in your next step. Calling a listed tool directly also loads it, but that call is not run, so call it again. This only loads definitions; it changes nothing in the knowledge base. Tool names:", LoaderDescription)
+}
