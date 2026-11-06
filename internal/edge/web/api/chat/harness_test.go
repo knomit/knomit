@@ -342,11 +342,26 @@ type stream struct {
 	done   chan struct{}
 }
 
-// attach opens GET /chats/{id}/events and waits for the ready frame.
-func (h *harness) attach(who, id string) *stream {
+// chatOfEvent is the chat id an event is tagged with ("" for a page-level one).
+func chatOfEvent(e sseEvent) string {
+	var v struct {
+		Chat string `json:"chat"`
+	}
+	_ = json.Unmarshal(e.Data, &v)
+	return v.Chat
+}
+
+// attach opens the page stream (GET /chats/events), keeps only chat id's
+// events plus ready, and waits for ready. Closing it ends that page stream.
+func (h *harness) attach(who, id string) *stream { return h.attachFiltered(who, id) }
+
+// attachPage opens the page stream and waits for ready; every event shows.
+func (h *harness) attachPage(who string) *stream { return h.attachFiltered(who, "") }
+
+func (h *harness) attachFiltered(who, only string) *stream {
 	h.t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.ts.URL+"/api/v1/chats/"+id+"/events", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.ts.URL+"/api/v1/chats/events", nil)
 	require.NoError(h.t, err)
 	if who != "" {
 		req.Header.Set("X-Test-Principal", who)
@@ -367,7 +382,11 @@ func (h *harness) attach(who, id string) *stream {
 			case strings.HasPrefix(line, "event: "):
 				name = strings.TrimPrefix(line, "event: ")
 			case strings.HasPrefix(line, "data: "):
-				s.events <- sseEvent{Name: name, Data: json.RawMessage(strings.TrimPrefix(line, "data: "))}
+				ev := sseEvent{Name: name, Data: json.RawMessage(strings.TrimPrefix(line, "data: "))}
+				if only != "" && name != "ready" && chatOfEvent(ev) != only {
+					continue
+				}
+				s.events <- ev
 			}
 		}
 	}()
