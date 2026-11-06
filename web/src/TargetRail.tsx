@@ -384,7 +384,7 @@ export function TargetRail({
                   <span data-testid={`rail-chat-mark-${c.id}`} style={chatMarkSlot}>
                     <ProviderIcon kind={chatProviders.find(p => p.name === c.provider)?.kind} name={c.provider} color={CHAT_ACCENT} size={13} />
                   </span>
-                  <span style={rowName}>{c.model}</span>
+                  <span style={rowName}>{c.name || c.model}</span>
                 </button>
               );
             })}

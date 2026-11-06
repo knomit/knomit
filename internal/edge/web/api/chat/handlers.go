@@ -40,6 +40,7 @@ func (m *manager) routes(r chi.Router) {
 
 type modelView struct {
 	ID        string `json:"id"`
+	Name      string `json:"name"` // display name; the id when the config gives none
 	Available bool   `json:"available"`
 	Tools     bool   `json:"tools"`
 	Reason    string `json:"reason,omitempty"`
@@ -55,6 +56,7 @@ type chatItem struct {
 	ID       string      `json:"id"`
 	Provider string      `json:"provider"`
 	Model    string      `json:"model"`
+	Name     string      `json:"name"` // the model's display name, resolved now from the config
 	Links    hal.LinkMap `json:"_links"`
 }
 
@@ -73,8 +75,20 @@ func chatLinks(id string) hal.LinkMap {
 	}
 }
 
+// itemOf describes a chat. The name is never stored in the chat: it is read
+// from the current config each time, and a model no longer configured shows
+// its id.
 func itemOf(c *chat) chatItem {
-	return chatItem{ID: c.id, Provider: c.provider, Model: c.model, Links: chatLinks(c.id)}
+	return chatItem{ID: c.id, Provider: c.provider, Model: c.model, Name: c.m.modelName(c.provider, c.model), Links: chatLinks(c.id)}
+}
+
+// modelName is the display name of provider's model id; the id when there is
+// no registry or the config gives no name.
+func (m *manager) modelName(provider, model string) string {
+	if m == nil || m.reg == nil {
+		return model
+	}
+	return m.reg.ModelName(provider, model)
 }
 
 // ---- helpers ----
@@ -114,7 +128,7 @@ func (m *manager) handleProviders(w http.ResponseWriter, r *http.Request) {
 		for _, p := range m.reg.List(r.Context()) {
 			pv := providerView{Name: p.Name, Kind: p.Kind, Models: []modelView{}}
 			for _, ms := range p.Models {
-				pv.Models = append(pv.Models, modelView(ms))
+				pv.Models = append(pv.Models, modelView{ID: ms.ID, Name: ms.Name, Available: ms.Available, Tools: ms.Tools, Reason: ms.Reason})
 			}
 			out = append(out, pv)
 		}

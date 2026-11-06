@@ -4,6 +4,7 @@ import { FacetToolbar } from './FacetToolbar';
 import { SessionsTable } from './SessionsTable';
 import { useTargetSessions, readShowHidden, writeShowHidden } from './useTargetSessions';
 import type { SessionTarget } from './useTargetSessions';
+import type { ChatProvider } from './chatApi';
 
 // ActivityFacet is a target's Activity page: the MCP client sessions bound to
 // THIS repo or lens, filtered server-side by `?binding=repo:<uid>|lens:<uid>`.
@@ -16,7 +17,7 @@ import type { SessionTarget } from './useTargetSessions';
 //
 // One sessions stream is open while this is mounted (the hook's), and none
 // once it unmounts.
-export function ActivityFacet({ target }: { target: SessionTarget }) {
+export function ActivityFacet({ target, chatProviders }: { target: SessionTarget; chatProviders?: ChatProvider[] }) {
   const [showHidden, setShowHidden] = useState(readShowHidden);
   const { rows, truncated, policy, error, now } = useTargetSessions(target, showHidden);
   const live = rows.filter(r => r.state === 'live').length;
@@ -40,7 +41,7 @@ export function ActivityFacet({ target }: { target: SessionTarget }) {
           Show hidden
         </label>
       </FacetToolbar>
-      <SessionsTable rows={rows} policy={policy} error={error} now={now} target={target} />
+      <SessionsTable rows={rows} policy={policy} error={error} now={now} target={target} chatProviders={chatProviders} />
     </div>
   );
 }
