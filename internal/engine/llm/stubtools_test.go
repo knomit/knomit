@@ -186,3 +186,49 @@ func TestLoop_RealFailingCallsStillTripTheGuardInAnAdaptiveChat(t *testing.T) {
 	require.ErrorIs(t, err, ErrRepeatedFailure)
 	require.Len(t, r.calls, RepeatFailureLimit, "the stub call did not count, the real ones did")
 }
+
+// A stub call between two identical successful calls changes what the second
+// would see (the tool set), so the second is not answered from the first: it
+// runs.
+//
+// SABOTAGE: agent.go runCalls, window branch, delete `guard.forget()` -> the
+// second query is answered with NoProgressNote and the host runs once.
+func TestLoop_StubCallBetweenTwoIdenticalSuccessesForgetsTheFirst(t *testing.T) {
+	q := func(id string) ToolUse {
+		return ToolUse{ID: id, Name: "knomit_query", Args: json.RawMessage(`{"text":"x"}`)}
+	}
+	m := &fakeModel{steps: []fakeStep{
+		{resp: multiResp(Usage{}, q("a1"), ToolUse{ID: "b", Name: "knomit_learn", Args: json.RawMessage(`{}`)}, q("a2"))},
+		{resp: textResp("done", Usage{})},
+	}}
+	r := newRig(t, m, winTool("knomit_query", 100), winTool("knomit_learn", 100))
+	r.l.ShortCircuit = runsAll
+	r.loadAhead(t, "knomit_query")
+	_, err := r.l.RunTurn(context.Background(), "go")
+	require.NoError(t, err)
+	require.Len(t, r.calls, 2, "both queries ran")
+	require.Equal(t, "result of knomit_query", resultText(m.snaps[1], "a2").Content, "no no-progress note")
+	require.Equal(t, fmt.Sprintf(NotLoadedCallResult, "knomit_learn"), resultText(m.snaps[1], "b").Content)
+}
+
+// A stub call that carries arguments valid for the real schema is still not
+// run: the tool loads, the arguments are dropped with the call, and the call
+// the model makes next, with the schema in front of it, is the one that runs.
+//
+// SABOTAGE: agent.go runCalls, skip the Window.Handles branch -> the stub call
+// reaches the host with its arguments and this fails.
+func TestLoop_StubCallWithValidArgumentsIsNotRun(t *testing.T) {
+	learn := winTool("knomit_learn", 300)
+	learn.Schema = json.RawMessage(`{"type":"object","properties":{"title":{"type":"string"}},"required":["title"]}`)
+	m := &fakeModel{steps: []fakeStep{
+		{resp: toolResp("s", "knomit_learn", `{"title":"valid"}`, Usage{})},
+		{resp: toolResp("r", "knomit_learn", `{"title":"valid"}`, Usage{})},
+		{resp: textResp("done", Usage{})},
+	}}
+	r := newRig(t, m, winTool("knomit_query", 100), learn)
+	_, err := r.l.RunTurn(context.Background(), "record")
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf(NotLoadedCallResult, "knomit_learn"), resultText(m.snaps[1], "s").Content)
+	require.Equal(t, []hostCall{{"knomit_learn", `{"title":"valid"}`}}, r.calls, "only the call made after loading ran, once")
+	require.Equal(t, []string{"gate:knomit_learn", "host:knomit_learn"}, r.order)
+}

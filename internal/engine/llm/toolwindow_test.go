@@ -299,3 +299,30 @@ func TestLoaderDef_CarriesTheApprovedCopy(t *testing.T) {
 	require.Equal(t, 1, s.Properties["names"].MinItems)
 	require.Equal(t, []string{"names"}, s.Required)
 }
+
+// Eviction frees the room the load needs, measured on the request itself and
+// not on the window's own bookkeeping. old's stub is large, so evicting it
+// frees little (a stub stays in the request); if the window counted its whole
+// definition as freed it would stop after old and the request would grow past
+// the room that was free.
+//
+// SABOTAGE: toolwindow.go admit, `freed += w.growth(v)` -> `freed += w.sizes[v]`
+// -> only old is evicted, the request grows by more than the free room, and
+// this fails.
+func TestWindow_EvictionFreesTheRoomTheGrowthNeeds(t *testing.T) {
+	// old: 130 tokens whole, about 107 as a stub, so evicting it frees about 23.
+	w, _, snap := newWin(t, winTool("old", 130), winTool("mid", 100), winTool("new", 150))
+	w.purposes = map[string]string{"old": strings.Repeat("p", 320)}
+	w.Run(loadCall("old"), snap, plenty, nil)
+	w.Run(loadCall("mid"), snap, plenty, nil)
+	w.BeginTurn()
+	w.TakeChanges()
+	before := w.Project(snap).Record().Tokens[HookTools]
+
+	const free = 50
+	out := w.Run(loadCall("new"), snap, func() int { return free }, nil)
+	require.False(t, out.IsError, out.Content)
+	require.Equal(t, []string{"new"}, w.Loaded(), "old and mid had to go: old alone frees too little")
+	after := w.Project(snap).Record().Tokens[HookTools]
+	require.LessOrEqual(t, after-before, free, "the request grew by no more than the room that was free")
+}
