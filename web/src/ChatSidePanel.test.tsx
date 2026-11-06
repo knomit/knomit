@@ -578,3 +578,14 @@ describe('a tool call\'s panel header is the row it opens from', () => {
     }
   });
 });
+
+describe('the activity line of a group with a failed bind', () => {
+  it('says nothing for the failed bind, and the call after it searched where the chat was bound', () => {
+    const calls: ToolCall[] = [
+      { id: 'b1', name: 'knomit_bind', state: 'done', isError: true, args: { name: 'nosuch-kb' } },
+      { id: 'q1', name: 'knomit_query', state: 'done', isError: false, args: { text: 'x' } },
+    ];
+    render(<ChatToolGroup lead={[]} calls={calls} approvals={{}} selectedId={null} bound="r1" onSelect={vi.fn()} onAnswer={vi.fn()} />);
+    expect(screen.getByTestId('chat-activity-summary').textContent).toBe('Searched 1× in r1');
+  });
+});

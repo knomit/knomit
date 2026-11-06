@@ -505,10 +505,11 @@ export function keyArg(c: ToolCall): string {
   }
 }
 
-/** The target in force after `calls`: the last bind's, starting from `bound`. */
+/** The target in force after `calls`: the last SUCCESSFUL bind's, starting from
+ *  `bound`. A bind that returned an error bound nothing and changes nothing. */
 export function boundAfter(calls: ToolCall[], bound: string): string {
   let b = bound;
-  for (const c of calls) if (toolKind(c.name) === 'bind') b = bindTarget(c) || b;
+  for (const c of calls) if (toolKind(c.name) === 'bind' && !c.isError) b = bindTarget(c) || b;
   return b;
 }
 

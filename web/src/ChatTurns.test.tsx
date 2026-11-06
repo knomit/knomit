@@ -71,6 +71,14 @@ describe('the activity summary (chatCopy.activitySummary)', () => {
     expect(words([{ kind: 'bind', target: '' }, { kind: 'bind', target: 'all' }])).toBe('Bound to all');
     expect(words([{ kind: 'bind', target: 'all' }, { kind: 'bind', target: '' }, { kind: 'query', target: 'all' }])).toBe('Bound to all · searched 1× in all');
   });
+  it('a failed bind is not a bind: it says nothing, and the line is what the other calls say', () => {
+    expect(words([{ kind: 'bind', target: 'nosuch', failed: true }, { kind: 'query', target: 'all' }])).toBe('Searched 1× in all');
+    expect(words([{ kind: 'bind', target: 'all' }, { kind: 'bind', target: 'nosuch', failed: true }])).toBe('Bound to all');
+    // A failed bind with no target does not say "Bound" either.
+    expect(words([{ kind: 'bind', target: '', failed: true }, { kind: 'read', target: '' }])).toBe('Read 1 fact');
+    // A failed call of any other kind is still counted as it always was.
+    expect(words([{ kind: 'query', target: 'all', failed: true }])).toBe('Searched 1× in all');
+  });
   it('marks the target and the counts bold, nothing else', () => {
     const [bound, searched] = activitySummary([{ kind: 'bind', target: 'all' }, { kind: 'query', target: 'lens-x' }]);
     expect(bound.filter(s => s.strong).map(s => s.text)).toEqual(['all']);

@@ -70,7 +70,7 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
     targets.push(callTarget(c, inForce));
     inForce = boundAfter([c], inForce);
   }
-  const summary = activitySummary(calls.map((c, i) => ({ kind: toolKind(c.name), target: targets[i] })));
+  const summary = activitySummary(calls.map((c, i) => ({ kind: toolKind(c.name), target: targets[i], failed: c.isError })));
   const wall = wallDurationMs(calls);
   const runningIdx = calls.findIndex(c => c.state === 'running');
   const runningCall = runningIdx >= 0 ? calls[runningIdx] : null;

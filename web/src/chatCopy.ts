@@ -80,7 +80,9 @@ export function loadedToolsRow(names: string[]): string {
  *  are joined with " · ". `strong` marks the parts drawn bold (the target and
  *  the counts). A tool with no wording here counts toward "used N tools". */
 export interface SummarySeg { text: string; strong?: boolean }
-export interface SummaryCall { kind: 'bind' | 'query' | 'read' | null; target: string }
+/** `failed`: the call returned an error. A failed bind bound nothing, so it adds
+ *  nothing to the line; a failed call of any other kind is counted as before. */
+export interface SummaryCall { kind: 'bind' | 'query' | 'read' | null; target: string; failed?: boolean }
 
 export function activitySummary(calls: SummaryCall[]): SummarySeg[][] {
   const pieces: SummarySeg[][] = [];
@@ -89,7 +91,7 @@ export function activitySummary(calls: SummaryCall[]): SummarySeg[][] {
   let reads = 0;
   let other = 0;
   for (const c of calls) {
-    if (c.kind === 'bind') { if (!bound.includes(c.target)) bound.push(c.target); }
+    if (c.kind === 'bind') { if (!c.failed && !bound.includes(c.target)) bound.push(c.target); }
     else if (c.kind === 'query') queries.set(c.target, (queries.get(c.target) ?? 0) + 1);
     else if (c.kind === 'read') reads++;
     else other++;
