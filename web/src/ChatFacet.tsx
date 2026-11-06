@@ -9,7 +9,26 @@ import {
 import type { ApprovalDecision, ChatApproval, ChatInfo, ChatNotice } from './chatApi';
 import { NEW_CHAT_ERROR } from './chatCopy';
 import { chatReducer, initialChatState, refusalReason, sessionCost } from './chatState';
+import { RECONNECT_INITIAL_MS, RECONNECT_MAX_MS } from './eventStream';
 import type { ToolCall, UsagePayload } from './chatState';
+
+/** The waits between tries of a cancel that failed: the events stream's own
+ *  bounded backoff (it starts at RECONNECT_INITIAL_MS, doubles, and never
+ *  exceeds RECONNECT_MAX_MS), three retries. */
+export const CANCEL_RETRY_DELAYS_MS = [0, 1, 2].map(i => Math.min(RECONNECT_INITIAL_MS * 2 ** i, RECONNECT_MAX_MS));
+
+/** cancelWithRetry sends the cancel and, if it fails, tries again after each
+ *  delay. It rejects with the last error when every try failed. */
+async function cancelWithRetry(chatId: string, sendId: string): Promise<void> {
+  let last: unknown;
+  for (let i = 0; i <= CANCEL_RETRY_DELAYS_MS.length; i++) {
+    try { await cancelChatTurn(chatId, sendId); return; } catch (e) {
+      last = e;
+      if (i < CANCEL_RETRY_DELAYS_MS.length) await new Promise(r => setTimeout(r, CANCEL_RETRY_DELAYS_MS[i]));
+    }
+  }
+  throw last;
+}
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -170,7 +189,7 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
       // non-2xx), a network error or no answer in time: the turn never
       // started, so it leaves the transcript, and its text goes back in the
       // composer with the reason. A 404 means the chat is gone.
-      dispatch({ kind: 'send_failed', sendId });
+      if (statusOf(e) !== undefined || withdrawn.current.has(sendId)) dispatch({ kind: 'send_failed', sendId });
       if (withdrawn.current.has(sendId)) return; // the person's own Stop: nothing to explain
       if (statusOf(e) === 404) { goneRef.current(chatId); return; }
       const reason = `${refusalReason(errText(e))}${statusOf(e) ? ` (${statusOf(e)})` : ''}`;
@@ -181,10 +200,19 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
       // ask which: if the snapshot lists this send_id the text is in the
       // transcript and must not also wait in the composer (Retry would send it
       // twice); if not, it is the only copy and goes back.
-      cancelChatTurn(chatId, wire).catch(() => { /* unreachable: the snapshot read below says what is true */ })
-        .then(() => accepted(sendId))
-        .then(yes => { if (!yes) setNotSent({ text, reason }); })
-        .catch(() => { setNotSent({ text, reason }); refreshRef.current(); });
+      //
+      // The turn stays in the transcript (as still sending) until that is known.
+      // If the cancel cannot be delivered even after its retries, the POST may
+      // STILL land, so the text is NOT put back as "Not sent": the send stays
+      // where it is, the error is shown, and a later snapshot (or Stop) settles it.
+      cancelWithRetry(chatId, wire).then(
+        () => accepted(sendId).then(yes => {
+          if (yes) return;
+          dispatch({ kind: 'send_failed', sendId });
+          setNotSent({ text, reason });
+        }).catch(() => { dispatch({ kind: 'send_failed', sendId }); setNotSent({ text, reason }); refreshRef.current(); }),
+        cancelErr => { setActionError(errText(cancelErr)); accepted(sendId).catch(() => refreshRef.current()); },
+      );
     });
   }, [chatId, tag, accepted]);
   const stop = useCallback(() => {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -448,4 +449,30 @@ func TestChat_SendIDMemoryIsBoundedAndEvictsTheOldest(t *testing.T) {
 	require.Contains(t, c2.sendState, fmt.Sprintf("n-%d", maxSends-1), "the newest is kept")
 	c2.mu.Unlock()
 	require.Equal(t, http.StatusAccepted, h2.sendTurn("uid:501", id2, "x", "first"), "a forgotten withdrawn id starts its turn")
+}
+
+// A send_id is a short token: more than 64 bytes is refused with 400 on both
+// routes, nothing is remembered, and exactly 64 is accepted.
+func TestChat_SendIDOver64BytesIsRefused(t *testing.T) {
+	h := newHarness(t)
+	m := h.queue("a1", textStep("ok", usage))
+	id := h.create("uid:501", "a1")
+	long := strings.Repeat("x", maxSendIDBytes+1)
+
+	code, body := h.do("uid:501", http.MethodPost, "/chats/"+id+"/turns", map[string]string{"text": "hi", "send_id": long})
+	require.Equal(t, http.StatusBadRequest, code, string(body))
+	require.Contains(t, string(body), sendIDTooLong)
+	require.Empty(t, h.snapshot("uid:501", id).Items, "a refused send starts no turn")
+	require.Empty(t, m.requests())
+
+	code, body = h.do("uid:501", http.MethodPost, "/chats/"+id+"/cancel", map[string]string{"send_id": long})
+	require.Equal(t, http.StatusBadRequest, code, string(body))
+	c := h.mgr.find(id, writer.String())
+	c.mu.Lock()
+	require.Empty(t, c.sends, "a refused id is not remembered")
+	c.mu.Unlock()
+
+	exact := strings.Repeat("y", maxSendIDBytes)
+	require.Equal(t, http.StatusNoContent, h.cancelSend("uid:501", id, exact), "64 bytes is allowed")
+	require.Equal(t, http.StatusAccepted, h.sendTurn("uid:501", id, "hi", strings.Repeat("z", maxSendIDBytes)))
 }

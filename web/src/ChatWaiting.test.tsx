@@ -19,18 +19,21 @@ const snap = (items: ChatViewItem[], over: Partial<ChatSnapshot> = {}): ChatSnap
   ({ ...CHAT, running: false, grants: [], pending_approvals: [], items, ...over });
 
 /** The fetch seam, with POST /turns held until the test answers it. */
-function mount(s: ChatSnapshot, opts: { facet?: 'chat' | 'settings'; onNewChat?: () => void } = {}) {
+function mount(s: ChatSnapshot, opts: { facet?: 'chat' | 'settings'; onNewChat?: () => void; routes?: Parameters<typeof stubFleetFetch>[0] } = {}) {
   const fx = stubFleetFetch({
     [`GET ${BASE}`]: { body: s },
     [`GET ${BASE}/context`]: { body: { window: 1_000_000, spill: false } },
     [`POST ${BASE}/cancel`]: { status: 204 },
+    ...opts.routes,
   });
   const inner = globalThis.fetch;
+  let posted: { input: string | URL | Request; init: RequestInit } | null = null;
   const turn: { resolve: (r: Response) => void; pending: boolean } = { resolve: () => {}, pending: false };
   vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     if (init?.method === 'POST' && url.endsWith('/turns')) {
       void inner(input, init); // recorded by the stub
+      posted = { input, init };
       turn.pending = true;
       return new Promise<Response>((r, rej) => {
         turn.resolve = r;
@@ -46,7 +49,9 @@ function mount(s: ChatSnapshot, opts: { facet?: 'chat' | 'settings'; onNewChat?:
     await new Promise(r => setTimeout(r, 0));
   });
   const calls = (part: string) => fx.calls.filter(c => c.route.includes(part));
-  return { fx, answer, calls, onNewChat };
+  // The POST the page gave up on (aborted) still reaches the server, as a request that sat in a queue would: deliver it now.
+  const late = () => inner(posted!.input, { ...posted!.init, signal: undefined });
+  return { fx, answer, calls, onNewChat, late };
 }
 
 beforeEach(() => { installFakeEventSource(); });
@@ -241,15 +246,15 @@ describe('a send that times out: the snapshot decides, by send_id', () => {
   const EARLIER: ChatViewItem[] = [{ kind: 'user', text: 'earlier', send_id: 'old-1' }, { kind: 'assistant', text: 'a' }];
 
   /** Send `text` into a non-empty chat, let the 15 s bound pass with the POST unanswered, and return what the page did. */
-  async function timeOut(after: (sendId: string) => ChatViewItem[]) {
-    const m = mount(snap(EARLIER));
+  async function timeOut(after: (sendId: string) => ChatViewItem[], routes?: Parameters<typeof stubFleetFetch>[0], extraMs = 0) {
+    const m = mount(snap(EARLIER), { routes });
     await screen.findByTestId('chat-turn-0');
     vi.useFakeTimers({ shouldAdvanceTime: false });
     try {
       send('my words');
       const sendId = (m.calls('/turns')[0].body as { send_id: string }).send_id;
       m.fx.set(`GET ${BASE}`, { body: snap(after(sendId)) });
-      await act(async () => { await vi.advanceTimersByTimeAsync(SEND_TIMEOUT_MS + 1); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(SEND_TIMEOUT_MS + 1 + extraMs); });
       return { ...m, sendId };
     } finally {
       vi.useRealTimers();
@@ -277,15 +282,49 @@ describe('a send that times out: the snapshot decides, by send_id', () => {
     expect(calls('/cancel').map(c => c.body)).toEqual([{ send_id: sendId }]);
   });
 
-  it('(c) after the timeout the late POST arrives: it is refused (409 Send withdrawn), so no duplicate turn and the restored text stays', async () => {
-    const { answer, calls } = await timeOut(() => EARLIER);
+  it('(c) after the timeout the late POST really arrives at the server and is refused with 409 Send withdrawn: no duplicate turn, the restored text stays', async () => {
+    // A server that keeps what the cancel named, as the real one does.
+    const withdrawn = new Set<string>();
+    const { calls, late, sendId } = await timeOut(() => EARLIER, {
+      [`POST ${BASE}/cancel`]: body => { withdrawn.add((body as { send_id: string }).send_id); return { status: 204 }; },
+      [`POST ${BASE}/turns`]: body => (withdrawn.has((body as { send_id: string }).send_id)
+        ? { status: 409, body: { title: 'Send withdrawn', detail: 'the send was stopped before the server accepted it' } }
+        : { status: 202, body: { turn: 2 } }),
+    });
     await waitFor(() => expect(screen.getByTestId('chat-not-sent')).toBeInTheDocument());
     await waitFor(() => expect(composer().value).toBe('my words'));
-    await answer(409, { title: 'Send withdrawn', detail: 'the send was stopped before the server accepted it' });
+    // Now the aborted request is delivered, late.
+    const res = await late();
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { title: string }).title).toBe('Send withdrawn');
+    expect(calls('/turns').map(c => (c.body as { send_id: string }).send_id)).toEqual([sendId, sendId]);
     expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['earlier']);
     expect(composer().value).toBe('my words');
     expect(screen.getByTestId('chat-not-sent').textContent).toBe('Not sent: no answerRetry');
-    expect(calls('/turns')).toHaveLength(1);
+  });
+
+  it('a cancel that fails once is retried (500 ms later, same send_id); when it lands the text is restored as usual', async () => {
+    let n = 0;
+    const { calls, sendId } = await timeOut(() => EARLIER, {
+      [`POST ${BASE}/cancel`]: () => (++n === 1 ? { status: 500, body: { detail: 'blip' } } : { status: 204 }),
+    }, 500);
+    await waitFor(() => expect(screen.getByTestId('chat-not-sent')).toBeInTheDocument());
+    await waitFor(() => expect(composer().value).toBe('my words'));
+    expect(calls('/cancel').map(c => c.body)).toEqual([{ send_id: sendId }, { send_id: sendId }]);
+  });
+
+  it('a cancel that keeps failing (1 try + 3 retries at 500, 1000, 2000 ms) does NOT restore the text as "Not sent": the POST may still land', async () => {
+    const { calls, sendId } = await timeOut(() => EARLIER, {
+      [`POST ${BASE}/cancel`]: { status: 500, body: { detail: 'cannot cancel' } },
+    }, 500 + 1000 + 2000);
+    await waitFor(() => expect(calls('/cancel')).toHaveLength(4));
+    expect(calls('/cancel').map(c => c.body)).toEqual(Array(4).fill({ send_id: sendId }));
+    await waitFor(() => expect(screen.getByTestId('chat-action-error').textContent).toContain('cannot cancel'));
+    expect(screen.queryByTestId('chat-not-sent')).toBeNull();
+    expect(composer().value).toBe('');
+    // The send is still on screen as sending (not lost, not duplicated), and Stop can withdraw it again.
+    expect(screen.getAllByTestId('chat-user').map(e => e.textContent)).toEqual(['earlier', 'my words']);
+    expect(screen.getByTestId('chat-sending')).toBeInTheDocument();
   });
 });
 

@@ -381,7 +381,7 @@ describe('ChatFacet: turn_error races and fast follow-ups', () => {
   });
 
   it('N2: a send that is never answered counts as failed after the bound: the turn is taken back out and the error shown', async () => {
-    mount(snapshot({ running: false, items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] }));
+    mount(snapshot({ running: false, items: [{ kind: 'user', text: 'first' }, { kind: 'assistant', text: 'answer' }] }), { [`POST ${BASE}/cancel`]: { status: 204 } });
     await screen.findByTestId('chat-turn-0');
     const inner = globalThis.fetch;
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {

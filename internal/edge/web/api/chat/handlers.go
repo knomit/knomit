@@ -389,6 +389,10 @@ func (m *manager) handleTurn(w http.ResponseWriter, r *http.Request) {
 		hal.WriteProblem(w, http.StatusBadRequest, "Invalid request", "text is required", r.URL.Path)
 		return
 	}
+	if len(req.SendID) > maxSendIDBytes {
+		hal.WriteProblem(w, http.StatusBadRequest, "Invalid request", sendIDTooLong, r.URL.Path)
+		return
+	}
 	turn, err := c.startTurn(req.Text, req.SendID)
 	switch {
 	case err == nil:
@@ -418,6 +422,10 @@ func (m *manager) handleCancel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if len(req.SendID) > maxSendIDBytes {
+		hal.WriteProblem(w, http.StatusBadRequest, "Invalid request", sendIDTooLong, r.URL.Path)
+		return
+	}
 	if req.SendID != "" {
 		c.cancelSend(req.SendID)
 	} else {
@@ -425,6 +433,12 @@ func (m *manager) handleCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// maxSendIDBytes bounds a send_id: the chat remembers up to maxSends of them
+// and echoes each on the snapshot, so an id is a short token, not a payload.
+const maxSendIDBytes = 64
+
+const sendIDTooLong = "send_id must be at most 64 bytes"
 
 type cancelRequest struct {
 	SendID string `json:"send_id,omitempty"`
