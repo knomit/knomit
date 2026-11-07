@@ -94,10 +94,14 @@ func TestChat_ToolCallCarriesTitleAndKeyArg(t *testing.T) {
 }
 
 // The loader's row: its title is "Load tools", and its main argument is what
-// it LOADED (not what the model asked for), on the done event and the snapshot.
+// it LOADED (not what the model asked for), on the done event, the snapshot
+// and the stored call record (GET /chats/{id}/calls/{callId}).
 //
 // SABOTAGE: chat.go, take the loader's key_arg from its arguments -> it names
 // what was asked for, and the asked-for list here differs.
+// SABOTAGE: chat.go:852, store the call record (putCall) with the pre-loader
+// wording instead of w.keyArg -> the event and snapshot still pass, and the
+// record assertion fails.
 func TestChat_LoaderCallCarriesTitleAndWhatItLoaded(t *testing.T) {
 	h := newHarness(t)
 	h.useOllama()
