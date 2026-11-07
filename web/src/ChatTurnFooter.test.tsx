@@ -18,7 +18,7 @@ function layout(rects: Record<string, { top: number; height: number }>) {
 function mount() {
   render(
     <div data-testid="scroller" style={{ overflowY: 'auto' }}>
-      <ChatTurnFooter usage={usage} costUsd={0.01} answer="a" sessionCostUsd={0.02} sessionTurns={2} />
+      <ChatTurnFooter usage={usage} costUsd={0.01} costRows={null} turnNumber={1} modelName="m" answer="a" sessionCostUsd={0.02} sessionTurns={2} />
     </div>,
   );
   fireEvent.mouseEnter(screen.getByTestId('chat-usage'));

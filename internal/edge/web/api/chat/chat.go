@@ -76,7 +76,9 @@ type viewItem struct {
 	// snapshot is the whole truth about the turn and the page patches nothing.
 	Usage   *turnUsage `json:"usage,omitempty"`    // summed over the turn's requests
 	CostUSD *float64   `json:"cost_usd,omitempty"` // summed; absent without a price card
-	Warning string     `json:"warning,omitempty"`  // the price-tier warning, worded
+	// CostRows is CostUSD by token kind, each request priced at its own tier.
+	CostRows *costRows `json:"cost_rows,omitempty"`
+	Warning  string    `json:"warning,omitempty"` // the price-tier warning, worded
 	// WarningInfo is the same warning, structured, for the page to word its own line.
 	WarningInfo *noticeView `json:"warning_info,omitempty"`
 	// ErrorInfo is the structured detail of Error when it has one (context full).
@@ -117,6 +119,18 @@ func summarize(name, content string, isErr bool) *callSummary {
 		return nil
 	}
 	return &callSummary{Count: len(r.Facts)}
+}
+
+// costRows is a cost in USD by token kind; the four add up to the total.
+type costRows struct {
+	Input      float64 `json:"input"`
+	CacheRead  float64 `json:"cache_read"`
+	CacheWrite float64 `json:"cache_write"`
+	Output     float64 `json:"output"`
+}
+
+func costRowsOf(c llm.CostRows) *costRows {
+	return &costRows{Input: c.Input, CacheRead: c.CacheRead, CacheWrite: c.CacheWrite, Output: c.Output}
 }
 
 // turnUsage is a turn's token counts, summed over its requests.
@@ -853,6 +867,11 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 					usd += *it.CostUSD
 				}
 				it.CostUSD = &usd
+				var sum llm.Cost
+				if it.CostRows != nil {
+					sum.Rows = llm.CostRows(*it.CostRows)
+				}
+				it.CostRows = costRowsOf(sum.Add(llm.Cost{Rows: ev.Cost.Rows}).Rows)
 			}
 		}
 		turn := c.turnAt
@@ -862,6 +881,7 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		out := map[string]any{"usage": usageView(*ev.Usage), "seq": seq, "turn": turn}
 		if ev.Cost != nil {
 			out["cost_usd"] = ev.Cost.USD
+			out["cost_rows"] = costRowsOf(ev.Cost.Rows)
 		}
 		c.emit("usage", out)
 		c.noteState()
