@@ -79,9 +79,9 @@ describe('ChatFacet', () => {
     const { fx } = mount();
     await screen.findByTestId('chat-turn-0');
     const toggle = screen.getByTestId('chat-tool-group-toggle');
-    // The activity line: the summary worded from the one knomit_repos call (no
-    // wording for it, so "used N tools"), and the step count.
-    expect(screen.getByTestId('chat-activity-summary').textContent).toBe('Used 1 tool');
+    // The activity line: the one knomit_repos call, named by its raw name since
+    // this snapshot sent no title, and the step count.
+    expect(screen.getByTestId('chat-activity-summary').textContent).toBe('knomit_repos');
     expect(screen.getByTestId('chat-activity-steps').textContent).toBe('1 step');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByTestId('chat-tool-row-tu_1')).toBeNull();
@@ -89,7 +89,7 @@ describe('ChatFacet', () => {
 
     fireEvent.click(toggle);
     const row = screen.getByTestId('chat-tool-row-tu_1');
-    expect(row).toHaveTextContent('knomit: Knomit repos');
+    expect(row).toHaveTextContent('knomit_repos');
     // Opening the group is not selecting a row.
     expect(callsTo(fx, '/calls/')).toHaveLength(0);
 

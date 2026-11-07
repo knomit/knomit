@@ -28,6 +28,7 @@ import (
 // world rather than a mode the tool is in.
 func reposTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_repos",
+		mcpgo.WithTitleAnnotation("List repos"),
 		mcpgo.WithDescription("List every repo and lens this server serves that your credential reaches (a token for one repo sees that repo; a token for one lens sees that lens and its members; local callers see all), and what a binding points at. The ONE tool that works without a binding handle — call it first on the unscoped endpoint to learn the names knomit_bind accepts. Pass `binding` to have the result also describe what that handle names (or why it no longer resolves). On a --repo or --lens endpoint the result also has `endpoint`: the repo or lens this connection is fixed to. Use a repo's id to interpret kb://<id>/… paths. Note a mount's source slug is NOT what a src:// ref carries — src:// refs are keyed by the SOURCE repo's own root commit, obtained by running git in that checkout."),
 		bindingArg(false),
 	)

@@ -35,6 +35,10 @@ import (
 // holds it.
 const LoadToolsName = "load_tools"
 
+// LoaderTitle is the loader's title: the words its row shows, as an MCP tool's
+// annotations.title is for the knomit tools (approved by the user 2026-11-06).
+const LoaderTitle = "Load tools"
+
 // Loader and result copy: approved by the user (design section 7, C1 to C5).
 // The model reads these, so they are constants, not inline strings.
 const (
@@ -154,7 +158,9 @@ func LoaderDef(catalogue string) ToolDef {
 	if err != nil {
 		canon = schema
 	}
-	return ToolDef{Name: LoadToolsName, Description: LoaderDescription + "\n" + catalogue, Schema: canon}
+	// Its row's main argument is what a call LOADED, which only the window
+	// knows, so the loader marks no Key: the chat words it from the result.
+	return ToolDef{Name: LoadToolsName, Description: LoaderDescription + "\n" + catalogue, Schema: canon, Title: LoaderTitle}
 }
 
 // NewToolWindow builds a window with nothing loaded. It refuses a loader not

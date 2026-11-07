@@ -5,8 +5,8 @@ import { ChatPill } from './ChatPill';
 import { installFakeEventSource, uninstallFakeEventSource, chatStream } from './testEventSource';
 import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatSnapshot, ChatViewItem } from './chatApi';
-import { activitySummary, liveStep, activitySteps, costSession, toolVerb } from './chatCopy';
-import { cachedPercent, compactCount, sessionCost, keyArg } from './chatState';
+import { activitySummary, activitySteps, costSession } from './chatCopy';
+import { cachedPercent, compactCount, sessionCost } from './chatState';
 import type { ChatTurn } from './chatState';
 
 // Chat UX v2, PR 1 (section 2: layout, activity line, turn footer, streaming
@@ -36,58 +36,45 @@ describe('the activity summary (chatCopy.activitySummary)', () => {
   const words = (calls: Parameters<typeof activitySummary>[0]) =>
     activitySummary(calls).map(p => p.map(s => s.text).join('')).join(' · ');
 
-  it('words bind, query and read from the calls, joined with " · "', () => {
+  it('names each call by its title, counted per title and target, joined with " · "', () => {
     expect(words([
-      { kind: 'bind', target: 'all' },
-      { kind: 'query', target: 'all' }, { kind: 'query', target: 'all' }, { kind: 'query', target: 'all' },
-      { kind: 'read', target: 'all' }, { kind: 'read', target: 'all' },
-    ])).toBe('Bound to all · searched 3× in all · read 2 facts');
+      { title: 'Bind', target: 'all', bind: true },
+      { title: 'Query', target: 'all' }, { title: 'Query', target: 'all' }, { title: 'Query', target: 'all' },
+      { title: 'Materialize', target: 'all' }, { title: 'Materialize', target: 'all' },
+    ])).toBe('Bind all · Query 3× in all · Materialize 2× in all');
   });
-  it('a tool with no wording is counted as "used N tools"', () => {
-    expect(words([{ kind: null, target: '' }])).toBe('Used 1 tool');
-    expect(words([{ kind: null, target: '' }, { kind: null, target: '' }])).toBe('Used 2 tools');
-    expect(words([{ kind: 'bind', target: 'all' }, { kind: null, target: '' }, { kind: null, target: '' }])).toBe('Bound to all · used 2 tools');
+  it('one call has no count; a call with no target has no " in "; an untitled tool is its name', () => {
+    expect(words([{ title: 'Query', target: 'all' }])).toBe('Query in all');
+    expect(words([{ title: 'List repos', target: '' }, { title: 'List repos', target: '' }])).toBe('List repos 2×');
+    expect(words([{ title: 'acme_frobnicate', target: '' }])).toBe('acme_frobnicate');
+    // The same title in two targets is two pieces, in the order they first appear.
+    expect(words([{ title: 'Query', target: 'a' }, { title: 'Query', target: 'b' }, { title: 'Query', target: 'a' }])).toBe('Query 2× in a · Query in b');
   });
-  it('uses the singular for one: "read 1 fact", "used 1 tool", "Session (1 turn)", and the plural from two', () => {
-    expect(words([{ kind: 'read', target: '' }])).toBe('Read 1 fact');
-    expect(words([{ kind: 'read', target: '' }, { kind: 'read', target: '' }])).toBe('Read 2 facts');
-    expect(words([{ kind: 'bind', target: 'all' }, { kind: null, target: '' }])).toBe('Bound to all · used 1 tool');
-    expect(words([{ kind: null, target: '' }, { kind: null, target: '' }, { kind: null, target: '' }])).toBe('Used 3 tools');
+  it('the singular and plural step count, and the session label', () => {
+    expect(activitySteps(1)).toBe('1 step');
+    expect(activitySteps(9)).toBe('9 steps');
     expect(costSession(1)).toBe('Session (1 turn)');
     expect(costSession(2)).toBe('Session (2 turns)');
     expect(costSession(0)).toBe('Session (0 turns)');
   });
-  it('words a timeline row: Bound, Searched (Searching while running), Read; other tools have none', () => {
-    expect([toolVerb('bind', false), toolVerb('query', false), toolVerb('query', true), toolVerb('read', false), toolVerb(null, false)])
-      .toEqual(['Bound', 'Searched', 'Searching', 'Read', null]);
-  });
-  it('a bind with no readable target reads "Bound"', () => {
-    expect(words([{ kind: 'bind', target: '' }])).toBe('Bound');
-    // Binding to the same target twice (even with other calls between) is said once.
-    expect(words([{ kind: 'bind', target: 'all' }, { kind: 'query', target: 'all' }, { kind: 'bind', target: 'all' }])).toBe('Bound to all · searched 1× in all');
-    expect(words([{ kind: 'bind', target: 'all' }, { kind: 'bind', target: 'all' }])).toBe('Bound to all');
-    expect(words([{ kind: 'bind', target: '' }, { kind: 'bind', target: '' }])).toBe('Bound');
-    // ...but never beside a bind that did name one: "Bound · Bound to all" says it twice.
-    expect(words([{ kind: 'bind', target: '' }, { kind: 'bind', target: 'all' }])).toBe('Bound to all');
-    expect(words([{ kind: 'bind', target: 'all' }, { kind: 'bind', target: '' }, { kind: 'query', target: 'all' }])).toBe('Bound to all · searched 1× in all');
+  it('a bind with no readable target reads as its title alone, and only when no bind named one', () => {
+    expect(words([{ title: 'Bind', target: '', bind: true }])).toBe('Bind');
+    expect(words([{ title: 'Bind', target: 'all', bind: true }, { title: 'Query', target: 'all' }, { title: 'Bind', target: 'all', bind: true }])).toBe('Bind all 2× · Query in all');
+    expect(words([{ title: 'Bind', target: '', bind: true }, { title: 'Bind', target: '', bind: true }])).toBe('Bind 2×');
+    // ...never beside a bind that did name one: "Bind · Bind all" says it twice.
+    expect(words([{ title: 'Bind', target: '', bind: true }, { title: 'Bind', target: 'all', bind: true }])).toBe('Bind all');
   });
   it('a failed bind is not a bind: it says nothing, and the line is what the other calls say', () => {
-    expect(words([{ kind: 'bind', target: 'nosuch', failed: true }, { kind: 'query', target: 'all' }])).toBe('Searched 1× in all');
-    expect(words([{ kind: 'bind', target: 'all' }, { kind: 'bind', target: 'nosuch', failed: true }])).toBe('Bound to all');
-    // A failed bind with no target does not say "Bound" either.
-    expect(words([{ kind: 'bind', target: '', failed: true }, { kind: 'read', target: '' }])).toBe('Read 1 fact');
-    // A failed call of any other kind is still counted as it always was.
-    expect(words([{ kind: 'query', target: 'all', failed: true }])).toBe('Searched 1× in all');
+    expect(words([{ title: 'Bind', target: 'nosuch', bind: true, failed: true }, { title: 'Query', target: 'all' }])).toBe('Query in all');
+    expect(words([{ title: 'Bind', target: 'all', bind: true }, { title: 'Bind', target: 'nosuch', bind: true, failed: true }])).toBe('Bind all');
+    expect(words([{ title: 'Bind', target: '', bind: true, failed: true }, { title: 'Explain', target: '' }])).toBe('Explain');
+    // A failed call of any other kind is counted like any other: no word says it failed.
+    expect(words([{ title: 'Query', target: 'all', failed: true }])).toBe('Query in all');
   });
-  it('marks the target and the counts bold, nothing else', () => {
-    const [bound, searched] = activitySummary([{ kind: 'bind', target: 'all' }, { kind: 'query', target: 'lens-x' }]);
+  it('marks a bind\'s target and the counts bold, nothing else', () => {
+    const [bound, searched] = activitySummary([{ title: 'Bind', target: 'all', bind: true }, { title: 'Query', target: 'lens-x' }, { title: 'Query', target: 'lens-x' }]);
     expect(bound.filter(s => s.strong).map(s => s.text)).toEqual(['all']);
-    expect(searched.filter(s => s.strong).map(s => s.text)).toEqual(['1×']);
-  });
-  it('the live step names the target and the query; the step count is singular for one', () => {
-    expect(liveStep('all', 'OWASP Q3').map(s => s.text).join('')).toBe('Searching all for "OWASP Q3"…');
-    expect(activitySteps(1)).toBe('1 step');
-    expect(activitySteps(9)).toBe('9 steps');
+    expect(searched.filter(s => s.strong).map(s => s.text)).toEqual(['2×']);
   });
 });
 
@@ -109,40 +96,40 @@ describe('the cache share and compact counts', () => {
 });
 
 describe('the activity line on the page', () => {
+  // Rows as the server sends them: each tool call carries its tool's title and main argument.
   const items = (): ChatViewItem[] => [
     { kind: 'user', text: 'bind to all' },
-    call('tu_1', 'knomit_bind', { lens: 'all' }),
-    call('tu_2', 'knomit_query', { text: 'AI agent security incident' }),
-    call('tu_3', 'knomit_query', { text: 'agentic practice' }),
-    call('tu_4', 'knomit_materialize', { handle: 'a1b2c3d4' }),
+    { ...call('tu_1', 'knomit_bind', { lens: 'all' }), title: 'Bind', key_arg: 'all' },
+    { ...call('tu_2', 'knomit_query', { binding: 'h', text: 'AI agent security incident' }), title: 'Query', key_arg: 'AI agent security incident', in_base: true },
+    { ...call('tu_3', 'knomit_query', { binding: 'h', text: 'agentic practice' }), title: 'Query', key_arg: 'agentic practice', in_base: true },
+    { ...call('tu_4', 'knomit_materialize', { binding: 'h', file: 'kb/a.md' }), title: 'Materialize', key_arg: 'kb/a.md', in_base: true },
     { kind: 'assistant', text: 'Done.' },
   ];
 
   it('is collapsed by default, and says what the calls were', async () => {
     mount(snap(items()));
     await screen.findByTestId('chat-turn-0');
-    expect(summaryText()).toBe('Bound to all · searched 2× in all · read 1 fact');
+    expect(summaryText()).toBe('Bind all · Query 2× in all · Materialize in all');
     expect(screen.getByTestId('chat-activity-steps').textContent).toBe('4 steps');
     expect(screen.getByTestId('chat-tool-group')).toHaveAttribute('data-open', 'false');
     expect(screen.queryByTestId('chat-timeline')).toBeNull();
   });
 
-  it('expands into a timeline: one row per call with its key argument in mono', async () => {
+  it('expands into a timeline: one row per call, its title and its main argument in mono', async () => {
     mount(snap(items()));
     await screen.findByTestId('chat-turn-0');
     fireEvent.click(screen.getByTestId('chat-tool-group-toggle'));
     expect(screen.getByTestId('chat-tool-group')).toHaveAttribute('data-open', 'true');
     expect(['tu_1', 'tu_2', 'tu_3', 'tu_4'].map(id => screen.getByTestId(`chat-tool-arg-${id}`).textContent))
-      .toEqual(['all', 'AI agent security incident', 'agentic practice', 'a1b2c3d4']);
-    // The verbs: Bound, Searched, Searched, Read.
+      .toEqual(['all', 'AI agent security incident', 'agentic practice', 'kb/a.md']);
     expect(['tu_1', 'tu_2', 'tu_3', 'tu_4'].map(id => screen.getByTestId(`chat-tool-select-${id}`).querySelector('[data-call-part="label"]')?.textContent))
-      .toEqual(['Bound', 'Searched', 'Searched', 'Read']);
+      .toEqual(['Bind', 'Query', 'Query', 'Materialize']);
   });
 
-  it('a tool with no wording reads "used N tools"', async () => {
-    mount(snap([{ kind: 'user', text: 'q' }, call('tu_1', 'knomit_repos', {}), call('tu_2', 'knomit_changes', {}), { kind: 'assistant', text: 'ok' }]));
+  it('tools with no title are named by their raw names', async () => {
+    mount(snap([{ kind: 'user', text: 'q' }, call('tu_1', 'acme_one', {}), call('tu_2', 'acme_two', {}), { kind: 'assistant', text: 'ok' }]));
     await screen.findByTestId('chat-turn-0');
-    expect(summaryText()).toBe('Used 2 tools');
+    expect(summaryText()).toBe('acme_one · acme_two');
   });
 
   it('a call waiting for approval forces the group open', async () => {
@@ -154,32 +141,27 @@ describe('the activity line on the page', () => {
     expect(screen.getByTestId('chat-tool-group')).toHaveAttribute('data-open', 'true');
   });
 
-  it('while running, the collapsed line shows the live step in amber with a Stop pill that stops', async () => {
+  it('while running, the collapsed line is the same summary drawn amber, with a Stop pill that stops', async () => {
     const { fx } = mount(snap([
-      { kind: 'user', text: 'q' }, call('tu_1', 'knomit_bind', { lens: 'all' }), call('tu_2', 'knomit_query', { text: 'OWASP Q3' }, 'running'),
+      { kind: 'user', text: 'q' },
+      { ...call('tu_1', 'knomit_bind', { lens: 'all' }), title: 'Bind', key_arg: 'all' },
+      { ...call('tu_2', 'knomit_query', { binding: 'h', text: 'OWASP Q3' }, 'running'), title: 'Query', key_arg: 'OWASP Q3', in_base: true },
     ], { running: true }));
-    const live = await screen.findByTestId('chat-activity-live');
-    expect(live.textContent).toBe('Searching all for "OWASP Q3"…');
-    expect(live).toHaveStyle({ color: '#e8c27a' });
+    await screen.findByTestId('chat-activity-stop');
+    expect(summaryText()).toBe('Bind all · Query in all');
+    expect(screen.getByTestId('chat-activity-summary')).toHaveStyle({ color: '#e8c27a' });
     fx.calls.length = 0;
     fireEvent.click(screen.getByTestId('chat-activity-stop'));
     expect(fx.calls.map(c => c.route)).toEqual([`POST ${BASE}/cancel`]);
   });
 
-  it('a live call without arguments shows no key argument, and falls back to the summary', async () => {
+  it('a live call without arguments shows no main argument and no target', async () => {
     mount(snap([{ kind: 'user', text: 'q' }], { running: true }));
     await screen.findByTestId('chat-turn-0');
-    act(() => { chatStream('chat-a')!.emit('tool_call', { id: 'tu_9', name: 'knomit_query', state: 'running', turn: 0 }); });
-    expect(screen.queryByTestId('chat-activity-live')).toBeNull();
-    expect(summaryText()).toBe('Searched 1×');
+    act(() => { chatStream('chat-a')!.emit('tool_call', { id: 'tu_9', name: 'knomit_query', title: 'Query', state: 'running', turn: 0 }); });
+    expect(summaryText()).toBe('Query');
     fireEvent.click(screen.getByTestId('chat-tool-group-toggle'));
     expect(screen.queryByTestId('chat-tool-arg-tu_9')).toBeNull();
-  });
-
-  it('keyArg is the query text, the bind target or the read handle', () => {
-    expect(keyArg({ id: 'a', name: 'knomit_query', state: 'done', isError: false, args: { text: 'x' } })).toBe('x');
-    expect(keyArg({ id: 'a', name: 'knomit_bind', state: 'done', isError: false, args: { repo: 'r' } })).toBe('r');
-    expect(keyArg({ id: 'a', name: 'knomit_repos', state: 'done', isError: false, args: {} })).toBe('');
   });
 });
 
@@ -367,13 +349,13 @@ describe('the activity line on the page after a failed bind', () => {
   it('a failed bind in one group leaves the next group on the binding before it', async () => {
     mount(snap([
       { kind: 'user', text: 'q' },
-      call('tu_1', 'knomit_bind', { name: 'alpha' }), failedBind('tu_2', 'nosuch-kb'),
+      { ...call('tu_1', 'knomit_bind', { name: 'alpha' }), title: 'Bind' }, { ...failedBind('tu_2', 'nosuch-kb'), title: 'Bind' },
       { kind: 'assistant', text: 'then' },
-      call('tu_3', 'knomit_query', { text: 'x' }),
+      { ...call('tu_3', 'knomit_query', { binding: 'h', text: 'x' }), title: 'Query', in_base: true },
       { kind: 'assistant', text: 'done' },
     ]));
     await screen.findAllByTestId('chat-tool-group');
     const lines = screen.getAllByTestId('chat-activity-summary').map(e => e.textContent);
-    expect(lines).toEqual(['Bound to alpha', 'Searched 1× in alpha']);
+    expect(lines).toEqual(['Bind alpha', 'Query in alpha']);
   });
 });

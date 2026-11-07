@@ -11,14 +11,14 @@ describe('ChatResultPanel', () => {
   it('a materialize result renders as a fact in the result panel', async () => {
     const doc = '# A decision\n\nWe chose **SSE** over a socket.\n';
     stubFleetFetch({
-      [`GET ${BASE}/calls/tu_3`]: { body: { name: 'knomit_materialize', arguments: { path: 'kb/decisions/x.md', audience: 'agent' }, result: JSON.stringify({ text: doc, has_more: false }), is_error: false, elided: false } },
+      [`GET ${BASE}/calls/tu_3`]: { body: { name: 'knomit_materialize', title: 'Materialize', arguments: { path: 'kb/decisions/x.md', audience: 'agent' }, result: JSON.stringify({ text: doc, has_more: false }), is_error: false, elided: false } },
     });
     render(<ChatResultPanel chatId="chat-a" callId="tu_3" />);
     const fact = await screen.findByTestId('chat-result-fact');
     expect(fact.className).toContain('k-prose');
     expect(fact.querySelector('h1')).toHaveTextContent('A decision');
     expect(fact.querySelector('strong')).toHaveTextContent('SSE');
-    expect(screen.getByTestId('chat-result-title')).toHaveTextContent('Read');
+    expect(screen.getByTestId('chat-result-title')).toHaveTextContent('Materialize');
     // Not shown as the raw JSON it travelled in.
     expect(fact.textContent).not.toContain('has_more');
     expect(screen.queryByTestId('chat-result-text')).toBeNull();
