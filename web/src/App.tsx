@@ -1477,12 +1477,6 @@ export default function App() {
     if (p.commit) dispatch({ type: 'APPLY_NAV', view: 'library', factPath: p.path, asOf: { mode: 'history', commit: p.commit } });
     else navigate({ view: 'library', factPath: p.path, reveal: true });
   }, [navigate, dispatch]);
-  const onOpenCommit = useCallback((repo: string, commit: string) => {
-    const ctx: BrowseContext = { kind: 'repo', repo };
-    pendingBrowse.current = { ctx, path: '', commit };
-    onSelectTarget(ctx);
-    openPendingBrowse();
-  }, [onSelectTarget, openPendingBrowse]);
   // `target` is a repo or a lens (a chat binds to either). A lens addresses a
   // fact as kb://<store>/<path>, a repo by the bare path.
   const onOpenInBrowse = useCallback((target: string, file: string, commit?: string) => {
@@ -1973,7 +1967,7 @@ export default function App() {
               <div key={c.id} data-testid={`chat-body-${c.id}`}
                 style={draftBody(!serverOpen && displayed.kind === 'chat' && displayed.id === c.id)}>
                 <ErrorBoundary variant="inline" label="The chat hit an error">
-                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} onOpenInBrowse={onOpenInBrowse} onOpenCommit={onOpenCommit} repos={repos} />
+                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} onOpenInBrowse={onOpenInBrowse} repos={repos} />
                 </ErrorBoundary>
               </div>
             ))}

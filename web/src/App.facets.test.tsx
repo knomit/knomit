@@ -1342,6 +1342,46 @@ describe('a chat target', () => {
     expect(screen.getByTestId('rail-chat-chat-a')).toBeInTheDocument();
   });
 
+  // The whole wiring from a real chip in a real App. SABOTAGE: ChatFacet's
+  // onCommit left out -> the chip does nothing and no panel opens.
+  it('a commit chip opens the commit in the chat\'s side panel and the reader stays in the chat; a fact there opens in Browse at that commit', async () => {
+    const { api } = await import('./api');
+    const m = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    await primeApi();
+    const FULL = 'abc1234' + 'f'.repeat(33);
+    const PATH = 'kb/decisions/one.md';
+    const { fx } = chatRoutes([CHAT_A]);
+    fx.set('GET /api/v1/chats/chat-a', { body: { ...CHAT_A, running: false, pending_approvals: [], grants: [], items: [
+      { kind: 'user', text: 'q' },
+      { kind: 'tool_call', id: 'tu_1', name: 'knomit_query', state: 'done', arguments: { text: 'x', repo: 'core-kb' } },
+      { kind: 'assistant', text: 'Fixed in `abc1234`.' },
+    ] } });
+    fx.set('POST /api/v1/facts/resolve', { body: [{ handle: 'abc1234', id: '', title: '', type: '', repo: 'core-kb', branch: 'read/branch', path: '', excerpt: '', commit: FULL }] });
+    m.commitDetail.mockResolvedValue({ commit: FULL, date: '2026-11-01T10:00:00Z', message: 'learn: one', author: { name: 'Ada', email: 'a@example.com' }, files: [{ path: PATH, action: 'modified', title: 'One' }] });
+    m.fact.mockResolvedValue({ path: PATH, title: 'One', type: 'observation', body: 'THE OLD TEXT', domain: [], confidence: 0.9, sources: 1, entities: [], refs: [] });
+    await mountApp();
+    fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+    fireEvent.click(await screen.findByTestId('commit-link'));
+
+    const commit = await screen.findByTestId('chat-commit');
+    expect(m.commitDetail).toHaveBeenCalledWith('core-kb', 'read/branch', FULL);
+    expect(commit).toHaveTextContent('learn: one');
+    expect(screen.getByTestId('rail-chat-chat-a')).toHaveAttribute('aria-current', 'true');
+    expect(tabNames()).toEqual(['Chat', 'Settings']);
+
+    m.fact.mockClear();
+    fireEvent.click(within(commit).getByTestId('timeline-file-row'));
+    expect(await screen.findByTestId('chat-fact')).toHaveTextContent('THE OLD TEXT');
+    expect(m.fact).toHaveBeenCalledWith('core-kb', 'read/branch', PATH, FULL, undefined);
+
+    m.fact.mockClear();
+    fireEvent.click(screen.getByTestId('chat-panel-browse'));
+    await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+    // Browse reads that fact at that commit, not its latest version.
+    await waitFor(() => expect(m.fact.mock.calls.some(c => c[2] === PATH && c[3] === FULL)).toBe(true));
+    expect(m.fact.mock.calls.filter(c => c[2] === PATH).every(c => c[3] === FULL)).toBe(true);
+  });
+
   it('the chat ending (chat_end on its stream) removes it from the rail and unpins it', async () => {
     await primeApi();
     chatRoutes();
