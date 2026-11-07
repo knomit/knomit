@@ -192,6 +192,8 @@ describe('ChatSidePanel', () => {
     await screen.findByTestId('fact-title');
     expect(screen.queryByTestId('fact-band-title')).toBeNull();
     expect(screen.getByTestId('fact-band-path')).toBeInTheDocument();
+    // The observer is built in a passive effect, which may run after the title is found.
+    await waitFor(() => expect(seen.length).toBeGreaterThan(0));
     act(() => seen[seen.length - 1]([{ isIntersecting: false }]));
     expect(screen.getByTestId('fact-band-title')).toHaveTextContent('One decision');
     expect(screen.queryByTestId('fact-band-path')).toBeNull();
