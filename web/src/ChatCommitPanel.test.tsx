@@ -226,34 +226,61 @@ describe('a commit chip opens the commit in the side panel', () => {
     expect(screen.getByTestId('chat-panel-crumb')).toHaveTextContent('agentic-engineering / 9999999');
   });
 
-  // The stale guard: the first commit's slow answer must not stand in for the second.
-  it('a slow answer for the previous commit never shows for the one now open', async () => {
-    const second = '9999999' + 'a'.repeat(33);
-    let answerFirst: (r: { body: unknown }) => void = () => {};
-    const fetchStub = () => {
-      const base = stubFleetFetch({
-        [`GET ${BASE}`]: { body: twoChips() },
-        'POST /api/v1/facts/resolve': { body: [
-          { handle: 'abc1234', id: '', title: '', type: '', repo: 'agentic-engineering', branch: 'agent/test', path: '', excerpt: '', confidence: 0, commit: FULL },
-          { handle: '9999999', id: '', title: '', type: '', repo: 'agentic-engineering', branch: 'agent/test', path: '', excerpt: '', confidence: 0, commit: second },
-        ] },
-        [`GET ${REPO}/commits/${second}`]: { body: { ...DETAIL, commit: second, message: 'the second commit' } },
-      });
-      const inner = fetch as unknown as (input: string, init?: RequestInit) => Promise<Response>;
-      vi.stubGlobal('fetch', vi.fn((input: string, init?: RequestInit) => String(input).endsWith(`/commits/${FULL}`)
-        ? new Promise<Response>(res => { answerFirst = r => res(new Response(JSON.stringify(r.body), { status: 200, headers: { 'Content-Type': 'application/json' } })); })
-        : inner(input, init)));
-      return base;
-    };
-    fetchStub();
+  // The stale guards. `hold` is the commit whose read waits; everything else answers at once.
+  const SECOND = '9999999' + 'a'.repeat(33);
+  function twoCommits(hold: string, second: { status?: number; body: unknown }) {
+    let release: () => void = () => {};
+    stubFleetFetch({
+      [`GET ${BASE}`]: { body: twoChips() },
+      'POST /api/v1/facts/resolve': { body: [
+        { handle: 'abc1234', id: '', title: '', type: '', repo: 'agentic-engineering', branch: 'agent/test', path: '', excerpt: '', confidence: 0, commit: FULL },
+        { handle: '9999999', id: '', title: '', type: '', repo: 'agentic-engineering', branch: 'agent/test', path: '', excerpt: '', confidence: 0, commit: SECOND },
+      ] },
+      [`GET ${REPO}/commits/${FULL}`]: { body: DETAIL },
+      [`GET ${REPO}/commits/${SECOND}`]: second,
+    });
+    const inner = fetch as unknown as (input: string, init?: RequestInit) => Promise<Response>;
+    vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+      if (String(input).endsWith(`/commits/${hold}`)) await new Promise<void>(r => { release = r; });
+      return inner(input, init);
+    }));
     render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} repos={[]} />);
+    return { release: () => act(async () => { release(); await new Promise(r => setTimeout(r, 10)); }) };
+  }
+  const SECOND_BODY = { ...DETAIL, commit: SECOND, message: 'the second commit' };
+
+  it('a slow answer for the previous commit never shows for the one now open', async () => {
+    const { release } = twoCommits(FULL, { body: SECOND_BODY });
     await screen.findAllByTestId('commit-link');
     fireEvent.click(screen.getAllByTestId('commit-link')[0]);
     expect(await screen.findByTestId('chat-commit-loading')).toBeInTheDocument();
     fireEvent.click(screen.getAllByTestId('commit-link')[1]);
     expect(await screen.findByTestId('chat-commit-message')).toHaveTextContent('the second commit');
-    await act(async () => { answerFirst({ body: DETAIL }); await new Promise(r => setTimeout(r, 10)); });
+    await release();
     expect(screen.getByTestId('chat-commit-message')).toHaveTextContent('the second commit');
+  });
+
+  it('while the next commit loads, the previous one is not left on screen', async () => {
+    const { release } = twoCommits(SECOND, { body: SECOND_BODY });
+    await screen.findAllByTestId('commit-link');
+    fireEvent.click(screen.getAllByTestId('commit-link')[0]);
+    expect(await screen.findByTestId('chat-commit-message')).toHaveTextContent('learn(gate): three facts');
+    fireEvent.click(screen.getAllByTestId('commit-link')[1]);
+    expect(await screen.findByTestId('chat-commit-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-commit-message')).toBeNull();
+    await release();
+    expect(screen.getByTestId('chat-commit-message')).toHaveTextContent('the second commit');
+  });
+
+  it('a slow answer for the previous commit does not wipe the error of the one now open', async () => {
+    const { release } = twoCommits(FULL, problem(404, 'commit_not_in_repo', 'that commit is not here'));
+    await screen.findAllByTestId('commit-link');
+    fireEvent.click(screen.getAllByTestId('commit-link')[0]);
+    fireEvent.click(screen.getAllByTestId('commit-link')[1]);
+    expect(await screen.findByTestId('chat-commit-error')).toHaveTextContent('that commit is not here');
+    await release();
+    expect(screen.getByTestId('chat-commit-error')).toHaveTextContent('that commit is not here');
+    expect(screen.queryByTestId('chat-commit-loading')).toBeNull();
   });
 
   it('Back from a fact returns to the same place in a long list, without reading the commit again', async () => {
