@@ -44,7 +44,7 @@ func TestLearnHandler_RejectsMissingOrBlankTitle(t *testing.T) {
 			res, err := LearnHandler(emb)(ctx, req)
 			require.NoError(t, err)
 			require.True(t, res.IsError, "a blank title must fail the call")
-			require.Contains(t, resultText(t, res), "fact 1: title is required")
+			require.Contains(t, resultText(t, res), "fact 1: title is missing")
 			require.Equal(t, before, headCommit(t, svc), "the batch is all-or-nothing: nothing may be written")
 		})
 	}
