@@ -245,3 +245,33 @@ func (it *FactsIter) Close() error {
 	}
 	return nil
 }
+
+// CommitsWithPrefix returns up to limit full hashes of the commits on branch
+// (branch_commits) that start with prefix. prefix must be lowercase hex
+// (isLowerHex) or nothing matches: it goes into a GLOB pattern. Two results
+// for a limit of 2 is how a caller tells an ambiguous abbreviation.
+func (hq *HistoryQuery) CommitsWithPrefix(ctx context.Context, branch, prefix string, limit int) ([]string, error) {
+	if !isLowerHex(prefix) || limit <= 0 {
+		return nil, nil
+	}
+	branchID, err := hq.rh.BranchID(ctx, branch)
+	if err != nil {
+		return nil, fmt.Errorf("CommitsWithPrefix: %w", err)
+	}
+	rows, err := conn(ctx, hq.rh.DB()).QueryContext(ctx,
+		`SELECT commit_hash FROM branch_commits WHERE branch_id = ? AND commit_hash GLOB ? ORDER BY commit_hash LIMIT ?`,
+		branchID, prefix+"*", limit)
+	if err != nil {
+		return nil, fmt.Errorf("CommitsWithPrefix: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, fmt.Errorf("CommitsWithPrefix: scan: %w", err)
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}

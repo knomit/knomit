@@ -151,6 +151,16 @@ paths:
         order of the handles, once per distinct handle. Only the facts
         returned are read. It only reads: the read-only gate and the write
         gate both let it through.
+
+        COMMIT HASHES. A handle of 7 to 40 lowercase hex that names no fact
+        (an 8-hex one is tried as a fact's short id first) is looked up as a
+        commit, but only when `prefer` comes down to exactly ONE repo the
+        caller may read: a hash names no repo. It answers when that repo's
+        read branch has exactly one commit with that prefix and the commit
+        object exists. The item then carries `commit` (the full hash) with
+        `handle`, `repo` and `branch`; its fact fields are empty. No single
+        repo, an abbreviation two commits share, or a hash the repo does not
+        hold: the handle is omitted.
       operationId: resolveFacts
       requestBody:
         required: true
@@ -6339,6 +6349,7 @@ components:
         kind: { type: string, description: "epistemic or pragmatic; empty when the fact could not be parsed or names none." }
         origin: { type: string, description: "authored, distilled or discovered (the resolved origin); empty when the fact could not be parsed." }
         sources: { type: integer, description: "0 when the fact could not be parsed." }
+        commit: { type: string, description: "Only on an item answering a commit hash handle: the full commit hash. Its fact fields are then empty." }
 
     Version:
       type: object

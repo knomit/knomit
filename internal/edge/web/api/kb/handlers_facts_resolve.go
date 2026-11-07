@@ -16,6 +16,7 @@ import (
 	knomitfact "knomit/internal/domain/fact"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/edge/web/httpx"
+	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/index"
 	"knomit/internal/foundation/auth"
 )
@@ -59,28 +60,41 @@ type resolvedFact struct {
 	Kind    string `json:"kind"`
 	Origin  string `json:"origin"`
 	Sources int    `json:"sources"`
+	// Commit is set, to the full hash, on an item that answers a COMMIT hash
+	// handle instead of a fact: then only handle, repo, branch and commit are
+	// filled. Absent on a fact.
+	Commit string `json:"commit,omitempty"`
 }
 
-var shortFactID = regexp.MustCompile(`^[0-9a-f]{8}$`)
+var (
+	shortFactID = regexp.MustCompile(`^[0-9a-f]{8}$`)
+	commitHash  = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+)
 
 // wantedHandle is one parsed handle: a short id (any path), or a path, in one
-// named repo or in any.
+// named repo or in any; and/or a commit hash.
 type wantedHandle struct {
 	handle string
 	id     string // the short id, when the handle is one
 	path   string // the full fact path (root/…/name.md), when the handle names one
 	repo   *repos.RepoInstance
+	commit string // the hash (7-40 lowercase hex), when the handle may be a commit
 }
 
 // parseHandle reads the shapes a chat answer cites a fact by: an 8-hex short
 // id; a path with or without the ontology root and the .md extension
-// (invariants/web/gate/3fc77970); and kb://<repo id or name>/<path>. Anything
-// else, a dot path, and a kb:// URI naming no registered repo are not handles.
+// (invariants/web/gate/3fc77970); and kb://<repo id or name>/<path>. It also
+// reads a commit hash (7 to 40 lowercase hex; an 8-hex one is tried as a fact
+// first). Anything else, a dot path, and a kb:// URI naming no registered repo
+// are not handles.
 func parseHandle(h, root string, mgr *repos.Manager) (wantedHandle, bool) {
 	w := wantedHandle{handle: h}
 	s := strings.TrimSpace(h)
-	if shortFactID.MatchString(s) {
-		w.id = s
+	if commitHash.MatchString(s) {
+		w.commit = s
+		if shortFactID.MatchString(s) {
+			w.id = s
+		}
 		return w, true
 	}
 	if rest, ok := strings.CutPrefix(s, "kb://"); ok {
@@ -204,7 +218,7 @@ func resolveHandles(ctx context.Context, mgr *repos.Manager, root string, handle
 		var ids, paths []string
 		var which []int
 		for i, wh := range wanted {
-			if !open(i) || (wh.repo != nil && wh.repo != ri) {
+			if !open(i) || (wh.repo != nil && wh.repo != ri) || (wh.id == "" && wh.path == "") {
 				continue
 			}
 			which = append(which, i)
@@ -247,9 +261,29 @@ func resolveHandles(ctx context.Context, mgr *repos.Manager, root string, handle
 		}
 	}
 
+	// A commit hash that named no fact is looked up as a commit, but only when
+	// the turn worked in exactly ONE repo the caller reaches: a hash names no
+	// repo, so with none or several known it stays code.
+	commits := map[int]resolvedFact{}
+	if len(preferred) == 1 {
+		ri := preferred[0]
+		for i, wh := range wanted {
+			if _, done := won[i]; done || len(found[i]) > 0 || wh.commit == "" || ctx.Err() != nil {
+				continue
+			}
+			if full, ok := lookupCommit(ctx, ri, wh.commit); ok {
+				commits[i] = resolvedFact{Handle: wh.handle, Repo: ri.Name(), Branch: ri.ReadBranch(), Commit: full}
+			}
+		}
+	}
+
 	out := []resolvedFact{}
 	read := map[string]resolvedFact{}
 	for i, wh := range wanted {
+		if c, ok := commits[i]; ok {
+			out = append(out, c)
+			continue
+		}
 		h, ok := won[i]
 		if !ok || ctx.Err() != nil {
 			continue
@@ -341,6 +375,27 @@ func lookupRepo(ctx context.Context, ri *repos.RepoInstance, ids, paths []string
 		}
 	}
 	return byPath, byID
+}
+
+// lookupCommit expands hash (7 to 40 hex) to the one commit on ri's read
+// branch it abbreviates, and checks the repository holds that commit object.
+// An abbreviation two commits share, a hash the branch does not have, and a
+// store that cannot be read are all "no".
+func lookupCommit(ctx context.Context, ri *repos.RepoInstance, hash string) (string, bool) {
+	var full string
+	if err := ri.WithRead(func(svc *store.Service) {
+		hs, err := svc.HistoryQuery().CommitsWithPrefix(ctx, ri.ReadBranch(), hash, 2)
+		if err != nil {
+			log.Warn().Err(err).Str("repo", ri.Name()).Msg("facts resolve: commit lookup failed")
+			return
+		}
+		if len(hs) == 1 && svc.HasCommit(hs[0]) {
+			full = hs[0]
+		}
+	}); err != nil {
+		return "", false
+	}
+	return full, full != ""
 }
 
 // readHit reads the fact a handle resolved to, for its confidence and excerpt.
