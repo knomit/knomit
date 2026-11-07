@@ -2,6 +2,7 @@ package kb
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -78,10 +79,42 @@ func TestFactsResolve_CommitNotInTheRepoStaysCode(t *testing.T) {
 	require.Empty(t, commitsOf(postResolvePrefer(t, m, onlyAlpha, []string{"beta"}, betaHead)))
 }
 
-// An 8-hex handle that is a fact's short id is the fact, not a commit.
+// An 8-hex handle that is BOTH a fact's short id and a commit's prefix in the
+// same repo is the fact.
 func TestFactsResolve_AFactIdIsNotACommit(t *testing.T) {
-	m := collisionManager(t)
-	got := postResolvePrefer(t, m, nil, []string{"alpha"}, "eeeeeeee")
-	require.Equal(t, map[string]string{"eeeeeeee": "alpha:Only alpha"}, titles(got))
+	m, svcs := newRealStoreManager(t, "alpha")
+	writeResolveFact(t, svcs["alpha"], "kb/x/y/11111111.md", "observation", "First", "a", "0.7")
+	h := headOf(t, m.Get("alpha"))
+	writeResolveFact(t, svcs["alpha"], "kb/x/y/"+h[:8]+".md", "observation", "Named like a commit", "a", "0.7")
+	require.Equal(t, map[string]string{h[:7]: "alpha@" + h}, commitsOf(postResolvePrefer(t, m, nil, []string{"alpha"}, h[:7])),
+		"fixture: the prefix is a commit on the branch")
+
+	got := postResolvePrefer(t, m, nil, []string{"alpha"}, h[:8])
+	require.Equal(t, map[string]string{h[:8]: "alpha:Named like a commit"}, titles(got))
 	require.Empty(t, commitsOf(got))
+}
+
+// An abbreviation two commits share is ambiguous, and a hash the index lists
+// but whose commit object the repository does not hold is not linked: both
+// stay code.
+func TestFactsResolve_AmbiguousOrMissingCommitStaysCode(t *testing.T) {
+	m := collisionManager(t)
+	real := headOf(t, m.Get("beta"))
+	orig := listCommits
+	t.Cleanup(func() { listCommits = orig })
+
+	listCommits = func(ctx context.Context, svc *store.Service, branch, prefix string) ([]string, error) {
+		return []string{real, prefix + strings.Repeat("0", 40-len(prefix))}, nil
+	}
+	require.Empty(t, commitsOf(postResolvePrefer(t, m, nil, []string{"beta"}, real[:7])))
+
+	missing := strings.Repeat("f", 40)
+	listCommits = func(ctx context.Context, svc *store.Service, branch, prefix string) ([]string, error) {
+		return []string{missing}, nil
+	}
+	require.Empty(t, commitsOf(postResolvePrefer(t, m, nil, []string{"beta"}, "fffffff")))
+
+	listCommits = orig
+	require.Equal(t, map[string]string{real[:7]: "beta@" + real}, commitsOf(postResolvePrefer(t, m, nil, []string{"beta"}, real[:7])),
+		"fixture: with the real index the same prefix resolves")
 }

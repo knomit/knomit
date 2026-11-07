@@ -8,6 +8,7 @@ import type { ChatSnapshot } from './chatApi';
 import { typeStyles, repoHue } from './utils';
 import { PANEL_OPEN_IN_BROWSE } from './chatCopy';
 import { TypeIcon } from './icons';
+import { CommitHash } from './TimelineNav';
 
 const CHAT = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
 const BASE = '/api/v1/chats/chat-a';
@@ -150,6 +151,9 @@ describe('chat fact links', () => {
     const link = await screen.findByTestId('commit-link');
     expect(resolveCalls(fx)[0].body).toEqual({ handles: ['abc1234', '1111111'], prefer: ['agentic-engineering'] });
     expect(within(link).getByTestId('commit-hash')).toHaveTextContent('abc1234');
+    // It IS the timeline's component, not a look-alike.
+    const ref = render(<CommitHash commit={FULL} />).container.firstElementChild!;
+    expect(link.innerHTML).toBe(ref.outerHTML);
     expect(link).toHaveAttribute('title', FULL);
     const codes = [...screen.getByTestId('chat-turn-0').querySelectorAll('code')].map(c => c.textContent);
     expect(codes).toEqual(['1111111']);

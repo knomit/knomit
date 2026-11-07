@@ -154,6 +154,11 @@ func handleFactsResolve(mgr *repos.Manager, root string) http.HandlerFunc {
 var (
 	lookupIndex  = recentFacts
 	readResolved = readFact
+	// listCommits is the index read that expands a hash: up to two commits on
+	// branch with that prefix (two means ambiguous).
+	listCommits = func(ctx context.Context, svc *store.Service, branch, prefix string) ([]string, error) {
+		return svc.HistoryQuery().CommitsWithPrefix(ctx, branch, prefix, 2)
+	}
 )
 
 // hit is where a handle was found.
@@ -384,7 +389,7 @@ func lookupRepo(ctx context.Context, ri *repos.RepoInstance, ids, paths []string
 func lookupCommit(ctx context.Context, ri *repos.RepoInstance, hash string) (string, bool) {
 	var full string
 	if err := ri.WithRead(func(svc *store.Service) {
-		hs, err := svc.HistoryQuery().CommitsWithPrefix(ctx, ri.ReadBranch(), hash, 2)
+		hs, err := listCommits(ctx, svc, ri.ReadBranch(), hash)
 		if err != nil {
 			log.Warn().Err(err).Str("repo", ri.Name()).Msg("facts resolve: commit lookup failed")
 			return
