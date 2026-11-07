@@ -31,6 +31,9 @@ type callRecord struct {
 	Result    string          `json:"result"`
 	IsError   bool            `json:"is_error"`
 	Elided    bool            `json:"elided"`
+	// Title and KeyArg word the call's row, as its tool_call events do.
+	Title  string `json:"title,omitempty"`
+	KeyArg string `json:"key_arg,omitempty"`
 }
 
 // chatStore is one chat's directory.

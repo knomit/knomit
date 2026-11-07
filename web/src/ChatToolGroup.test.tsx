@@ -5,7 +5,7 @@ import { ChatToolGroup } from './ChatToolGroup';
 import { installFakeEventSource, uninstallFakeEventSource, chatStream } from './testEventSource';
 import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatApproval, ChatSnapshot } from './chatApi';
-import { APPROVAL_TARGET_UNRESOLVED, loadedToolsRow } from './chatCopy';
+import { APPROVAL_TARGET_UNRESOLVED } from './chatCopy';
 import type { ToolCall } from './chatState';
 
 const CHAT = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
@@ -79,7 +79,7 @@ describe('approvals in a tool row', () => {
     stubFleetFetch({ [`GET ${BASE}`]: { body: snap([takeover], 'knomit_review') } });
     render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} />);
     const card = await screen.findByTestId('chat-approval-tu_2');
-    expect(screen.getByTestId('chat-tool-row-tu_2')).toHaveTextContent('knomit: Knomit review');
+    expect(screen.getByTestId('chat-tool-row-tu_2')).toHaveTextContent('knomit_review');
     expect(screen.getByTestId('chat-approval-action')).toHaveTextContent('takeover');
     expect(within(card).getAllByRole('button').map(b => b.textContent)).toEqual(['Allow', 'Decline', 'Allow for session']);
   });
@@ -110,23 +110,20 @@ describe('approvals in a tool row', () => {
 describe('the loader row', () => {
   const group = (calls: ToolCall[]) => render(<ChatToolGroup lead={[]} approvals={{}} selectedId={null} onSelect={vi.fn()} onAnswer={vi.fn()} calls={calls} />);
 
-  it('words a call to the loader as the tools it loaded, and every other call as before', () => {
+  it('words a call to the loader like any other call: its title and the main argument the server sent', () => {
     group([
-      { id: 'tu_1', name: 'load_tools', state: 'done', isError: false, loaded: ['knomit_query', 'knomit_explain'] },
-      { id: 'tu_2', name: 'knomit_query', state: 'done', isError: false },
+      { id: 'tu_1', name: 'load_tools', title: 'Load tools', keyArg: 'knomit_query, knomit_explain', state: 'done', isError: false, loaded: ['knomit_query', 'knomit_explain'] },
+      { id: 'tu_2', name: 'knomit_query', title: 'Query', state: 'done', isError: false },
     ]);
     fireEvent.click(screen.getByTestId('chat-tool-group-toggle'));
-    expect(screen.getByTestId('chat-tool-row-tu_1')).toHaveTextContent('Loaded tools: knomit_query, knomit_explain');
-    expect(screen.getByTestId('chat-tool-row-tu_1')).toHaveTextContent(loadedToolsRow(['knomit_query', 'knomit_explain']));
-    expect(screen.getByTestId('chat-tool-row-tu_2')).toHaveTextContent('Searched');
-    expect(screen.getByTestId('chat-tool-row-tu_2')).not.toHaveTextContent('Loaded tools');
+    expect(screen.getByTestId('chat-tool-row-tu_1')).toHaveTextContent('Load tools·knomit_query, knomit_explain');
+    expect(screen.getByTestId('chat-tool-row-tu_2')).toHaveTextContent(/^Query$/);
   });
 
-  it('a loader call that loaded nothing is the ordinary row', () => {
-    group([{ id: 'tu_1', name: 'load_tools', state: 'done', isError: true }]);
+  it('a loader call that loaded nothing is its title alone', () => {
+    group([{ id: 'tu_1', name: 'load_tools', title: 'Load tools', state: 'done', isError: true }]);
     fireEvent.click(screen.getByTestId('chat-tool-group-toggle'));
-    expect(screen.getByTestId('chat-tool-row-tu_1')).toHaveTextContent('load_tools');
-    expect(screen.getByTestId('chat-tool-row-tu_1')).not.toHaveTextContent('Loaded tools');
+    expect(screen.getByTestId('chat-tool-row-tu_1')).toHaveTextContent(/^Load tools$/);
   });
 });
 

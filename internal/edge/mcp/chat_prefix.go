@@ -82,6 +82,10 @@ func toolDef(t mcpgo.Tool) (llm.ToolDef, error) {
 	}
 	var w struct {
 		InputSchema json.RawMessage `json:"inputSchema"`
+		Annotations struct {
+			Title string `json:"title"`
+		} `json:"annotations"`
+		Meta map[string]any `json:"_meta"`
 	}
 	if err := json.Unmarshal(wire, &w); err != nil {
 		return llm.ToolDef{}, fmt.Errorf("chat prefix: %s: %w", t.Name, err)
@@ -90,7 +94,12 @@ func toolDef(t mcpgo.Tool) (llm.ToolDef, error) {
 	if err != nil {
 		return llm.ToolDef{}, fmt.Errorf("chat prefix: %s schema: %w", t.Name, err)
 	}
-	return llm.ToolDef{Name: t.Name, Description: t.Description, Schema: schema}, nil
+	// The title and the main argument word the chat's rows; they are not sent
+	// to the model (ToolDef.Title, ToolDef.Key).
+	return llm.ToolDef{
+		Name: t.Name, Description: t.Description, Schema: schema,
+		Title: w.Annotations.Title, Key: keyArgsOf(w.Meta[MetaKeyArgs]),
+	}, nil
 }
 
 // NewChatToolWindow builds the ToolWindow of an adaptive chat from the tools

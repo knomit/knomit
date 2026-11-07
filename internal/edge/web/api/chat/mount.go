@@ -416,6 +416,9 @@ func (m *manager) create(ctx context.Context, p auth.Principal, provider, model 
 		return fail(err)
 	}
 	c.traceTools = traceTools(tools)
+	// The loader is the chat's own tool, never in tools; its wording sits with
+	// its definition (llm.LoaderDef) like any other tool's.
+	c.labels = toolLabels(append(tools[:len(tools):len(tools)], llm.LoaderDef("")))
 
 	lg, err := openSessionLog(m.logDir, id, c.callMetaOf)
 	if err != nil {

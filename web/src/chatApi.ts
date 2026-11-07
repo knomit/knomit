@@ -55,6 +55,10 @@ export interface ChatViewItem {
   cost_usd?: number; warning?: string; error?: string; cancelled?: boolean;
   /** On the call to the loader tool: the tools that call loaded. */
   loaded?: string[];
+  /** On a tool call: the tool's own title (annotations.title) and the value of
+   *  the argument the tool marks as its main one; each absent when there is none. */
+  title?: string;
+  key_arg?: string;
 }
 
 /** A finished call's result in one number (a query's fact count). */
@@ -94,7 +98,7 @@ export interface ChatSnapshot extends ChatInfo {
 }
 
 /** GET /chats/{id}/calls/{callId}. */
-export interface ChatCall { name: string; arguments: unknown; result: string; is_error: boolean; elided: boolean }
+export interface ChatCall { name: string; arguments: unknown; result: string; is_error: boolean; elided: boolean; title?: string; key_arg?: string }
 
 export type ApprovalDecision = 'allow' | 'decline' | 'allow_session';
 

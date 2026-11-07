@@ -4230,6 +4230,16 @@ paths:
         so a declined call's span includes the wait for the answer. A group of
         calls is worded by its wall time: the last `ended_ms` minus the first
         `started_ms`. The live `tool_call` events carry the same fields.
+
+        A `tool_call` row also carries the words its row is drawn with, taken
+        from the tool's own MCP definition so that changing a tool never needs
+        a page change: `title`, the tool's `annotations.title` (absent for a
+        tool that has none; show its `name`), and `key_arg`, the value of the
+        argument the tool marks as its main one in its `_meta` under
+        `io.knomit/key` (a list of argument names, the first non-empty string
+        value wins; cut to 200 bytes). For the chat's loader tool `key_arg` is
+        the tools the call LOADED, comma-separated, once done. Each is absent
+        when there is none. Both are on the running and done events too.
       operationId: getChat
       responses:
         "200":
@@ -4267,7 +4277,8 @@ paths:
         goes out every 30 seconds. Events: `text_delta`, `thinking_delta`,
         `reasoning`, `tool_call` (state `running` then `done`; `started_ms` on
         both, `ended_ms` on `done`, Unix milliseconds on the server's clock,
-        the same values `GET /chats/{id}` lists), `approval`,
+        the same values `GET /chats/{id}` lists; `title` and `key_arg` as
+        `GET /chats/{id}` describes them), `approval`,
         `usage`, `warning`, `turn_done`, `turn_error`, `chat_state` (the
         chat's rail row changed: `title`, `state` idle, running,
         awaiting_approval or error, `turns`, `cost_usd`, `last_activity`,
@@ -4467,6 +4478,12 @@ paths:
                   result: { type: string }
                   is_error: { type: boolean }
                   elided: { type: boolean }
+                  title:
+                    type: string
+                    description: The tool's annotations.title, as on the transcript row; absent when the tool has none.
+                  key_arg:
+                    type: string
+                    description: The call's main argument, as on the transcript row; absent when there is none.
         "404": { $ref: "#/components/responses/Problem" }
 
   /secrets:

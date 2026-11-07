@@ -53,6 +53,7 @@ const ChangesDescription = "What is different under a folder since a commit you 
 // changesTool returns the Tool definition for knomit_changes.
 func changesTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_changes",
+		mcpgo.WithTitleAnnotation("Changes"), withKeyArgs("prefix", "repo"),
 		mcpgo.WithDescription(ChangesDescription),
 		bindingArg(true),
 		mcpgo.WithString("repo",

@@ -16,6 +16,7 @@ import (
 // retractTool returns the Tool definition for knomit_retract.
 func retractTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_retract",
+		mcpgo.WithTitleAnnotation("Retract"), withKeyArgs("file"),
 		mcpgo.WithDescription("Retract a fact from the knowledge base."),
 		bindingArg(true),
 		mcpgo.WithString("file",
