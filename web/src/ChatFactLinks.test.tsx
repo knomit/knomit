@@ -118,11 +118,11 @@ describe('chat fact links', () => {
   it('prefers the repos the turn worked in: its calls\' repo or lens, then the binding in force', async () => {
     const { fx } = mount(snapshot([
       { kind: 'user', text: 'bind' },
-      { kind: 'tool_call', id: 'tu_1', name: 'knomit_bind', state: 'done', arguments: { lens: 'all' } },
+      { kind: 'tool_call', id: 'tu_1', name: 'knomit_bind', state: 'done', arguments: { lens: 'all' }, in_base: true, target: 'all' },
       { kind: 'assistant', text: 'bound' },
       { kind: 'user', text: 'q' },
-      { kind: 'tool_call', id: 'tu_2', name: 'knomit_query', state: 'done', arguments: { text: 'x', repo: 'agentic-engineering' } },
-      { kind: 'tool_call', id: 'tu_3', name: 'knomit_materialize', state: 'done', arguments: { file: 'kb://87b70fb1aeb1/kb/a/b.md' } },
+      { kind: 'tool_call', id: 'tu_2', name: 'knomit_query', state: 'done', arguments: { text: 'x', repo: 'agentic-engineering' }, in_base: true, target: 'agentic-engineering' },
+      { kind: 'tool_call', id: 'tu_3', name: 'knomit_materialize', state: 'done', arguments: { file: 'kb://87b70fb1aeb1/kb/a/b.md', binding: 'h1' }, in_base: true },
       { kind: 'assistant', text: 'see `3fc77970`' },
     ]));
     await screen.findByTestId('fact-link');
@@ -166,7 +166,7 @@ describe('chat fact links', () => {
     const fx = stubFleetFetch({
       [`GET ${BASE}`]: { body: snapshot([
         { kind: 'user', text: 'q' },
-        { kind: 'tool_call', id: 'tu_1', name: 'knomit_query', state: 'done', arguments: { text: 'x', repo: 'agentic-engineering' } },
+        { kind: 'tool_call', id: 'tu_1', name: 'knomit_query', state: 'done', arguments: { text: 'x', repo: 'agentic-engineering' }, in_base: true, target: 'agentic-engineering' },
         { kind: 'assistant', text: 'Fixed in `abc1234`; `1111111` is elsewhere.' },
       ]) },
       [RESOLVE]: (body: unknown) => {

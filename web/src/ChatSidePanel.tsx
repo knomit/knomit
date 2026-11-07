@@ -6,7 +6,7 @@ import { ChatFactView } from './ChatFactView';
 import { ChatResultPanel } from './ChatResultPanel';
 import { FacetSplitter } from './FacetColumns';
 import type { ChatCall } from './chatApi';
-import { bindTarget, toolCallLabel, toolCallOf, toolKind } from './chatState';
+import { bindTarget, isBind, toolCallLabel, toolCallOf } from './chatState';
 import type { ToolCall } from './chatState';
 import { crumbOf, shownEntry } from './chatPanelState';
 import type { PanelAction, PanelState } from './chatPanelState';
@@ -99,7 +99,7 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
     const path = file.replace(/^kb:\/\/[^/]+\//, '');
     // A bind names its own target (bindTarget's rule: lens, repo, name, target), and it is that, not the binding in
     // force BEFORE it ran, that the call belongs to. Other calls name a repo or lens, else the binding in force.
-    const own = toolKind(call.name) === 'bind' ? bindTarget(toolCallOf(callId, call)) : arg(call, 'repo', 'lens', 'target');
+    const own = isBind(call.name) ? bindTarget(toolCallOf(callId, call)) : arg(call, 'repo', 'lens', 'target');
     const repo = own || boundForRef.current?.(callId) || '';
     // The mockup's "repo / path / dir" when the call names a file; otherwise the repo it ran in, then the call,
     // labelled as its row is (toolCallLabel).

@@ -32,6 +32,7 @@ const SkillToolDescription = "Read this repo's skills: instructions, kept in the
 
 func skillTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_skill",
+		mcpgo.WithTitleAnnotation("Skill"), withKeyArgs("name"),
 		mcpgo.WithDescription(SkillToolDescription),
 		bindingArg(true),
 		mcpgo.WithString("name",

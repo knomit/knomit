@@ -26,14 +26,29 @@
 // POST, so a snapshot started after the POST was answered 2xx lists it; until
 // then the local turn is kept after the snapshot's turns. A POST that fails
 // takes its local turn out outright.
-import { durationMinutes, durationMs, durationSeconds, loadedToolsRow, toolVerb } from './chatCopy';
+import { durationMinutes, durationMs, durationSeconds } from './chatCopy';
 import type { ChatApproval, ChatCall, ChatCallSummary, ChatNotice, ChatSnapshot, ChatViewItem } from './chatApi';
 
-/** The loader tool's name (llm.LoadToolsName): its calls get their own row. */
-export const LOADER_TOOL = 'load_tools';
+/** A call's title and main argument from what the server sent (a view item, a
+ *  tool_call event or a stored call), each only when present. */
+const wordingOf = (w: { title?: string; key_arg?: string; target?: string; in_base?: boolean }): Pick<ToolCall, 'title' | 'keyArg' | 'target' | 'inBase'> =>
+  ({
+    ...(w.title ? { title: w.title } : {}), ...(w.key_arg ? { keyArg: w.key_arg } : {}),
+    ...(w.target ? { target: w.target } : {}), ...(w.in_base ? { inBase: true } : {}),
+  });
 
 export interface ToolCall {
   id: string; name: string; state: 'running' | 'done'; isError: boolean;
+  /** The tool's own title and the call's main argument, as the server words
+   *  them from the tool's definition (annotations.title, and the argument the
+   *  tool marks as its main one). Absent when the tool has none. */
+  title?: string;
+  keyArg?: string;
+  /** The server's word that the call acts in a repo or lens (its arguments
+   *  carry binding, repo or lens): the activity line says "in <target>". */
+  inBase?: boolean;
+  /** The repo or lens the call's arguments name explicitly, as the server read it. */
+  target?: string;
   /** The call's arguments: in the snapshot always, and on a live `running` event. */
   args?: unknown;
   /** How long the tool ran, in ms, and its result in one number: on a finished
@@ -125,7 +140,7 @@ export type ChatEvent =
   | { kind: 'send_failed'; sendId: number }
   | { kind: 'text_delta'; text: string; turn: number }
   | { kind: 'thinking_delta'; text: string; turn: number }
-  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; arguments?: unknown; duration_ms?: number; summary?: ChatCallSummary; loaded?: string[]; started_ms?: number; ended_ms?: number; turn: number }
+  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; arguments?: unknown; title?: string; key_arg?: string; in_base?: boolean; target?: string; duration_ms?: number; summary?: ChatCallSummary; loaded?: string[]; started_ms?: number; ended_ms?: number; turn: number }
   | { kind: 'approval'; approval: ChatApproval }
   | { kind: 'approval_answered'; callId: string }
   | { kind: 'usage'; usage: UsagePayload; cost_usd?: number; cost_rows?: UsagePayload; seq?: number; turn: number }
@@ -192,6 +207,7 @@ function addItem(turns: ChatTurn[], item: ChatViewItem, at: number): void {
   const t = turns[turns.length - 1];
   if (item.kind === 'assistant') { t.parts.push({ kind: 'text', text: item.text ?? '' }); return; }
   const c: ToolCall = { id: item.id ?? '', name: item.name ?? '', state: item.state ?? 'done', isError: !!item.is_error, ...(item.arguments !== undefined ? { args: item.arguments } : {}),
+    ...wordingOf(item),
     ...(item.duration_ms ? { durationMs: item.duration_ms } : {}), ...(item.summary ? { summary: item.summary } : {}), ...(item.loaded?.length ? { loaded: item.loaded } : {}),
     ...(item.started_ms ? { startedMs: item.started_ms } : {}), ...(item.ended_ms ? { endedMs: item.ended_ms } : {}) };
   const last = t.parts[t.parts.length - 1];
@@ -274,6 +290,7 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
                 calls: p.calls.map(c => c.id !== e.id || c.state === 'done' ? c : {
                   ...c, state: e.state, isError: !!e.is_error,
                   ...(e.arguments !== undefined && c.args === undefined ? { args: e.arguments } : {}),
+                  ...wordingOf(e),
                   ...(e.duration_ms ? { durationMs: e.duration_ms } : {}), ...(e.summary ? { summary: e.summary } : {}),
                   ...(e.started_ms ? { startedMs: e.started_ms } : {}), ...(e.ended_ms ? { endedMs: e.ended_ms } : {}),
                   ...(e.loaded?.length ? { loaded: e.loaded } : {}),
@@ -284,6 +301,7 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
         }
         const c: ToolCall = {
           id: e.id, name: e.name, state: e.state, isError: !!e.is_error, ...(e.arguments !== undefined ? { args: e.arguments } : {}),
+          ...wordingOf(e),
           ...(e.duration_ms ? { durationMs: e.duration_ms } : {}), ...(e.summary ? { summary: e.summary } : {}), ...(e.loaded?.length ? { loaded: e.loaded } : {}),
           ...(e.started_ms ? { startedMs: e.started_ms } : {}), ...(e.ended_ms ? { endedMs: e.ended_ms } : {}),
         };
@@ -354,20 +372,13 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
   }
 }
 
-/** toolRowLabel words a tool call's row: knomit_repos -> "knomit: Knomit repos". */
-export function toolRowLabel(tool: string): string {
-  const rest = tool.startsWith('knomit_') ? tool.slice('knomit_'.length) : '';
-  return rest ? `knomit: Knomit ${rest.replaceAll('_', ' ')}` : tool;
-}
-
 /** toolCallLabel is a call's label as its timeline row shows it, and as the
- *  side panel's header and breadcrumb show the same call: the loader's loaded
- *  tools, else the verb chatCopy has for the tool's kind, else toolRowLabel.
+ *  side panel's header and breadcrumb show the same call: the tool's own title,
+ *  as the server sent it (annotations.title), else the tool's raw name. The
+ *  page holds no wording of its own for any tool, and a call reads the same
+ *  running, done or failed (failure is the red dot and text, not a word).
  *  ONE function, so the row and the panel can never word a call differently. */
-export function toolCallLabel(c: ToolCall): string {
-  if (c.name === LOADER_TOOL && c.loaded?.length) return loadedToolsRow(c.loaded);
-  return toolVerb(toolKind(c.name), c.state === 'running') ?? toolRowLabel(c.name);
-}
+export const toolCallLabel = (c: ToolCall): string => c.title || c.name;
 
 /** The transcript's own record of a call (what its row is drawn from), or undefined. */
 export function findCall(turns: ChatTurn[], callId: string): ToolCall | undefined {
@@ -382,7 +393,7 @@ export function findCall(turns: ChatTurn[], callId: string): ToolCall | undefine
 /** A finished call as the call endpoint returned it, in the shape a row is drawn
  *  from: for a call the transcript no longer holds. */
 export const toolCallOf = (callId: string, call: ChatCall): ToolCall =>
-  ({ id: callId, name: call.name, state: 'done', isError: call.is_error, args: call.arguments });
+  ({ id: callId, name: call.name, state: 'done', isError: call.is_error, args: call.arguments, ...wordingOf(call) });
 
 /** A knomit_materialize document puts `<a id="f-..."></a>` on its own line
  *  before each fact so a document can link to it. The chat panel renders
@@ -482,45 +493,32 @@ const argOf = (args: unknown, keys: string[]): string => {
   return '';
 };
 
-/** The tools the activity line has wording for. */
-export type ToolKind = 'bind' | 'query' | 'read';
-export function toolKind(name: string): ToolKind | null {
-  switch (name) {
-    case 'knomit_bind': return 'bind';
-    case 'knomit_query': return 'query';
-    case 'knomit_materialize': case 'knomit_explain': return 'read';
-    default: return null;
-  }
-}
+/** The one tool the page tells apart by name, for BEHAVIOUR, not wording: a
+ *  bind changes which repo or lens the chat works in, which the page tracks
+ *  (boundAfter, callTarget, the side panel's breadcrumb). Its row is worded
+ *  like any other call's. */
+export const BIND_TOOL = 'knomit_bind';
+export const isBind = (name: string): boolean => name === BIND_TOOL;
 
 /** bindTarget is the repo or lens a knomit_bind call names. */
 export const bindTarget = (c: ToolCall): string => argOf(c.args, ['lens', 'repo', 'name', 'target']);
 
-/** The target a call acts on: what its own arguments name, else the target of
- *  the binding in force (`bound`). Empty when neither is known. */
+/** The target a call acts on. A bind's is what it names; any other call's,
+ *  when the server says it acts in a repo or lens (`inBase`: its arguments
+ *  carry binding, repo or lens), is the repo or lens the server says it names
+ *  (`target`), else the target of the binding in force (`bound`). A call
+ *  without inBase (the chat's loader, an unbound catalogue read) ran nowhere in
+ *  particular. Only the server's fields decide, never the arguments: the live
+ *  event drops large arguments, so reading them would word a call one way live
+ *  and another after a reload. Empty when none is known. */
 export const callTarget = (c: ToolCall, bound: string): string =>
-  (toolKind(c.name) === 'bind' ? bindTarget(c) : argOf(c.args, ['lens', 'repo'])) || bound;
-
-/** The query text of a knomit_query call. */
-export const queryText = (c: ToolCall): string => argOf(c.args, ['text']);
-
-/** keyArg is the one argument a timeline row shows in mono: the query text,
- *  the binding's target, or what a read names. Empty when the call has none
- *  (a live call whose arguments have not arrived). */
-export function keyArg(c: ToolCall): string {
-  switch (toolKind(c.name)) {
-    case 'bind': return bindTarget(c);
-    case 'query': return queryText(c);
-    case 'read': return argOf(c.args, ['file', 'path', 'handle', 'root']);
-    default: return '';
-  }
-}
+  isBind(c.name) ? bindTarget(c) || bound : c.inBase ? c.target || bound : '';
 
 /** The target in force after `calls`: the last SUCCESSFUL bind's, starting from
  *  `bound`. A bind that returned an error bound nothing and changes nothing. */
 export function boundAfter(calls: ToolCall[], bound: string): string {
   let b = bound;
-  for (const c of calls) if (toolKind(c.name) === 'bind' && !c.isError) b = bindTarget(c) || b;
+  for (const c of calls) if (isBind(c.name) && !c.isError) b = bindTarget(c) || b;
   return b;
 }
 

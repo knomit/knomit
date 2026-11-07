@@ -36,6 +36,7 @@ const bindExperimentDescription = "Optional: RESUME an existing experiment, so t
 // "this connection is fixed to …" answer rather than "unknown argument".
 func bindTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_bind",
+		mcpgo.WithTitleAnnotation("Bind"), withKeyArgs("repo", "lens"),
 		mcpgo.WithDescription("Bind a repo or lens by name (see knomit_repos for the names) and receive an opaque `binding` handle. EVERY other tool except knomit_repos requires that handle as its `binding` argument — keep it for the rest of your work and pass it on every call. The handle selects the knowledge base and carries no review state: knomit_review and knomit_hypothesize continuations also need their own session_id. Nothing but knomit_repos works until you have one; call again for a different base, which mints a SECOND handle and leaves the first one valid. Writes go to the repo's agent branch; a subscribed (read-only follower) repo binds at the branch it follows and refuses writes. Returns the handle, the mounts table and the knowledge base's instructions — treat them as session instructions."),
 		mcpgo.WithString("repo", mcpgo.Description("Name of the repo to bind to. Mutually exclusive with lens.")),
 		mcpgo.WithString("lens", mcpgo.Description("Name of the lens to bind to. Mutually exclusive with repo.")),
@@ -50,6 +51,7 @@ func bindTool() mcpgo.Tool {
 // endpoint binds whatever the unscoped one could, confined to its own target.
 func scopedBindTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_bind",
+		mcpgo.WithTitleAnnotation("Bind"), withKeyArgs("experiment"),
 		mcpgo.WithDescription("This connection is fixed to one repo or lens by its URL; knomit_bind here only changes the BRANCH you work on, never the repo or lens. Call it with no arguments for a new `binding` handle on the default branch, or with `experiment` to resume an existing experiment. Pass that handle as `binding` on later calls to work on its branch; calls without `binding` keep using the connection's own repo or lens. Each call mints a new handle and earlier ones stay valid, so several agents sharing this connection can each hold their own: bind, then knomit_experiment {action: \"open\", binding: <handle>} moves only that handle into its own experiment (open without a handle returns a new one inside it). The connection's own default never moves. A handle works on this endpoint (this same --repo or --lens URL) and nowhere else."),
 		mcpgo.WithString("experiment", mcpgo.Description(bindExperimentDescription)),
 	)

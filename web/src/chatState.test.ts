@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { chatReducer, initialChatState, toolRowLabel, usageLine, formatCost, snapshotState, boundAfter, boundBeforeCall } from './chatState';
+import { chatReducer, initialChatState, toolCallLabel, usageLine, formatCost, snapshotState, boundAfter, boundBeforeCall } from './chatState';
 import type { ChatEvent, ChatState, ChatTurn, ToolCall } from './chatState';
 import type { ChatApproval, ChatSnapshot, ChatViewItem } from './chatApi';
 
@@ -289,14 +289,15 @@ describe('chatReducer: the turn just sent', () => {
   });
 });
 
-describe('toolRowLabel', () => {
-  it('derives "knomit: Knomit <rest>" from the tool name', () => {
-    expect(toolRowLabel('knomit_repos')).toBe('knomit: Knomit repos');
-    expect(toolRowLabel('knomit_materialize')).toBe('knomit: Knomit materialize');
-    expect(toolRowLabel('knomit_review_answer')).toBe('knomit: Knomit review answer');
+describe('toolCallLabel', () => {
+  const c = (name: string, title?: string): ToolCall => ({ id: 'a', name, state: 'done', isError: false, ...(title ? { title } : {}) });
+  it('is the title the server sent, whatever the tool', () => {
+    expect(toolCallLabel(c('knomit_repos', 'List repos'))).toBe('List repos');
+    expect(toolCallLabel(c('other_tool', 'Other'))).toBe('Other');
   });
-  it('leaves a tool that is not a knomit tool as its own name', () => {
-    expect(toolRowLabel('other_tool')).toBe('other_tool');
+  it('is the raw tool name when the tool has no title', () => {
+    expect(toolCallLabel(c('knomit_repos'))).toBe('knomit_repos');
+    expect(toolCallLabel(c('other_tool'))).toBe('other_tool');
   });
 });
 

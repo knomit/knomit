@@ -418,6 +418,10 @@ func TestChatPrefix_Hooks1to3ByteIdenticalAcrossInstances(t *testing.T) {
 				Name        string          `json:"name"`
 				Description string          `json:"description"`
 				InputSchema json.RawMessage `json:"inputSchema"`
+				Annotations struct {
+					Title string `json:"title"`
+				} `json:"annotations"`
+				Meta map[string]any `json:"_meta"`
 			} `json:"tools"`
 		}
 		require.NoError(t, json.Unmarshal(raw, &listed))
@@ -425,7 +429,8 @@ func TestChatPrefix_Hooks1to3ByteIdenticalAcrossInstances(t *testing.T) {
 		for _, lt := range listed.Tools {
 			schema, err := llm.CanonicalJSON(lt.InputSchema)
 			require.NoError(t, err)
-			own = append(own, llm.ToolDef{Name: lt.Name, Description: lt.Description, Schema: schema})
+			own = append(own, llm.ToolDef{Name: lt.Name, Description: lt.Description, Schema: schema,
+				Title: lt.Annotations.Title, Key: keyArgsOf(lt.Meta[MetaKeyArgs])})
 		}
 		sort.Slice(own, func(i, j int) bool { return own[i].Name < own[j].Name })
 		require.Equal(t, own, reader[0].tools)
