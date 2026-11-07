@@ -36,6 +36,14 @@ describe('the cost card header', () => {
   });
 });
 
+describe('the row labels', () => {
+  it('the cache write row is "Cache write": it covers 5m and 1h writes, so no TTL in the label', () => {
+    card();
+    const labels = ['input', 'cache-read', 'cache-write', 'output'].map(k => screen.getByTestId(`chat-cost-row-${k}`).firstElementChild?.textContent);
+    expect(labels).toEqual(['Input', 'Cache read', 'Cache write', 'Output']);
+  });
+});
+
 describe('the per-row dollars', () => {
   it('each row shows its own cost in the existing format, and they add up to the total shown', () => {
     card();
