@@ -111,6 +111,13 @@ describe('turnPrefer', () => {
     expect(turnPrefer([t], 0)).toEqual(['two', 'one']);
   });
 
+  it('a call without in_base adds nothing, whatever its arguments name', () => {
+    const noBase: ToolCall = { id: 'b', name: 'knomit_explain', state: 'done', isError: false, args: { repo: 'two' } };
+    expect(turnPrefer([turn(call('a', 'knomit_bind', { repo: 'one' }), noBase)], 0)).toEqual(['one']);
+    // Not even the binding in force: on its own it names nothing.
+    expect(turnPrefer([turn(noBase)], 0)).toEqual([]);
+  });
+
   it('a failed bind in an earlier turn leaves the binding in force as it was', () => {
     const first = turn(call('a', 'knomit_bind', { repo: 'one' }), call('b', 'knomit_bind', { repo: 'two' }, true));
     const second = turn(call('c', 'knomit_query', { text: 'x' }));

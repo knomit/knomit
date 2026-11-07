@@ -54,7 +54,7 @@ func commitDetail(
 	ri *repos.RepoInstance, branch, hash, ontologyRoot string,
 ) (*index.CommitDetailResult, []commitFileView, error) {
 	// Acquire (not WithRead): the per-file title resolution below reads
-	// through gs/idx long after CommitDetail returns, so the store reference
+	// through gs long after CommitDetail returns, so the store reference
 	// must outlive a single closure. Copying the handles out of a WithRead
 	// closure would let a concurrent SwapStore/Archive close the DB mid-loop
 	// — see RepoInstance.Acquire's doc-comment.
@@ -68,7 +68,6 @@ func commitDetail(
 	defer release()
 
 	gs := svc.Facts()
-	idx := svc.FactQuery()
 	detail, err := svc.HistoryQuery().CommitDetail(ctx, hash, ontologyRoot)
 	if err != nil {
 		return nil, nil, err
@@ -77,29 +76,26 @@ func commitDetail(
 		return nil, nil, errors.New("commit not found")
 	}
 
+	// A commit's files carry the title AT THAT COMMIT, never the branch's current
+	// one: this describes a past commit, and the fact a row opens reads as it did
+	// then. So each title costs a read of the file at the commit.
 	files := make([]commitFileView, len(detail.Files))
 	for i, f := range detail.Files {
 		files[i] = commitFileView{Path: f.Path, Action: f.Action}
-		// Try current index first (fast path for facts still in the store).
-		if idx != nil {
-			if fb, ferr := idx.GetByPath(ctx, branch, f.Path); ferr == nil && fb != nil {
-				files[i].Title = fb.Title
+		if gs == nil {
+			continue
+		}
+		if result, rerr := gs.ReadFact(ctx, branch, f.Path, &facts.ReadFactOpts{AtCommit: hash}); rerr == nil && result.Content != "" {
+			if parsed, perr := fact.ParseFact(f.Path, result.Content); perr == nil {
+				files[i].Title = parsed.Title
 				continue
 			}
 		}
-		// Fallback: read the fact as it was at this commit.
-		if gs != nil {
-			if result, rerr := gs.ReadFact(ctx, branch, f.Path, &facts.ReadFactOpts{AtCommit: hash}); rerr == nil && result.Content != "" {
-				if parsed, perr := fact.ParseFact(f.Path, result.Content); perr == nil {
-					files[i].Title = parsed.Title
-					continue
-				}
-			}
-			// Last resort: find last commit where the file existed (covers deletions).
-			if result, rerr := gs.ReadFact(ctx, branch, f.Path, &facts.ReadFactOpts{BeforeCommit: hash}); rerr == nil && result.Content != "" {
-				if parsed, perr := fact.ParseFact(f.Path, result.Content); perr == nil {
-					files[i].Title = parsed.Title
-				}
+		// The commit that removed a file has no version of it: its last title
+		// before the commit.
+		if result, rerr := gs.ReadFact(ctx, branch, f.Path, &facts.ReadFactOpts{BeforeCommit: hash}); rerr == nil && result.Content != "" {
+			if parsed, perr := fact.ParseFact(f.Path, result.Content); perr == nil {
+				files[i].Title = parsed.Title
 			}
 		}
 	}

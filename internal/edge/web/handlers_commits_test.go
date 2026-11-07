@@ -271,11 +271,11 @@ func getCommitDetail(t *testing.T, s *Server, branchURL, sha string) commitDetai
 	return body
 }
 
-// A file still indexed on the requested branch takes its CURRENT title there,
-// not its title at the commit and not its title on the agent branch.
-// Sabotage: skip the index (title "A one"), or read the agent branch (title
-// "A agent two").
-func TestHandleCommitDetail_LiveFileTakesTheRequestedBranchTitle(t *testing.T) {
+// A file takes its title AT THE COMMIT, not its current title on the requested
+// branch nor on the agent branch: the commit view describes that commit exactly
+// as it was. Sabotage: read the index first (title "A elsewhere two"), or read
+// the agent branch's tip (title "A agent two").
+func TestHandleCommitDetail_FileTakesItsTitleAtTheCommit(t *testing.T) {
 	f := newCommitsFixture(t)
 	branchURL := httpx.APIBase + "/repos/alpha/branches/" + commitsOtherURL
 
@@ -289,10 +289,46 @@ func TestHandleCommitDetail_LiveFileTakesTheRequestedBranchTitle(t *testing.T) {
 	require.Len(t, body.Files, 1)
 	require.Equal(t, "kb/a.md", body.Files[0].Path)
 	require.Equal(t, "added", body.Files[0].Action)
-	require.Equal(t, "A elsewhere two", body.Files[0].Title)
+	require.Equal(t, "A one", body.Files[0].Title)
 	require.Equal(t, branchURL+"/facts/kb/a.md", body.Files[0].Links["self"].Href)
 	require.Equal(t, branchURL+"/commits/"+f.c1, body.Links["self"].Href)
 	require.Equal(t, branchURL, body.Links["branch"].Href)
+}
+
+// One fact retitled, retracted and re-added under a new title: each commit's row
+// shows that commit's title, and the commit that retracted it shows the last
+// title before the retraction, whatever the fact is called now. Sabotage: read
+// the index first (every row "A readded title"), or read a retraction at the
+// commit (its row has no title).
+func TestHandleCommitDetail_RowsKeepTheirTitleAcrossRetitleRetractReadd(t *testing.T) {
+	ctx := context.Background()
+	m, svcs := newRealStoreManager(t, "alpha")
+	svc := svcs["alpha"]
+	s := &Server{Manager: m, OntologyRoot: commitsRoot}
+	const branch, url = commitsAgentBranch, "agent:test"
+	write := func(title, msg, op string) string {
+		t.Helper()
+		res, err := svc.Facts().WriteFact(ctx, branch, "kb/a.md", commitsFactText(title), msg, op)
+		require.NoError(t, err)
+		return res.CommitHash
+	}
+	v1 := write("A v1 title", "learn a", "learn")
+	v2 := write("A v2 title", "retitle a", "update")
+	retract, _, err := svc.Facts().BatchWriteFacts(ctx, branch, nil, []string{"kb/a.md"}, "retract a", "retract")
+	require.NoError(t, err)
+	readd := write("A readded title", "learn a again", "learn")
+
+	for _, tc := range []struct{ commit, action, title string }{
+		{v1, "added", "A v1 title"},
+		{v2, "modified", "A v2 title"},
+		{retract, "deleted", "A v2 title"},
+		{readd, "added", "A readded title"},
+	} {
+		body := getCommitDetail(t, s, url, tc.commit)
+		require.Len(t, body.Files, 1, "%+v", body.Files)
+		require.Equal(t, tc.action, body.Files[0].Action, tc.commit)
+		require.Equal(t, tc.title, body.Files[0].Title, tc.commit)
+	}
 }
 
 // A file no longer on the branch takes its title AT the commit when the

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	storegit "knomit/internal/engine/store/git"
@@ -30,6 +31,36 @@ func FirstLine(s string) string {
 		return s[:idx]
 	}
 	return s
+}
+
+// CommitMeta is what commit_log records about a commit, read from the commit
+// itself: a commit that changed no file has no commit_log rows to read it from.
+type CommitMeta struct {
+	Message     string
+	Operation   string
+	AuthorName  string
+	AuthorEmail string
+	CommittedAt int64
+}
+
+// CommitMetaOf reads commit hash from the object store, with commit_log's own
+// rules for each field (commitEntries). False when the repository does not
+// hold it, or hash is not a full hash.
+func (rh *Repo) CommitMetaOf(hash string) (CommitMeta, bool) {
+	if !plumbing.IsHash(hash) {
+		return CommitMeta{}, false
+	}
+	c, err := object.GetCommit(rh.Storer(), plumbing.NewHash(hash))
+	if err != nil {
+		return CommitMeta{}, false
+	}
+	return CommitMeta{
+		Message:     FirstLine(c.Message),
+		Operation:   parseOperation(c.Author.Email),
+		AuthorName:  c.Author.Name,
+		AuthorEmail: c.Author.Email,
+		CommittedAt: c.Committer.When.Unix(),
+	}, true
 }
 
 // ChangedFileEntry represents a file changed in a commit (internal to commitlog).

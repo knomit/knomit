@@ -247,9 +247,11 @@ const failedBind = (c: ToolCall): boolean => c.isError && boundAfter([{ ...c, is
 
 /**
  * turnPrefer is the repos turn ti worked in, for POST /facts/resolve's
- * prefer: what each of its calls acted on (a bind's target, a call's repo or
- * lens argument, else the binding in force) and the store of a kb:// file it
- * named, latest call first; then the binding in force when the turn began.
+ * prefer: what each of its calls acted on (a bind's target; a call the server
+ * marks in_base, the server's target, else the binding in force; a call without
+ * in_base ran nowhere in particular and adds nothing) and the store of a kb://
+ * file it named, latest call first; then the binding in force when the turn
+ * began.
  * A bind that failed worked in nothing, as boundAfter also holds, so it does
  * not count: a failed bind to a second repo must not stop a commit link from
  * resolving (the server resolves a hash only with exactly one repo preferred).
