@@ -106,10 +106,14 @@ function FactCard({ f, at, onEnter, onLeave, onBrowse }: {
 
 const noDispatch = () => {};
 
-/** The resolver's answer as the Fact the Browse components read. */
+/** The resolver's answer as the Fact the Browse components read. A fact the
+ *  server could not parse has no confidence: it stays ABSENT here, as Browse's
+ *  own fact read leaves it (normalizeFactResponse), so FactMetaLine omits it
+ *  instead of showing "conf 0.00". */
 const asFact = (f: ResolvedFact): Fact => ({
   path: f.path, title: f.title, type: f.type, kind: f.kind || undefined, origin: f.origin || undefined,
-  confidence: f.confidence, sources: f.sources ?? 0, body: '', domain: [], entities: [], refs: [],
+  sources: f.sources ?? 0, body: '', domain: [], entities: [], refs: [],
+  confidence: f.confidence as number, // undefined passes through, exactly as in normalizeFactResponse
 });
 
 const CARD_W = 340;

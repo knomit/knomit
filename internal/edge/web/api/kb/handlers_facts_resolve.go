@@ -46,15 +46,17 @@ type resolveRequest struct {
 // resolvedFact is one answer: the handle as it was asked, and what the chat's
 // fact link draws (the chip, the hover card) and opens (repo, branch, path).
 type resolvedFact struct {
-	Handle     string  `json:"handle"`
-	ID         string  `json:"id"`
-	Title      string  `json:"title"`
-	Type       string  `json:"type"`
-	Repo       string  `json:"repo"`
-	Branch     string  `json:"branch"`
-	Path       string  `json:"path"`
-	Excerpt    string  `json:"excerpt"`
-	Confidence float64 `json:"confidence"`
+	Handle  string `json:"handle"`
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Type    string `json:"type"`
+	Repo    string `json:"repo"`
+	Branch  string `json:"branch"`
+	Path    string `json:"path"`
+	Excerpt string `json:"excerpt"`
+	// Confidence is ABSENT (not 0) when the fact could not be read or
+	// parsed: Browse's meta line omits a missing confidence, never shows 0.
+	Confidence *float64 `json:"confidence,omitempty"`
 	// What Browse's meta line (FactMetaLine) shows besides, so the chat's
 	// hover card draws it with the same component: kind, origin, sources.
 	Kind    string `json:"kind"`
@@ -420,7 +422,8 @@ func readHit(ctx context.Context, h hit) (resolvedFact, bool) {
 	switch {
 	case err == nil:
 		rf.Title, rf.Type = f.Title, string(f.Type)
-		rf.Excerpt, rf.Confidence = excerptOf(f.Body, f.Title), f.Confidence
+		conf := f.Confidence
+		rf.Excerpt, rf.Confidence = excerptOf(f.Body, f.Title), &conf
 		rf.Kind, rf.Origin, rf.Sources = string(f.Kind), string(f.ResolvedOrigin()), f.Sources
 	case errors.Is(err, errFactNotFound):
 		return rf, false

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"knomit/internal/corpus/repos"
 	"knomit/internal/domain/fact"
+	"knomit/internal/edge/web/hal"
 	"knomit/internal/engine/store"
 	"knomit/internal/foundation/auth"
 )
@@ -94,7 +96,8 @@ func TestFactsResolve_EveryHandleShape(t *testing.T) {
 		require.Equal(t, "alpha", r.Repo)
 		require.Equal(t, "agent/test", r.Branch)
 		require.Equal(t, path, r.Path)
-		require.InDelta(t, 0.92, r.Confidence, 1e-9)
+		require.NotNil(t, r.Confidence)
+		require.InDelta(t, 0.92, *r.Confidence, 1e-9)
 		// What Browse's FactMetaLine draws besides: kind, origin, sources.
 		require.Equal(t, "pragmatic", r.Kind)
 		require.Equal(t, "authored", r.Origin)
@@ -102,6 +105,33 @@ func TestFactsResolve_EveryHandleShape(t *testing.T) {
 		require.True(t, strings.HasPrefix(r.Excerpt, "Files an agent loads on start"), "excerpt %q", r.Excerpt)
 		require.NotContains(t, r.Excerpt, "# Agent config", "the title heading is not part of the excerpt")
 	}
+}
+
+// A fact the index lists but whose read fails (a body that no longer parses)
+// still links by its index title and type, and carries NO confidence: absent,
+// not 0, so the card's meta line leaves it out as Browse's does.
+func TestFactsResolve_UnparsedFactHasNoConfidence(t *testing.T) {
+	m, svcs := newRealStoreManager(t, "alpha")
+	writeResolveFact(t, svcs["alpha"], "kb/a/b/99999999.md", "observation", "Broken policy", "b", "0.9")
+	orig := readResolved
+	t.Cleanup(func() { readResolved = orig })
+	readResolved = func(context.Context, *repos.RepoInstance, hal.Anchor, string, bool) (fact.Fact, string, error) {
+		return fact.Fact{}, "", errors.New(`ParseFact: invalid type "policy" for kind "epistemic"`)
+	}
+	raw, err := json.Marshal(map[string]any{"handles": []string{"99999999"}})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/facts/resolve", bytes.NewBufferString(string(raw)))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithRepoReach(req.Context(), auth.AllRepos))
+	rec := httptest.NewRecorder()
+	handleFactsResolve(m, "kb")(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var items []map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &items), rec.Body.String())
+	require.Len(t, items, 1, "fixture: the unparsed fact still resolves")
+	require.Equal(t, "Broken policy", items[0]["title"])
+	_, has := items[0]["confidence"]
+	require.False(t, has, "an unparsed fact has no confidence: %s", rec.Body.String())
 }
 
 // Unknown handles are omitted, not errors: an 8-hex string that is no fact's

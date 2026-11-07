@@ -22,7 +22,8 @@ export interface ResolvedFact {
   branch: string;
   path: string;
   excerpt: string;
-  confidence: number;
+  /** Absent when the server could not parse the fact (and on a commit item). */
+  confidence?: number;
   /** What Browse's meta line shows besides (absent from an older server). */
   kind?: string;
   origin?: string;

@@ -131,6 +131,25 @@ describe('chat fact links', () => {
     ]);
   });
 
+  it('a fact the server could not parse (no confidence) shows no confidence in the card, as Browse leaves a missing one out', async () => {
+    const { confidence: _c, kind: _k, origin: _o, sources: _s, ...unparsed } = POLICY;
+    void _c; void _k; void _o; void _s;
+    stubFleetFetch({
+      [`GET ${BASE}`]: { body: snapshot([{ kind: 'user', text: 'q' }, { kind: 'assistant', text: 'see `3fc77970`' }]) },
+      [RESOLVE]: { body: [{ ...unparsed, excerpt: '' }] },
+    });
+    render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} repos={[]} />);
+    const chip = await screen.findByTestId('fact-link');
+    vi.useFakeTimers();
+    fireEvent.mouseEnter(chip);
+    act(() => { vi.advanceTimersByTime(320); });
+    const meta = within(screen.getByTestId('fact-card')).getByTestId('fact-meta');
+    expect(within(meta).getByTestId('fact-type-badge')).toHaveTextContent('policy');
+    expect(within(meta).queryByTestId('fact-confidence')).toBeNull();
+    expect(meta.textContent).not.toContain('conf');
+    vi.useRealTimers();
+  });
+
   it('a commit hash the server resolved in the turn\'s repo is the timeline\'s CommitHash, linking to that version; others stay code', async () => {
     const FULL = 'abc1234' + 'f'.repeat(33);
     const onOpenCommit = vi.fn();
