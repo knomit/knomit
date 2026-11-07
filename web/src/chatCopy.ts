@@ -118,11 +118,13 @@ export const cachedLabel = (pct: number): string => `${pct}% cached`;
 /** The cost hover card. */
 export const COST_ROW_INPUT = 'Input';
 export const COST_ROW_CACHE_READ = 'Cache read';
-export const COST_ROW_CACHE_WRITE = 'Cache write (5m)';
+export const COST_ROW_CACHE_WRITE = 'Cache write';
 export const COST_ROW_OUTPUT = 'Output';
 export const COST_THIS_TURN = 'This turn';
 /** Shown for a cost when the model has no price card. */
 export const COST_UNPRICED = '–';
+/** The cost card's first line: "Turn N · <model>". */
+export const costCardHeader = (turn: number, model: string): string => `Turn ${turn} · ${model}`;
 export const costSession = (turns: number): string => `Session (${turns} ${turns === 1 ? 'turn' : 'turns'})`;
 
 /** The top-bar pill and the composer's meter row. */
