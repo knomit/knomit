@@ -1656,7 +1656,7 @@ describe('a chat target', () => {
       fireEvent.click(view.getByText('web'));
       await landed(0);
       expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + PATH);
-      expect(screen.getByTestId('browse-facet').textContent).toContain('web');
+      expect(screen.getAllByTestId('filter-chip').map(c => c.textContent).join(' ')).toContain('web');
       await backToTheChat();
     });
 
