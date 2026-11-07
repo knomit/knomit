@@ -3,8 +3,8 @@ package web
 import (
 	"net/http"
 
-	"knomit/internal/edge/web/api/kb"
 	"knomit/internal/edge/web/hal"
+	"knomit/internal/edge/web/httpx"
 )
 
 // handleAPIRoot serves GET /api/v1 — the discoverable HAL entry
@@ -22,7 +22,7 @@ func handleAPIRoot(b hal.URLBuilder, readOnly bool) http.HandlerFunc {
 			"version": {Href: b.APIRoot() + "/version"},
 			"openapi": {Href: b.APIRoot() + "/openapi.yaml"},
 			// POST: resolve the fact handles a chat answer cites.
-			"facts_resolve": {Href: b.APIRoot() + kb.FactsResolvePath},
+			"facts_resolve": {Href: b.APIRoot() + httpx.FactsResolvePath},
 		}
 		if !readOnly {
 			links["logs"] = hal.Link{Href: b.APIRoot() + "/logs/events"}

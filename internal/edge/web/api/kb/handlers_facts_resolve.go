@@ -21,11 +21,6 @@ import (
 	"knomit/internal/foundation/auth"
 )
 
-// FactsResolvePath is the resolver's route under the API base. The read-only
-// and write gates exempt exactly this path (it only reads), and the root
-// document links to it.
-const FactsResolvePath = "/facts/resolve"
-
 // maxResolveHandles caps one request: a chat turn cites a handful of facts,
 // and the resolver reads each one it finds.
 const maxResolveHandles = 100

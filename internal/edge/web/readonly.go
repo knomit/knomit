@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 
-	"knomit/internal/edge/web/api/kb"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/foundation/auth"
 )
@@ -59,7 +58,7 @@ var factsetClosePattern = regexp.MustCompile("^" + regexp.QuoteMeta(httpx.APIBas
 // reach, and writes nothing, so it is a read for both gates: a read-only
 // principal and a read-only (demo) server resolve fact links too. Exact
 // match only.
-var factsResolvePath = httpx.APIBase + kb.FactsResolvePath
+var factsResolvePath = httpx.APIBase + httpx.FactsResolvePath
 
 // isMutatingRequest reports whether a request would mutate state and therefore
 // must be rejected in read-only mode. Mutating HTTP methods are gated unless
