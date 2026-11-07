@@ -34,6 +34,8 @@ type callRecord struct {
 	// Title and KeyArg word the call's row, as its tool_call events do.
 	Title  string `json:"title,omitempty"`
 	KeyArg string `json:"key_arg,omitempty"`
+	// InBase: the call's arguments carry binding, repo or lens (see viewItem).
+	InBase bool `json:"in_base,omitempty"`
 }
 
 // chatStore is one chat's directory.

@@ -59,6 +59,8 @@ export interface ChatViewItem {
    *  the argument the tool marks as its main one; each absent when there is none. */
   title?: string;
   key_arg?: string;
+  /** On a tool call: its arguments carry binding, repo or lens (absent otherwise). */
+  in_base?: boolean;
 }
 
 /** A finished call's result in one number (a query's fact count). */
@@ -98,7 +100,7 @@ export interface ChatSnapshot extends ChatInfo {
 }
 
 /** GET /chats/{id}/calls/{callId}. */
-export interface ChatCall { name: string; arguments: unknown; result: string; is_error: boolean; elided: boolean; title?: string; key_arg?: string }
+export interface ChatCall { name: string; arguments: unknown; result: string; is_error: boolean; elided: boolean; title?: string; key_arg?: string; in_base?: boolean }
 
 export type ApprovalDecision = 'allow' | 'decline' | 'allow_session';
 

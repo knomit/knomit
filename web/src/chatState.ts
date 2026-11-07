@@ -31,8 +31,8 @@ import type { ChatApproval, ChatCall, ChatCallSummary, ChatNotice, ChatSnapshot,
 
 /** A call's title and main argument from what the server sent (a view item, a
  *  tool_call event or a stored call), each only when present. */
-const wordingOf = (w: { title?: string; key_arg?: string }): Pick<ToolCall, 'title' | 'keyArg'> =>
-  ({ ...(w.title ? { title: w.title } : {}), ...(w.key_arg ? { keyArg: w.key_arg } : {}) });
+const wordingOf = (w: { title?: string; key_arg?: string; in_base?: boolean }): Pick<ToolCall, 'title' | 'keyArg' | 'inBase'> =>
+  ({ ...(w.title ? { title: w.title } : {}), ...(w.key_arg ? { keyArg: w.key_arg } : {}), ...(w.in_base ? { inBase: true } : {}) });
 
 export interface ToolCall {
   id: string; name: string; state: 'running' | 'done'; isError: boolean;
@@ -41,6 +41,9 @@ export interface ToolCall {
    *  tool marks as its main one). Absent when the tool has none. */
   title?: string;
   keyArg?: string;
+  /** The server's word that the call acts in a repo or lens (its arguments
+   *  carry binding, repo or lens): the activity line says "in <target>". */
+  inBase?: boolean;
   /** The call's arguments: in the snapshot always, and on a live `running` event. */
   args?: unknown;
   /** How long the tool ran, in ms, and its result in one number: on a finished
@@ -128,7 +131,7 @@ export type ChatEvent =
   | { kind: 'send_failed'; sendId: number }
   | { kind: 'text_delta'; text: string; turn: number }
   | { kind: 'thinking_delta'; text: string; turn: number }
-  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; arguments?: unknown; title?: string; key_arg?: string; duration_ms?: number; summary?: ChatCallSummary; loaded?: string[]; started_ms?: number; ended_ms?: number; turn: number }
+  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; arguments?: unknown; title?: string; key_arg?: string; in_base?: boolean; duration_ms?: number; summary?: ChatCallSummary; loaded?: string[]; started_ms?: number; ended_ms?: number; turn: number }
   | { kind: 'approval'; approval: ChatApproval }
   | { kind: 'approval_answered'; callId: string }
   | { kind: 'usage'; usage: UsagePayload; cost_usd?: number; seq?: number; turn: number }
@@ -484,17 +487,16 @@ export const isBind = (name: string): boolean => name === BIND_TOOL;
 /** bindTarget is the repo or lens a knomit_bind call names. */
 export const bindTarget = (c: ToolCall): string => argOf(c.args, ['lens', 'repo', 'name', 'target']);
 
-/** Does the call act in a repo or lens: it carries a binding handle, or names
- *  a repo or lens itself? A call that does neither (the chat's loader, a
- *  catalogue read) ran nowhere in particular. */
-const actsInABase = (c: ToolCall): boolean =>
-  !!c.args && typeof c.args === 'object' && ['binding', 'lens', 'repo'].some(k => k in (c.args as Record<string, unknown>));
-
-/** The target a call acts on. A bind's is what it names; any other call's is
- *  the repo or lens it names, else the target of the binding in force
- *  (`bound`) when it acts in one. Empty when none is known. */
+/** The target a call acts on. A bind's is what it names; any other call's,
+ *  when the server says it acts in a repo or lens (`inBase`: its arguments
+ *  carry binding, repo or lens), is the repo or lens it names, else the target
+ *  of the binding in force (`bound`). A call without inBase (the chat's loader,
+ *  an unbound catalogue read) ran nowhere in particular. The flag, not the
+ *  arguments, decides, because the live event drops large arguments: deciding
+ *  from them would word a call one way live and another after a reload.
+ *  Empty when none is known. */
 export const callTarget = (c: ToolCall, bound: string): string =>
-  isBind(c.name) ? bindTarget(c) || bound : actsInABase(c) ? argOf(c.args, ['lens', 'repo']) || bound : '';
+  isBind(c.name) ? bindTarget(c) || bound : c.inBase ? argOf(c.args, ['lens', 'repo']) || bound : '';
 
 /** The target in force after `calls`: the last SUCCESSFUL bind's, starting from
  *  `bound`. A bind that returned an error bound nothing and changes nothing. */

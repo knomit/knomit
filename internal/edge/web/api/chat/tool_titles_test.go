@@ -3,7 +3,9 @@ package chat
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -113,4 +115,54 @@ func TestChat_LoaderCallCarriesTitleAndWhatItLoaded(t *testing.T) {
 	snap := snapshotCalls(t, h, "uid:501", id)
 	require.Equal(t, "Load tools", snap["tu_load"]["title"])
 	require.Equal(t, "knomit_explain", snap["tu_load"]["key_arg"])
+}
+
+// A long main argument is cut at 200 bytes, never inside a rune: here "é"
+// (two bytes) sits on bytes 199-200, so the cut falls before it.
+//
+// SABOTAGE: labels.go, return s uncut -> the full 250-byte value comes back.
+func TestBoundKeyArg_CutsAt200BytesOnARuneBoundary(t *testing.T) {
+	long := strings.Repeat("a", 199) + "é" + strings.Repeat("b", 49)
+	require.Equal(t, 250, len(long))
+	got := boundKeyArg(long)
+	require.True(t, utf8.ValidString(got), "the cut never splits a rune")
+	require.Equal(t, strings.Repeat("a", 199)+"…", got)
+	require.Equal(t, "short", boundKeyArg("short"))
+}
+
+// Whether a call acts in a repo or lens (its arguments carry binding, repo or
+// lens) is decided by the server and sent as in_base on the running and done
+// events, the snapshot row and the call record, so the page never needs the
+// arguments for it. The running event drops arguments over 16 KiB; in_base
+// still rides on it. A call with none of those arguments has no in_base.
+//
+// SABOTAGE: chat.go, leave in_base off the running event -> the large call's
+// live event has neither arguments nor in_base and this fails.
+func TestChat_InBaseIsSentWithoutTheArguments(t *testing.T) {
+	h := newHarness(t)
+	handle := h.bind(writer, "chat-00000000000000000000000000000082", "alpha")
+	big := learnArgs(handle, "big")
+	big["facts"].([]any)[0].(map[string]any)["body"] = strings.Repeat("x ", maxApprovalArgs)
+	h.queue("a1",
+		toolStep("tu_l", "knomit_learn", big, usage),
+		toolStep("tu_r", "knomit_repos", map[string]any{}, usage),
+		textStep("done", usage))
+	id := h.create("uid:501", "a1")
+	s := h.attach("uid:501", id)
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "write"))
+	evs, _ := drive(t, h, "uid:501", id, s, nil)
+	running, done := toolCallEvents(t, evs)
+
+	require.Equal(t, "knomit_learn", running["tu_l"]["name"])
+	require.NotContains(t, running["tu_l"], "arguments", "over 16 KiB, the live event carries no arguments")
+	for _, ev := range []map[string]map[string]any{running, done} {
+		require.Equal(t, true, ev["tu_l"]["in_base"])
+		require.Equal(t, "knomit_repos", ev["tu_r"]["name"])
+		require.NotContains(t, ev["tu_r"], "in_base")
+	}
+	snap := snapshotCalls(t, h, "uid:501", id)
+	require.Equal(t, true, snap["tu_l"]["in_base"])
+	require.NotContains(t, snap["tu_r"], "in_base")
+	require.True(t, callResult(t, h, "uid:501", id, "tu_l").InBase)
+	require.False(t, callResult(t, h, "uid:501", id, "tu_r").InBase)
 }

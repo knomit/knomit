@@ -584,7 +584,7 @@ describe('the activity line of a group with a failed bind', () => {
   it('says nothing for the failed bind, and the call after it searched where the chat was bound', () => {
     const calls: ToolCall[] = [
       { id: 'b1', name: 'knomit_bind', title: 'Bind', state: 'done', isError: true, args: { name: 'nosuch-kb' } },
-      { id: 'q1', name: 'knomit_query', title: 'Query', state: 'done', isError: false, args: { binding: 'h', text: 'x' } },
+      { id: 'q1', name: 'knomit_query', title: 'Query', state: 'done', isError: false, args: { binding: 'h', text: 'x' }, inBase: true },
     ];
     render(<ChatToolGroup lead={[]} calls={calls} approvals={{}} selectedId={null} bound="r1" onSelect={vi.fn()} onAnswer={vi.fn()} />);
     expect(screen.getByTestId('chat-activity-summary').textContent).toBe('Query in r1');

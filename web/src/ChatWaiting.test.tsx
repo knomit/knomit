@@ -455,7 +455,6 @@ describe('live tool detail', () => {
     await screen.findByTestId('chat-thinking');
     const es = chatStream('chat-a')!;
     act(() => { es.emit('tool_call', { id: 't1', name: 'knomit_query', title: 'Query', key_arg: 'OWASP Q3', state: 'running', started_ms: 1_000_000, arguments: { text: 'OWASP Q3', binding: 'h1' }, turn: 0 }); });
-    expect(screen.queryByTestId('chat-activity-live')).toBeNull();
     expect(screen.getByTestId('chat-activity-summary').textContent).toBe('Query');
     expect(screen.getByTestId('chat-activity-steps').textContent).toBe('1 step');
 

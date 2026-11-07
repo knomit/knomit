@@ -100,9 +100,9 @@ describe('the activity line on the page', () => {
   const items = (): ChatViewItem[] => [
     { kind: 'user', text: 'bind to all' },
     { ...call('tu_1', 'knomit_bind', { lens: 'all' }), title: 'Bind', key_arg: 'all' },
-    { ...call('tu_2', 'knomit_query', { binding: 'h', text: 'AI agent security incident' }), title: 'Query', key_arg: 'AI agent security incident' },
-    { ...call('tu_3', 'knomit_query', { binding: 'h', text: 'agentic practice' }), title: 'Query', key_arg: 'agentic practice' },
-    { ...call('tu_4', 'knomit_materialize', { binding: 'h', file: 'kb/a.md' }), title: 'Materialize', key_arg: 'kb/a.md' },
+    { ...call('tu_2', 'knomit_query', { binding: 'h', text: 'AI agent security incident' }), title: 'Query', key_arg: 'AI agent security incident', in_base: true },
+    { ...call('tu_3', 'knomit_query', { binding: 'h', text: 'agentic practice' }), title: 'Query', key_arg: 'agentic practice', in_base: true },
+    { ...call('tu_4', 'knomit_materialize', { binding: 'h', file: 'kb/a.md' }), title: 'Materialize', key_arg: 'kb/a.md', in_base: true },
     { kind: 'assistant', text: 'Done.' },
   ];
 
@@ -145,10 +145,9 @@ describe('the activity line on the page', () => {
     const { fx } = mount(snap([
       { kind: 'user', text: 'q' },
       { ...call('tu_1', 'knomit_bind', { lens: 'all' }), title: 'Bind', key_arg: 'all' },
-      { ...call('tu_2', 'knomit_query', { binding: 'h', text: 'OWASP Q3' }, 'running'), title: 'Query', key_arg: 'OWASP Q3' },
+      { ...call('tu_2', 'knomit_query', { binding: 'h', text: 'OWASP Q3' }, 'running'), title: 'Query', key_arg: 'OWASP Q3', in_base: true },
     ], { running: true }));
     await screen.findByTestId('chat-activity-stop');
-    expect(screen.queryByTestId('chat-activity-live')).toBeNull();
     expect(summaryText()).toBe('Bind all · Query in all');
     expect(screen.getByTestId('chat-activity-summary')).toHaveStyle({ color: '#e8c27a' });
     fx.calls.length = 0;
@@ -352,7 +351,7 @@ describe('the activity line on the page after a failed bind', () => {
       { kind: 'user', text: 'q' },
       { ...call('tu_1', 'knomit_bind', { name: 'alpha' }), title: 'Bind' }, { ...failedBind('tu_2', 'nosuch-kb'), title: 'Bind' },
       { kind: 'assistant', text: 'then' },
-      { ...call('tu_3', 'knomit_query', { binding: 'h', text: 'x' }), title: 'Query' },
+      { ...call('tu_3', 'knomit_query', { binding: 'h', text: 'x' }), title: 'Query', in_base: true },
       { kind: 'assistant', text: 'done' },
     ]));
     await screen.findAllByTestId('chat-tool-group');

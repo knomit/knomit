@@ -4240,6 +4240,11 @@ paths:
         value wins; cut to 200 bytes). For the chat's loader tool `key_arg` is
         the tools the call LOADED, comma-separated, once done. Each is absent
         when there is none. Both are on the running and done events too.
+        `in_base: true` says the call's arguments carry `binding`, `repo` or
+        `lens` (the call acts in a repo or lens; absent otherwise). It is on
+        the running and done events, the row and the call record, so a client
+        never has to read the arguments for it: the running event drops
+        arguments over 16 KiB and the done event has none.
       operationId: getChat
       responses:
         "200":
@@ -4277,7 +4282,7 @@ paths:
         goes out every 30 seconds. Events: `text_delta`, `thinking_delta`,
         `reasoning`, `tool_call` (state `running` then `done`; `started_ms` on
         both, `ended_ms` on `done`, Unix milliseconds on the server's clock,
-        the same values `GET /chats/{id}` lists; `title` and `key_arg` as
+        the same values `GET /chats/{id}` lists; `title`, `key_arg` and `in_base` as
         `GET /chats/{id}` describes them), `approval`,
         `usage`, `warning`, `turn_done`, `turn_error`, `chat_state` (the
         chat's rail row changed: `title`, `state` idle, running,
@@ -4484,6 +4489,9 @@ paths:
                   key_arg:
                     type: string
                     description: The call's main argument, as on the transcript row; absent when there is none.
+                  in_base:
+                    type: boolean
+                    description: The call's arguments carry binding, repo or lens, as on the transcript row; absent otherwise.
         "404": { $ref: "#/components/responses/Problem" }
 
   /secrets:

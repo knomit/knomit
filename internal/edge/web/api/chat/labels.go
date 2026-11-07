@@ -66,13 +66,35 @@ func boundKeyArg(s string) string {
 	return s[:cut] + "…"
 }
 
-// putWording adds a call's title and main argument to a tool_call event,
-// each only when it has one.
-func putWording(ev map[string]any, title, keyArg string) {
+// inBase reports whether a call acts in a repo or lens: its arguments carry
+// binding, repo or lens. The page words such a call "in <target>". It is
+// decided here, from the whole arguments, because the page does not always
+// have them: the running event drops arguments over maxApprovalArgs, so a
+// page that decided from arguments would word a large call one way live and
+// another after a reload.
+func inBase(args json.RawMessage) bool {
+	var m map[string]json.RawMessage
+	if len(args) == 0 || json.Unmarshal(args, &m) != nil {
+		return false
+	}
+	for _, k := range []string{"binding", "repo", "lens"} {
+		if _, ok := m[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// putWording adds a call's title, main argument and in_base to a tool_call
+// event, each only when it has one.
+func putWording(ev map[string]any, title, keyArg string, base bool) {
 	if title != "" {
 		ev["title"] = title
 	}
 	if keyArg != "" {
 		ev["key_arg"] = keyArg
+	}
+	if base {
+		ev["in_base"] = true
 	}
 }

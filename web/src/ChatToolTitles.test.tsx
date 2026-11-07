@@ -15,7 +15,7 @@ import { stubFleetFetch } from './fleetTestFetch';
 import { activitySummary } from './chatCopy';
 import { chatReducer, initialChatState, snapshotState } from './chatState';
 import type { ChatEvent, ToolCall } from './chatState';
-import type { ChatSnapshot } from './chatApi';
+import type { ChatSnapshot, ChatViewItem } from './chatApi';
 
 const BASE = '/api/v1/chats/chat-a';
 
@@ -136,9 +136,40 @@ describe('the activity line: titles, counts and targets', () => {
     // Drawn from calls: each query runs where the bind left the chat.
     expect(line([
       { id: 'b', name: 'knomit_bind', title: 'Bind', keyArg: 'demo-kb', state: 'done', isError: false, args: { lens: 'demo-kb' } },
-      { id: 'q1', name: 'knomit_query', title: 'Query', keyArg: 'a', state: 'done', isError: false, args: { binding: 'h', text: 'a' } },
-      { id: 'q2', name: 'knomit_query', title: 'Query', keyArg: 'b', state: 'done', isError: false, args: { binding: 'h', text: 'b' } },
+      { id: 'q1', name: 'knomit_query', title: 'Query', keyArg: 'a', state: 'done', isError: false, args: { binding: 'h', text: 'a' }, inBase: true },
+      { id: 'q2', name: 'knomit_query', title: 'Query', keyArg: 'b', state: 'done', isError: false, args: { binding: 'h', text: 'b' }, inBase: true },
     ])).toBe('Bind demo-kb · Query 2× in demo-kb');
+  });
+
+  it('a call whose arguments are too large for the live event reads the same live and after a reload', async () => {
+    // The server sends no arguments over 16 KiB on the running event (and none on
+    // done); whether the call ran "in" the binding is its in_base flag, on every path.
+    const bind: ChatViewItem = { kind: 'tool_call', id: 'b', name: 'knomit_bind', title: 'Bind', key_arg: 'knomit', state: 'done', arguments: { repo: 'knomit' } };
+    const bigArgs = { binding: 'h', moment_name: 'm', facts: [{ body: 'x'.repeat(17 * 1024) }] };
+    const snapOf = (items: ChatViewItem[], running: boolean): ChatSnapshot =>
+      ({ id: 'chat-a', provider: 'p', model: 'm', running, grants: [], pending_approvals: [], items: [{ kind: 'user', text: 'q' }, ...items] });
+    const summary = () => screen.getByTestId('chat-activity-summary').textContent;
+
+    stubFleetFetch({ [`GET ${BASE}`]: { body: snapOf([bind], true) } });
+    render(<ChatFacet chat={{ id: 'chat-a', provider: 'p', model: 'm' }} facet="chat" onGone={vi.fn()} />);
+    await screen.findByTestId('chat-tool-group');
+    act(() => { chatStream('chat-a')!.emit('tool_call', { id: 'l', name: 'knomit_learn', title: 'Learn', key_arg: 'm', in_base: true, state: 'running', turn: 0 }); });
+    act(() => { chatStream('chat-a')!.emit('tool_call', { id: 'l', name: 'knomit_learn', title: 'Learn', key_arg: 'm', in_base: true, state: 'done', turn: 0 }); });
+    const live = summary();
+    cleanup();
+
+    stubFleetFetch({ [`GET ${BASE}`]: { body: snapOf([bind, { kind: 'tool_call', id: 'l', name: 'knomit_learn', title: 'Learn', key_arg: 'm', in_base: true, state: 'done', arguments: bigArgs }], false) } });
+    render(<ChatFacet chat={{ id: 'chat-a', provider: 'p', model: 'm' }} facet="chat" onGone={vi.fn()} />);
+    await screen.findByTestId('chat-tool-group');
+    expect(live).toBe('Bind knomit · Learn in knomit');
+    expect(summary()).toBe(live);
+  });
+
+  it('a call without in_base names no target, whatever its arguments say', () => {
+    expect(line([
+      { id: 'b', name: 'knomit_bind', title: 'Bind', state: 'done', isError: false, args: { repo: 'alpha' } },
+      { id: 'r', name: 'knomit_repos', title: 'List repos', state: 'done', isError: false, args: { binding: 'h' } },
+    ])).toBe('Bind alpha · List repos');
   });
 
   it('a stream event\'s title reaches the row through ChatFacet', async () => {
@@ -153,7 +184,7 @@ describe('the activity line: titles, counts and targets', () => {
   it('a failed bind adds nothing; the query after it ran where the chat was bound', () => {
     expect(line([
       { id: 'b', name: 'knomit_bind', title: 'Bind', keyArg: 'nosuch', state: 'done', isError: true, args: { repo: 'nosuch' } },
-      { id: 'q', name: 'knomit_query', title: 'Query', keyArg: 'x', state: 'done', isError: false, args: { binding: 'h', text: 'x' } },
+      { id: 'q', name: 'knomit_query', title: 'Query', keyArg: 'x', state: 'done', isError: false, args: { binding: 'h', text: 'x' }, inBase: true },
     ], 'r1')).toBe('Query in r1');
   });
 
@@ -161,9 +192,9 @@ describe('the activity line: titles, counts and targets', () => {
     expect(line([
       { id: 'l', name: 'load_tools', title: 'Load tools', state: 'done', isError: false, args: { names: ['knomit_explain'] } },
       { id: 'b', name: 'knomit_bind', title: 'Bind', state: 'done', isError: false, args: { repo: 'alpha' } },
-      { id: 'e1', name: 'knomit_explain', title: 'Explain', state: 'done', isError: false, args: { binding: 'h', file: 'x' } },
+      { id: 'e1', name: 'knomit_explain', title: 'Explain', state: 'done', isError: false, args: { binding: 'h', file: 'x' }, inBase: true },
       { id: 'x', name: 'acme_frobnicate', state: 'done', isError: false, args: {} },
-      { id: 'e2', name: 'knomit_explain', title: 'Explain', state: 'done', isError: false, args: { binding: 'h', file: 'y' } },
+      { id: 'e2', name: 'knomit_explain', title: 'Explain', state: 'done', isError: false, args: { binding: 'h', file: 'y' }, inBase: true },
     ])).toBe('Load tools · Bind alpha · Explain 2× in alpha · acme_frobnicate');
   });
 });
