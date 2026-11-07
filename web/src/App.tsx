@@ -1560,7 +1560,11 @@ export default function App() {
         dispatch({ type: 'BRANCH_GONE' });
         dispatch(statusAction(s));
       })
-      .catch(() => { /* no branch to move to answers either: the status poll re-reads */ });
+      // No branch to move to answers either (getAgentBranch or its status failed):
+      // BRANCH_GONE is dispatched only above, from this one-shot flow, and the status
+      // poll never dispatches it. The reader stays on the dead branch, and nothing
+      // here moves them off it.
+      .catch(() => { /* deliberately silent */ });
     // Only the flag starts this; the rest is what it asks about.
   }, [state.branchRecheck, state.repo, state.branch]); // eslint-disable-line react-hooks/exhaustive-deps
   // The fleet row: the fleet target, pinned over the context with its own

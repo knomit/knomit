@@ -528,6 +528,31 @@ describe('the side panel: target, width clamp, errors, keys', () => {
       await new Promise(r => setTimeout(r, 20));
       expect(stops(fx)).toHaveLength(0);
     });
+    it('in a menu it is the menu\'s', async () => {
+      const fx = await running();
+      box = outside('<div role="menu"><button role="menuitem">item</button></div>');
+      const item = box.querySelector('button')!;
+      item.focus();
+      expect(document.activeElement).toBe(item);
+      fireEvent.keyDown(item, { key: 'Escape' });
+      await new Promise(r => setTimeout(r, 20));
+      expect(stops(fx)).toHaveLength(0);
+    });
+    // The chat stays mounted behind Browse, hidden. SABOTAGE: remove the shown() check in ChatPanel.
+    it('on a chat that is not on screen it is not Stop: the hidden turn keeps running', async () => {
+      const fx = stubFleetFetch({
+        ...routes(),
+        [`GET ${BASE}`]: { body: snap({ running: true, items: [{ kind: 'user', text: 'q' }] }) },
+        [`POST ${BASE}/cancel`]: { body: {} },
+      });
+      render(<div style={{ display: 'none' }}><ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} repos={[]} /></div>);
+      await screen.findByTestId('chat-stop');
+      await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+      expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(true);
+      await new Promise(r => setTimeout(r, 20));
+      expect(stops(fx)).toHaveLength(0);
+      expect(screen.getByTestId('chat-stop')).toBeInTheDocument();
+    });
   });
 
   it('Esc while a turn runs and focus is inside the side panel is Stop too, and the panel stays', async () => {

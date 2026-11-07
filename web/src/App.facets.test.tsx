@@ -1789,6 +1789,60 @@ describe('a chat target', () => {
       expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + ROW0);
       expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'true');
     });
+    // An answer for the restored branch that lands after the reader moved on to another
+    // repo is for a context that is gone, and must change nothing.
+    // SABOTAGE: drop either still() in the re-read in App.tsx (the catch's, or the one after
+    // the agent branch's status).
+    const lateAnswer = async () => {
+      const m = await inExperimentOnAFact('read/branch');
+      let settle!: (v: { ok: boolean; status?: unknown }) => void;
+      const late = new Promise<unknown>((res, rej) => { settle = v => (v.ok ? res(v.status) : rej(gone)); });
+      m.status.mockClear();
+      m.getAgentBranch.mockClear();
+      m.status.mockImplementation((r: string, b?: string) => (r === 'core-kb' && b === 'exp/try' ? late : Promise.resolve(statusOf(b || 'machine/test'))));
+      fireEvent.keyDown(window, { key: '[', metaKey: true });
+      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
+      await waitFor(() => expect(m.status).toHaveBeenCalledWith('core-kb', 'exp/try'));
+      // The context moves on while the answer is in flight.
+      fireEvent.click(screen.getByTestId('rail-repo-ops-kb'));
+      await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+      await act(async () => { await new Promise(r => setTimeout(r, 60)); });
+      return { m, settle };
+    };
+    const STALE = { ...EXP_STATUS, head: 'stale99', branch: 'exp/try' };
+    it('a late 404 for the restored branch, after the context moved on, does not go looking for its agent branch', async () => {
+      const { m, settle } = await lateAnswer();
+      await act(async () => { settle({ ok: false }); await new Promise(r => setTimeout(r, 60)); });
+      expect(m.getAgentBranch).not.toHaveBeenCalledWith('core-kb');
+      expect(screen.getByTestId('target-label').textContent).toBe('ops-kb');
+    });
+    it('a late success for the restored branch, after the context moved on, is not applied', async () => {
+      const { settle } = await lateAnswer();
+      await act(async () => { settle({ ok: true, status: STALE }); await new Promise(r => setTimeout(r, 60)); });
+      expect(screen.queryByTestId('since-fork-toggle')).toBeNull();
+      expect(screen.queryByText(/stale99/)).toBeNull();
+    });
+    it('a 404 whose agent branch answers after the context moved on is not applied either', async () => {
+      const m = await inExperimentOnAFact('read/branch');
+      let release!: () => void;
+      const agentAnswer = new Promise<void>(res => { release = res; });
+      m.status.mockClear();
+      m.status.mockImplementation(async (r: string, b?: string) => {
+        if (r === 'core-kb' && b === 'exp/try') throw gone;
+        if (r === 'core-kb' && b === 'machine/test') { await agentAnswer; return { ...STALE, branch: 'machine/test' }; }
+        return statusOf(b || 'machine/test');
+      });
+      fireEvent.keyDown(window, { key: '[', metaKey: true });
+      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
+      await waitFor(() => expect(m.status).toHaveBeenCalledWith('core-kb', 'machine/test'));
+      fireEvent.click(screen.getByTestId('rail-repo-ops-kb'));
+      await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+      await act(async () => { await new Promise(r => setTimeout(r, 60)); });
+      await act(async () => { release(); await new Promise(r => setTimeout(r, 60)); });
+      expect(screen.queryByTestId('since-fork-toggle')).toBeNull();
+      expect(screen.queryByText(/stale99/)).toBeNull();
+      expect(screen.getByTestId('target-label').textContent).toBe('ops-kb');
+    });
     it('the re-read refreshes what the entry held: a write gate that changed while away', async () => {
       const m = await afterAway(() => ({ ...EXP_STATUS, head: 'newhead', writable: false }));
       expect(m.status).toHaveBeenCalledWith('core-kb', 'exp/try');
