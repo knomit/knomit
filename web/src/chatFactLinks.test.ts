@@ -78,7 +78,12 @@ describe('repoChipName', () => {
 });
 
 describe('turnPrefer', () => {
-  const call = (id: string, name: string, args: unknown, isError = false): ToolCall => ({ id, name, state: 'done', isError, args });
+  // The server's in_base and target beside the arguments, as a call that names a repo carries them.
+  const call = (id: string, name: string, args: unknown, isError = false): ToolCall => {
+    const repo = (args as { repo?: string }).repo;
+    const server = repo ? { inBase: true, target: repo } : { inBase: true };
+    return { id, name, state: 'done', isError, args, ...server };
+  };
   const turn = (...calls: ToolCall[]): ChatTurn => ({ parts: [{ kind: 'group', calls }] }) as unknown as ChatTurn;
 
   it('a failed bind is not a repo the turn worked in, so one repo stays preferred', () => {

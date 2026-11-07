@@ -9,8 +9,8 @@
 import { createContext, useEffect, useRef, useState } from 'react';
 import { factLinksMore } from './chatCopy';
 import { resolveFactHandles } from './chatApi';
-import { boundAfter, callTarget, toolKind } from './chatState';
-import type { ChatTurn } from './chatState';
+import { boundAfter, callTarget } from './chatState';
+import type { ChatTurn, ToolCall } from './chatState';
 
 /** One answer of POST /api/v1/facts/resolve. */
 export interface ResolvedFact {
@@ -241,6 +241,10 @@ const argStr = (args: unknown, name: string): string => {
   return typeof v === 'string' ? v : '';
 };
 
+/** A call that would have moved the binding had it not failed: boundAfter's own
+ *  rule, so this names no tool. */
+const failedBind = (c: ToolCall): boolean => c.isError && boundAfter([{ ...c, isError: false }], '') !== '';
+
 /**
  * turnPrefer is the repos turn ti worked in, for POST /facts/resolve's
  * prefer: what each of its calls acted on (a bind's target, a call's repo or
@@ -260,7 +264,7 @@ export function turnPrefer(turns: ChatTurn[], ti: number): string[] {
   for (const p of turns[ti]?.parts ?? []) {
     if (p.kind !== 'group') continue;
     for (const c of p.calls) {
-      if (!(toolKind(c.name) === 'bind' && c.isError)) own.push(callTarget(c, bound));
+      if (!failedBind(c)) own.push(callTarget(c, bound));
       const store = /^kb:\/\/([^/\s]+)\//.exec(argStr(c.args, 'file') || argStr(c.args, 'path'))?.[1];
       if (store) own.push(store);
       bound = boundAfter([c], bound);
