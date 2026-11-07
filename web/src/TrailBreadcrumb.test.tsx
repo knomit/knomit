@@ -1,4 +1,4 @@
-import { it, expect, vi, beforeEach } from 'vitest';
+import { it, expect, vi, beforeEach, describe } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { TrailBreadcrumb } from './TrailBreadcrumb';
 import { api } from './api';
@@ -147,4 +147,26 @@ it("never asks for a fact title when a crumb names no fact", async () => {
   render(<TrailBreadcrumb repo="r" branch="b" trail={[{ factPath: "", asOf: hist("bbb1111") }]} onJump={vi.fn()} />);
   await new Promise(r => setTimeout(r, 20));
   expect(api.fact).not.toHaveBeenCalled();
+});
+
+// Reviewer LOW-1: the last crumb is the CURRENT one only while a fact is open.
+describe('current crumb', () => {
+  const colourOf = (text: string) => (screen.getByText(text) as HTMLElement).style.color;
+  const leftover = [{ factPath: 'kb/a.md', asOf: live }];
+
+  it('with a fact open, the last crumb is drawn as current', async () => {
+    render(<TrailBreadcrumb repo="r" branch="b" trail={trail} factOpen onJump={vi.fn()} />);
+    await waitFor(() => screen.getByText('T kb/b.md'));
+    expect(colourOf('T kb/b.md')).toBe('rgb(221, 221, 221)');
+    expect(colourOf('T kb/a.md')).toBe('rgb(136, 136, 136)');
+  });
+
+  it('with no fact open, no crumb is current: a leftover crumb is an ordinary back-crumb', async () => {
+    const onJump = vi.fn();
+    render(<TrailBreadcrumb repo="r" branch="b" trail={leftover} factOpen={false} onJump={onJump} />);
+    await waitFor(() => screen.getByText('T kb/a.md'));
+    expect(colourOf('T kb/a.md')).toBe('rgb(136, 136, 136)');
+    fireEvent.click(screen.getByText('T kb/a.md'));
+    expect(onJump).toHaveBeenCalledWith(0);
+  });
 });

@@ -392,6 +392,7 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail,
         branch={state.branch}
         lensName={state.context.kind === 'lens' ? state.context.name : undefined}
         trail={selectTrail(state)}
+        factOpen={(state.factPath ?? '') !== ''}
         titles={state.factTitles}
         onJump={onJumpTrail!}
       />
