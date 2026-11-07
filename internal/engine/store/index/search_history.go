@@ -251,6 +251,7 @@ func (it *FactsIter) Close() error {
 // (isLowerHex) or nothing matches: it goes into a GLOB pattern. Two results
 // for a limit of 2 is how a caller tells an ambiguous abbreviation.
 func (hq *HistoryQuery) CommitsWithPrefix(ctx context.Context, branch, prefix string, limit int) ([]string, error) {
+	hq.probe("CommitsWithPrefix")
 	if !isLowerHex(prefix) || limit <= 0 {
 		return nil, nil
 	}
