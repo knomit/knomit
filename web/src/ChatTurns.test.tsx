@@ -71,6 +71,14 @@ describe('the activity summary (chatCopy.activitySummary)', () => {
     expect(words([{ kind: 'bind', target: '' }, { kind: 'bind', target: 'all' }])).toBe('Bound to all');
     expect(words([{ kind: 'bind', target: 'all' }, { kind: 'bind', target: '' }, { kind: 'query', target: 'all' }])).toBe('Bound to all · searched 1× in all');
   });
+  it('a failed bind is not a bind: it says nothing, and the line is what the other calls say', () => {
+    expect(words([{ kind: 'bind', target: 'nosuch', failed: true }, { kind: 'query', target: 'all' }])).toBe('Searched 1× in all');
+    expect(words([{ kind: 'bind', target: 'all' }, { kind: 'bind', target: 'nosuch', failed: true }])).toBe('Bound to all');
+    // A failed bind with no target does not say "Bound" either.
+    expect(words([{ kind: 'bind', target: '', failed: true }, { kind: 'read', target: '' }])).toBe('Read 1 fact');
+    // A failed call of any other kind is still counted as it always was.
+    expect(words([{ kind: 'query', target: 'all', failed: true }])).toBe('Searched 1× in all');
+  });
   it('marks the target and the counts bold, nothing else', () => {
     const [bound, searched] = activitySummary([{ kind: 'bind', target: 'all' }, { kind: 'query', target: 'lens-x' }]);
     expect(bound.filter(s => s.strong).map(s => s.text)).toEqual(['all']);
@@ -127,7 +135,7 @@ describe('the activity line on the page', () => {
     expect(['tu_1', 'tu_2', 'tu_3', 'tu_4'].map(id => screen.getByTestId(`chat-tool-arg-${id}`).textContent))
       .toEqual(['all', 'AI agent security incident', 'agentic practice', 'a1b2c3d4']);
     // The verbs: Bound, Searched, Searched, Read.
-    expect(['tu_1', 'tu_2', 'tu_3', 'tu_4'].map(id => screen.getByTestId(`chat-tool-select-${id}`).firstElementChild?.textContent))
+    expect(['tu_1', 'tu_2', 'tu_3', 'tu_4'].map(id => screen.getByTestId(`chat-tool-select-${id}`).querySelector('[data-call-part="label"]')?.textContent))
       .toEqual(['Bound', 'Searched', 'Searched', 'Read']);
   });
 
@@ -342,5 +350,30 @@ describe('the streaming caret', () => {
     mount(snap([{ kind: 'user', text: 'q' }, { kind: 'assistant', text: 'A' }]));
     await screen.findByTestId('chat-turn-0');
     expect(screen.queryByTestId('chat-caret')).toBeNull();
+  });
+});
+
+describe('the activity line on the page after a failed bind', () => {
+  const failedBind = (id: string, name: string): ChatViewItem => ({ ...call(id, 'knomit_bind', { name }), is_error: true });
+
+  it('a group of only failed binds has no summary at all: no empty span, no stray separator', async () => {
+    mount(snap([{ kind: 'user', text: 'q' }, failedBind('tu_1', 'nosuch-kb'), { kind: 'assistant', text: 'ok' }]));
+    const toggle = await screen.findByTestId('chat-tool-group-toggle');
+    expect(screen.queryByTestId('chat-activity-summary')).toBeNull();
+    expect(toggle.textContent).toBe('1 step›');
+    expect(toggle.textContent).not.toContain('·');
+  });
+
+  it('a failed bind in one group leaves the next group on the binding before it', async () => {
+    mount(snap([
+      { kind: 'user', text: 'q' },
+      call('tu_1', 'knomit_bind', { name: 'alpha' }), failedBind('tu_2', 'nosuch-kb'),
+      { kind: 'assistant', text: 'then' },
+      call('tu_3', 'knomit_query', { text: 'x' }),
+      { kind: 'assistant', text: 'done' },
+    ]));
+    await screen.findAllByTestId('chat-tool-group');
+    const lines = screen.getAllByTestId('chat-activity-summary').map(e => e.textContent);
+    expect(lines).toEqual(['Bound to alpha', 'Searched 1× in alpha']);
   });
 });

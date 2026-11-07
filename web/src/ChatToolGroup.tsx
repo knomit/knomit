@@ -4,10 +4,10 @@ import ReactMarkdown from 'react-markdown';
 import { markdownPlugins, markdownComponents } from './markdown';
 import type { ChatApproval, ApprovalDecision } from './chatApi';
 import type { ToolCall } from './chatState';
-import { LOADER_TOOL, toolRowLabel, toolKind, callTarget, boundAfter, keyArg, queryText, formatDuration, wallDurationMs } from './chatState';
+import { toolCallLabel, toolKind, callTarget, boundAfter, keyArg, queryText, formatDuration, wallDurationMs } from './chatState';
 import {
   APPROVAL_ALLOW, APPROVAL_DECLINE, APPROVAL_ALLOW_SESSION, APPROVAL_TARGET_UNRESOLVED, CHAT_STOP,
-  loadedToolsRow, activitySummary, activitySteps, liveStep, toolVerb, resultCount,
+  activitySummary, activitySteps, liveStep, resultCount,
 } from './chatCopy';
 import type { SummarySeg } from './chatCopy';
 
@@ -70,7 +70,7 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
     targets.push(callTarget(c, inForce));
     inForce = boundAfter([c], inForce);
   }
-  const summary = activitySummary(calls.map((c, i) => ({ kind: toolKind(c.name), target: targets[i] })));
+  const summary = activitySummary(calls.map((c, i) => ({ kind: toolKind(c.name), target: targets[i], failed: c.isError })));
   const wall = wallDurationMs(calls);
   const runningIdx = calls.findIndex(c => c.state === 'running');
   const runningCall = runningIdx >= 0 ? calls[runningIdx] : null;
@@ -85,7 +85,8 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
           <span style={tile}><KnomitMark /></span>
           {liveText
             ? <span data-testid="chat-activity-live" style={{ color: AMBER }}>{segs(liveText)}</span>
-            : (
+            : summary.length > 0 && (
+              // Nothing to say (a group of failed binds only): no empty item, so no double gap.
               <span data-testid="chat-activity-summary" style={{ color: live ? AMBER : '#8a8a8a', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {summary.map((piece, i) => (
                   <span key={i}>{i > 0 && ' · '}{segs(piece)}</span>
@@ -115,20 +116,12 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
             const ap = approvals[c.id];
             const selected = selectedId === c.id;
             const canOpen = c.state === 'done';
-            const arg = keyArg(c);
             return (
               <div key={c.id} data-testid={`chat-tool-row-${c.id}`} data-state={c.state} data-error={c.isError || undefined} style={{ position: 'relative' }}>
-                <span aria-hidden="true" data-testid={`chat-tool-dot-${c.id}`} style={dot(c.state, c.isError)} />
+                <ToolCallDot call={c} testId={`chat-tool-dot-${c.id}`} onTimeline />
                 <button type="button" data-testid={`chat-tool-select-${c.id}`} disabled={!canOpen}
-                  aria-pressed={selected} onClick={() => onSelect(c)} style={rowBtn(selected, c.isError)}>
-                  <span style={{ color: c.state === 'running' ? AMBER : undefined }}>{c.name === LOADER_TOOL && c.loaded?.length ? loadedToolsRow(c.loaded) : (toolVerb(toolKind(c.name), c.state === 'running') ?? toolRowLabel(c.name))}</span>
-                  {arg && <span data-testid={`chat-tool-arg-${c.id}`} style={argMono}>{arg}</span>}
-                  {(c.summary || c.durationMs) && (
-                    <span data-testid={`chat-tool-meta-${c.id}`} style={metaMono}>
-                      {c.summary && toolKind(c.name) === 'query' && <span data-testid={`chat-tool-size-${c.id}`}>{resultCount(c.summary.count)}</span>}
-                      {c.durationMs ? <span data-testid={`chat-tool-time-${c.id}`}>{formatDuration(c.durationMs)}</span> : null}
-                    </span>
-                  )}
+                  aria-pressed={selected} onClick={() => onSelect(c)} style={rowBtn(selected)}>
+                  <ToolCallLine call={c} testPrefix="chat-tool" />
                 </button>
                 {ap && <ApprovalCard approval={ap} onAnswer={d => onAnswer(c.id, d)} />}
               </div>
@@ -136,6 +129,44 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+/** A call's state mark: amber while it runs, green when it succeeded, red when it
+ *  failed. On the timeline it sits on the rail; elsewhere it is inline. */
+function ToolCallDot({ call, testId, onTimeline = false }: { call: ToolCall; testId?: string; onTimeline?: boolean }) {
+  return <span aria-hidden="true" data-call-part="dot" data-testid={testId} style={dot(call.state, call.isError, onTimeline)} />;
+}
+
+/** What a call's row says: its label (toolCallLabel), its key argument, and its
+ *  size and time, in the row's colours (red for a failed call). */
+function ToolCallLine({ call: c, testPrefix }: { call: ToolCall; testPrefix: string }) {
+  const arg = keyArg(c);
+  return (
+    <span data-call-part="line" style={line(c.isError)}>
+      <span data-call-part="label" style={{ color: c.state === 'running' ? AMBER : undefined }}>{toolCallLabel(c)}</span>
+      {arg && <span data-testid={`${testPrefix}-arg-${c.id}`} style={argMono}>{arg}</span>}
+      {(c.summary || c.durationMs) && (
+        <span data-testid={`${testPrefix}-meta-${c.id}`} style={metaMono}>
+          {c.summary && toolKind(c.name) === 'query' && <span data-testid={`${testPrefix}-size-${c.id}`}>{resultCount(c.summary.count)}</span>}
+          {c.durationMs ? <span data-testid={`${testPrefix}-time-${c.id}`}>{formatDuration(c.durationMs)}</span> : null}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * ToolCallHead is a call's timeline row drawn as a heading: the same dot and
+ * the same line (ToolCallDot, ToolCallLine), so the side panel that shows a
+ * call's result is headed by the very row that was clicked, failed or not.
+ */
+export function ToolCallHead({ call, testId }: { call: ToolCall; testId?: string }) {
+  return (
+    <div data-testid={testId} data-state={call.state} data-error={call.isError || undefined} style={headRow}>
+      <ToolCallDot call={call} />
+      <ToolCallLine call={call} testPrefix="chat-result-call" />
     </div>
   );
 }
@@ -182,17 +213,24 @@ const stopPill: CSSProperties = {
 };
 const timeline: CSSProperties = { marginLeft: 14, paddingLeft: 14, borderLeft: '1px solid #262626', padding: '2px 0 2px 14px' };
 const interstitial: CSSProperties = { color: '#888', fontStyle: 'italic', fontSize: 12.5, lineHeight: 1.5, margin: '4px 0 6px' };
-const dot = (state: 'running' | 'done', isError: boolean): CSSProperties => ({
-  position: 'absolute', left: -19, top: 11, width: 7, height: 7, borderRadius: '50%', boxSizing: 'border-box',
+const dot = (state: 'running' | 'done', isError: boolean, onTimeline: boolean): CSSProperties => ({
+  ...(onTimeline ? { position: 'absolute', left: -19, top: 11 } : { flexShrink: 0, alignSelf: 'center' }),
+  width: 7, height: 7, borderRadius: '50%', boxSizing: 'border-box',
   ...(state === 'running'
     ? { background: AMBER, boxShadow: '0 0 0 3px rgba(232,194,122,.18)' }
     : { background: isError ? '#e0a0a0' : 'rgba(119,204,153,.25)', border: `1px solid ${isError ? '#e0a0a0' : '#4a8a66'}` }),
 });
-const rowBtn = (selected: boolean, isError: boolean): CSSProperties => ({
-  display: 'flex', alignItems: 'baseline', gap: 10, width: '100%', textAlign: 'left', background: selected ? '#1b1f2a' : 'transparent',
-  border: 'none', borderRadius: 4, padding: '4px 8px', fontSize: 12.5, fontFamily: 'inherit',
-  color: isError ? '#e0a0a0' : '#c8c8c8', cursor: 'pointer',
+const rowBtn = (selected: boolean): CSSProperties => ({
+  display: 'flex', width: '100%', textAlign: 'left', background: selected ? '#1b1f2a' : 'transparent',
+  border: 'none', borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', cursor: 'pointer',
 });
+// The row's text: label, argument and meta on one baseline, red for a failed call.
+const line = (isError: boolean): CSSProperties => ({
+  display: 'flex', alignItems: 'baseline', gap: 10, flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 400, lineHeight: 'normal',
+  color: isError ? '#e0a0a0' : '#c8c8c8',
+});
+// The heading: the row's dot beside the row's line, with the rail's gap (19px from dot to text, less the 7px dot).
+const headRow: CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0', margin: '0 0 12px' };
 const argMono: CSSProperties = {
   fontFamily: 'var(--k-font-mono)', fontSize: 12, color: '#9aa4b2', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
 };

@@ -10,6 +10,10 @@ import type { PanelEntry, PanelState } from './chatPanelState';
 import { installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
 import { stubFleetFetch, problem } from './fleetTestFetch';
 import type { ChatSnapshot } from './chatApi';
+import { ChatToolGroup } from './ChatToolGroup';
+import type { ToolCall } from './chatState';
+import sidePanelSrc from './ChatSidePanel.tsx?raw';
+import resultPanelSrc from './ChatResultPanel.tsx?raw';
 
 const CHAT = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
 const BASE = '/api/v1/chats/chat-a';
@@ -43,11 +47,11 @@ function routes() {
 
 /** The panel with its own history, driven through the panel API (the way fact links will). */
 let api: { open: (e: PanelEntry) => void; state: () => PanelState };
-function Harness({ running = false, onBrowse, bound = '' }: { running?: boolean; onBrowse?: (r: string, p: string) => void; bound?: string }) {
+function Harness({ running = false, onBrowse, bound = '', callFor }: { running?: boolean; onBrowse?: (r: string, p: string) => void; bound?: string; callFor?: (id: string) => ToolCall | undefined }) {
   const [panel, dispatch] = useReducer(panelReducer, initialPanelState);
   useEffect(() => { api = { open: entry => dispatch({ type: 'open', entry }), state: () => panel }; });
   const w = usePanelWidth();
-  return <ChatSidePanel chatId="chat-a" panel={panel} dispatch={dispatch} running={running} width={w.width} onSplitterDown={w.onSplitterDown} onOpenInBrowse={onBrowse} boundFor={() => bound} />;
+  return <ChatSidePanel chatId="chat-a" panel={panel} dispatch={dispatch} running={running} width={w.width} onSplitterDown={w.onSplitterDown} onOpenInBrowse={onBrowse} boundFor={() => bound} callFor={callFor} />;
 }
 
 beforeEach(() => { installFakeEventSource(); localStorage.clear(); });
@@ -409,7 +413,7 @@ describe('the side panel: target, width clamp, errors, keys', () => {
     render(<Harness bound="A" />); // the binding in force BEFORE the call is A
     act(() => api.open({ kind: 'result', callId: 'tu_b' }));
     await screen.findByTestId('chat-result-text');
-    expect(crumb()).toBe('B / knomit: Knomit bind');
+    expect(crumb()).toBe('B / Bound');
   });
 
   it('the footer items are the mockup items: keycap, word, keycap, word, count, with no extra flex items for the separators', async () => {
@@ -428,7 +432,7 @@ describe('the side panel: target, width clamp, errors, keys', () => {
     act(() => api.open(R2));
     await screen.findByTestId('chat-result-fact');
     expect(screen.queryByTestId('chat-panel-browse')).toBeNull();
-    expect(crumb()).toBe('knomit: Knomit materialize / kb / decisions / web');
+    expect(crumb()).toBe('Read / kb / decisions / web');
   });
 
   it('clampPanelWidth: the minimum, the share of the container, and no bound without a container', () => {
@@ -497,5 +501,91 @@ describe('the side panel: target, width clamp, errors, keys', () => {
     fireEvent.keyDown(tab, { key: 'Escape' });
     await waitFor(() => expect(cancels(fx)).toHaveLength(1));
     expect(screen.getByTestId('chat-side-panel')).toBeInTheDocument();
+  });
+});
+
+// The panel is the details behind the row that was clicked: its header is the
+// row itself (same dot, label, argument, size and time, same success or failure
+// state), drawn by the same code, never a second wording of the tool.
+describe('a tool call\'s panel header is the row it opens from', () => {
+  const okBind: ToolCall = { id: 'tu_ok', name: 'knomit_bind', state: 'done', isError: false, args: { name: 'alpha' }, durationMs: 3 };
+  const badBind: ToolCall = { id: 'tu_bad', name: 'knomit_bind', state: 'done', isError: true, args: { name: 'demo-kb' }, durationMs: 1 };
+  const other: ToolCall = { id: 'tu_x', name: 'acme_frobnicate', state: 'done', isError: false, args: { q: 1 }, durationMs: 1200 };
+  const loader: ToolCall = { id: 'tu_l', name: 'load_tools', state: 'done', isError: false, loaded: ['knomit_query', 'knomit_bind'] };
+  const served = (c: ToolCall) => ({ body: { name: c.name, arguments: c.args ?? {}, result: c.isError ? 'no lens named "demo-kb"' : 'ok', is_error: c.isError, elided: false } });
+
+  /** The transcript row and the panel, side by side, for the same call. */
+  async function both(c: ToolCall) {
+    stubFleetFetch({ [`GET ${BASE}/calls/${c.id}`]: served(c) });
+    render(<>
+      <ChatToolGroup lead={[]} calls={[c]} approvals={{}} selectedId={c.id} onSelect={vi.fn()} onAnswer={vi.fn()} />
+      <Harness bound="r1" callFor={id => (id === c.id ? c : undefined)} />
+    </>);
+    fireEvent.click(screen.getByTestId('chat-tool-group-toggle'));
+    act(() => api.open({ kind: 'result', callId: c.id }));
+    await screen.findByTestId('chat-result-tab-result');
+    const row = screen.getByTestId(`chat-tool-row-${c.id}`);
+    const head = screen.getByTestId('chat-result-title');
+    return { row, head };
+  }
+  const dotOf = (el: HTMLElement) => el.querySelector('[data-call-part="dot"]') as HTMLElement;
+  const labelOf = (el: HTMLElement) => el.querySelector('[data-call-part="label"]') as HTMLElement;
+  const lineOf = (el: HTMLElement) => el.querySelector('[data-call-part="line"]') as HTMLElement;
+  const looks = (el: HTMLElement) => { const s = getComputedStyle(el); return [s.width, s.height, s.backgroundColor, s.borderTopColor, s.borderRadius, s.color, s.fontSize, s.fontWeight].join('|'); };
+
+  for (const [name, c] of [['a succeeded bind', okBind], ['a failed bind', badBind], ['a tool the page has no wording for', other], ['the loader', loader]] as const) {
+    it(`${name}: the header has the row's dot, label, line and state`, async () => {
+      const { row, head } = await both(c);
+      expect(dotOf(head)).not.toBeNull();
+      expect(looks(dotOf(head))).toBe(looks(dotOf(row)));
+      expect(labelOf(head).textContent).toBe(labelOf(row).textContent);
+      expect(lineOf(head).textContent).toBe(lineOf(row).textContent);
+      expect(looks(lineOf(head))).toBe(looks(lineOf(row)));
+      expect(head.getAttribute('data-error')).toBe(row.getAttribute('data-error'));
+      // The breadcrumb names the call by the same label.
+      expect(crumb()?.endsWith(labelOf(row).textContent ?? '\u0000')).toBe(true);
+    });
+  }
+
+  it('a failed call\'s header is drawn failed and a succeeded one is not', async () => {
+    const { head } = await both(badBind);
+    expect(head).toHaveAttribute('data-error', 'true');
+    const failed = looks(lineOf(head));
+    cleanup();
+    const ok = await both(okBind);
+    expect(ok.head.hasAttribute('data-error')).toBe(false);
+    expect(looks(lineOf(ok.head))).not.toBe(failed);
+  });
+
+  it('a tool the page has no wording for is labelled from its own name, in row and header alike', async () => {
+    const { row, head } = await both(other);
+    expect(labelOf(row)).toHaveTextContent('acme_frobnicate');
+    expect(labelOf(head)).toHaveTextContent('acme_frobnicate');
+  });
+
+  it('without the transcript row (a call the page no longer has), the header is still the row drawn from the loaded call', async () => {
+    stubFleetFetch({ [`GET ${BASE}/calls/${badBind.id}`]: served(badBind) });
+    render(<Harness bound="r1" />);
+    act(() => api.open({ kind: 'result', callId: badBind.id }));
+    const head = await screen.findByTestId('chat-result-title');
+    expect(labelOf(head)).not.toBeNull();
+    expect(head).toHaveAttribute('data-error', 'true');
+  });
+
+  it('the panels word no tool themselves: no tool label or verb is written in their source', () => {
+    for (const src of [sidePanelSrc, resultPanelSrc]) {
+      expect(src).not.toMatch(/\btoolRowLabel\b|\btoolVerb\b|knomit: Knomit|'Bound|'Searched|'Read'/);
+    }
+  });
+});
+
+describe('the activity line of a group with a failed bind', () => {
+  it('says nothing for the failed bind, and the call after it searched where the chat was bound', () => {
+    const calls: ToolCall[] = [
+      { id: 'b1', name: 'knomit_bind', state: 'done', isError: true, args: { name: 'nosuch-kb' } },
+      { id: 'q1', name: 'knomit_query', state: 'done', isError: false, args: { text: 'x' } },
+    ];
+    render(<ChatToolGroup lead={[]} calls={calls} approvals={{}} selectedId={null} bound="r1" onSelect={vi.fn()} onAnswer={vi.fn()} />);
+    expect(screen.getByTestId('chat-activity-summary').textContent).toBe('Searched 1× in r1');
   });
 });

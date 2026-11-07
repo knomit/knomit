@@ -10,7 +10,7 @@ import {
 import type { ApprovalDecision, ChatApproval, ChatInfo, ChatNotice } from './chatApi';
 import { subscribeChatEvents } from './chatEvents';
 import { NEW_CHAT_ERROR } from './chatCopy';
-import { boundBeforeCall, chatReducer, initialChatState, refusalReason, sessionCost } from './chatState';
+import { boundBeforeCall, chatReducer, findCall, initialChatState, refusalReason, sessionCost } from './chatState';
 import { RECONNECT_INITIAL_MS, RECONNECT_MAX_MS } from './eventStream';
 import type { ToolCall, UsagePayload } from './chatState';
 
@@ -307,7 +307,7 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onOpenInBrowse }: {
           {openEntry && (
             <ChatSidePanel chatId={chat.id} panel={panel} dispatch={dispatchPanel} running={state.running}
               width={panelWidth} onSplitterDown={onSplitterDown} onOpenInBrowse={onOpenInBrowse}
-              boundFor={callId => boundBeforeCall(state.turns, callId)} />
+              boundFor={callId => boundBeforeCall(state.turns, callId)} callFor={callId => findCall(state.turns, callId)} />
           )}
         </div>
       </div>

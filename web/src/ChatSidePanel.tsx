@@ -4,7 +4,8 @@ import { ChatFactView } from './ChatFactView';
 import { ChatResultPanel } from './ChatResultPanel';
 import { FacetSplitter } from './FacetColumns';
 import type { ChatCall } from './chatApi';
-import { bindTarget, toolKind, toolRowLabel } from './chatState';
+import { bindTarget, toolCallLabel, toolCallOf, toolKind } from './chatState';
+import type { ToolCall } from './chatState';
 import { crumbOf, shownEntry } from './chatPanelState';
 import type { PanelAction, PanelState } from './chatPanelState';
 import {
@@ -61,7 +62,7 @@ function typingIn(el: Element | null): boolean {
  *   Cmd+[ (Ctrl+[ too) goes back, from anywhere, including the composer; the
  *   browser's own history shortcut is suppressed.
  */
-export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplitterDown, onOpenInBrowse, boundFor }: {
+export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplitterDown, onOpenInBrowse, boundFor, callFor }: {
   chatId: string;
   panel: PanelState;
   dispatch: Dispatch<PanelAction>;
@@ -74,13 +75,17 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
   /** The repo or lens the chat was bound to when a call ran (a result with no
    *  target of its own belongs to it). */
   boundFor?: (callId: string) => string;
+  /** The transcript's record of a call, which its timeline row is drawn from:
+   *  the panel's header is that row, and the breadcrumb names it the same way. */
+  callFor?: (callId: string) => ToolCall | undefined;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const entry = shownEntry(panel);
   // What a loaded result says about itself: its breadcrumb and where Browse would open it.
   const [calls, setCalls] = useState<Record<string, { crumb: string[]; browse?: { repo: string; path: string } }>>({});
   const boundForRef = useRef(boundFor);
-  useEffect(() => { boundForRef.current = boundFor; });
+  const callForRef = useRef(callFor);
+  useEffect(() => { boundForRef.current = boundFor; callForRef.current = callFor; });
   const onCall = useCallback((callId: string, call: ChatCall) => {
     // A materialize names its fact as `file` (a path, or kb://<id>/<path>); other
     // tools use `path`. The target is what the call names, else the binding in
@@ -89,10 +94,12 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
     const path = file.replace(/^kb:\/\/[^/]+\//, '');
     // A bind names its own target (bindTarget's rule: lens, repo, name, target), and it is that, not the binding in
     // force BEFORE it ran, that the call belongs to. Other calls name a repo or lens, else the binding in force.
-    const own = toolKind(call.name) === 'bind' ? bindTarget({ id: callId, name: call.name, state: 'done', isError: call.is_error, args: call.arguments }) : arg(call, 'repo', 'lens', 'target');
+    const own = toolKind(call.name) === 'bind' ? bindTarget(toolCallOf(callId, call)) : arg(call, 'repo', 'lens', 'target');
     const repo = own || boundForRef.current?.(callId) || '';
-    // The mockup's "repo / path / dir" when the call names a file; otherwise the repo it ran in, then the tool.
-    const crumb = path ? crumbOf(repo || toolRowLabel(call.name), path) : [repo, toolRowLabel(call.name)].filter(Boolean);
+    // The mockup's "repo / path / dir" when the call names a file; otherwise the repo it ran in, then the call,
+    // labelled as its row is (toolCallLabel).
+    const label = toolCallLabel(callForRef.current?.(callId) ?? toolCallOf(callId, call));
+    const crumb = path ? crumbOf(repo || label, path) : [repo, label].filter(Boolean);
     const browse = call.name === 'knomit_materialize' && !call.is_error && repo && path ? { repo, path: file } : undefined;
     setCalls(c => ({ ...c, [callId]: { crumb, ...(browse ? { browse } : {}) } }));
   }, []);
@@ -147,7 +154,7 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
         </div>
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
           {entry.kind === 'result'
-            ? <ChatResultPanel chatId={chatId} callId={entry.callId} onCall={onCall} />
+            ? <ChatResultPanel chatId={chatId} callId={entry.callId} row={callFor?.(entry.callId)} onCall={onCall} />
             : <ChatFactView repo={entry.repo} branch={entry.branch} path={entry.path} commit={entry.commit} />}
         </div>
         <div data-testid="chat-panel-footer" style={footer}>
