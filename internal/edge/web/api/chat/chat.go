@@ -58,6 +58,9 @@ type viewItem struct {
 	// InBase, on a "tool_call" item: the call's arguments carry binding, repo
 	// or lens, so the page words it "in <target>" (see inBase).
 	InBase bool `json:"in_base,omitempty"`
+	// Target, on a "tool_call" item: the repo or lens the call's arguments
+	// name explicitly, lens first (see callTarget); the page says "in <it>".
+	Target string `json:"target,omitempty"`
 	// On a "tool_call" item, once done: how long the tool ran and a small
 	// summary of its result when one is cheap to compute.
 	DurationMS int64        `json:"duration_ms,omitempty"`
@@ -783,16 +786,16 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		c.mu.Lock()
 		c.calls[tu.ID] = tu
 		startedMS := nowMS()
-		title, keyArg := c.wording(tu.Name, tu.Args)
-		base := inBase(tu.Args)
-		c.view = append(c.view, viewItem{Kind: "tool_call", ID: tu.ID, Name: tu.Name, Arguments: tu.Args, State: "running", StartedMS: startedMS, Title: title, KeyArg: keyArg, InBase: base})
+		w := c.wording(tu.Name, tu.Args)
+		c.view = append(c.view, viewItem{Kind: "tool_call", ID: tu.ID, Name: tu.Name, Arguments: tu.Args, State: "running", StartedMS: startedMS,
+			Title: w.title, KeyArg: w.keyArg, Target: w.target, InBase: w.inBase})
 		turn := c.turnAt
 		c.mu.Unlock()
 		out := map[string]any{"id": tu.ID, "name": tu.Name, "state": "running", "turn": turn, "started_ms": startedMS}
 		if len(tu.Args) > 0 && len(tu.Args) <= maxApprovalArgs {
 			out["arguments"] = tu.Args
 		}
-		putWording(out, title, keyArg, base)
+		putWording(out, w)
 		c.emit("tool_call", out)
 	case llm.LoopToolResult:
 		r := ev.Result
@@ -810,11 +813,10 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 			ms = 1
 		}
 		sum := summarize(tu.Name, r.Content, r.IsError)
-		title, keyArg := c.wording(tu.Name, tu.Args)
-		base := inBase(tu.Args)
+		w := c.wording(tu.Name, tu.Args)
 		if len(loaded) > 0 {
 			// The loader's main argument is what it loaded, not what was asked for.
-			keyArg = boundKeyArg(strings.Join(loaded, ", "))
+			w.keyArg = boundKeyArg(strings.Join(loaded, ", "))
 		}
 		endedMS := nowMS()
 		var startedMS int64
@@ -823,13 +825,15 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 				c.view[i].State, c.view[i].IsError = "done", r.IsError
 				c.view[i].DurationMS, c.view[i].Summary, c.view[i].Loaded = ms, sum, loaded
 				c.view[i].EndedMS = endedMS
-				c.view[i].Title, c.view[i].KeyArg = title, keyArg
+				c.view[i].Title, c.view[i].KeyArg = w.title, w.keyArg
+				c.view[i].Target, c.view[i].InBase = w.target, w.inBase
 				startedMS = c.view[i].StartedMS
 			}
 		}
 		turn := c.turnAt
 		c.mu.Unlock()
-		if err := c.store.putCall(r.ToolUseID, callRecord{Name: tu.Name, Arguments: tu.Args, Result: r.Content, IsError: r.IsError, Elided: r.Elided, Title: title, KeyArg: keyArg, InBase: base}); err != nil {
+		if err := c.store.putCall(r.ToolUseID, callRecord{Name: tu.Name, Arguments: tu.Args, Result: r.Content, IsError: r.IsError, Elided: r.Elided,
+			Title: w.title, KeyArg: w.keyArg, Target: w.target, InBase: w.inBase}); err != nil {
 			log.Warn().Err(err).Str("chat", c.id).Msg("chat: could not store a tool call")
 		}
 		done := map[string]any{"id": r.ToolUseID, "name": tu.Name, "state": "done", "is_error": r.IsError, "turn": turn, "ended_ms": endedMS}
@@ -845,7 +849,7 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		if len(loaded) > 0 {
 			done["loaded"] = loaded
 		}
-		putWording(done, title, keyArg, base)
+		putWording(done, w)
 		c.emit("tool_call", done)
 	case llm.LoopToolsChanged:
 		c.onToolsChanged(*ev.Tools)

@@ -32,26 +32,30 @@ func toolLabels(defs []llm.ToolDef) map[string]toolLabel {
 // and a long query text would otherwise ride on every event and snapshot.
 const maxKeyArg = 200
 
-// wording is a call's title and main argument: the first of the tool's key
-// argument names whose value is a non-empty string. Both are "" when the tool
-// is unknown or marks nothing.
-func (c *chat) wording(name string, args json.RawMessage) (title, keyArg string) {
+// wording is what the page is told about a call: its title, its main argument
+// (the first of the tool's key argument names whose value is a non-empty
+// string), the repo or lens its arguments name (callTarget) and whether it
+// acts in one (inBase). Title and main argument are "" when the tool is
+// unknown or marks nothing.
+func (c *chat) wording(name string, args json.RawMessage) callWording {
+	w := callWording{target: callTarget(args), inBase: inBase(args)}
 	l, ok := c.labels[name]
 	if !ok {
-		return "", ""
+		return w
 	}
+	w.title = l.title
 	if len(l.key) > 0 && len(args) > 0 {
 		var m map[string]any
 		if json.Unmarshal(args, &m) == nil {
 			for _, k := range l.key {
 				if s, ok := m[k].(string); ok && s != "" {
-					keyArg = boundKeyArg(s)
+					w.keyArg = boundKeyArg(s)
 					break
 				}
 			}
 		}
 	}
-	return l.title, keyArg
+	return w
 }
 
 // boundKeyArg cuts s to maxKeyArg bytes on a rune boundary, marking the cut.
@@ -85,16 +89,43 @@ func inBase(args json.RawMessage) bool {
 	return false
 }
 
-// putWording adds a call's title, main argument and in_base to a tool_call
-// event, each only when it has one.
-func putWording(ev map[string]any, title, keyArg string, base bool) {
-	if title != "" {
-		ev["title"] = title
+// callTarget is the repo or lens a call's arguments name explicitly (lens
+// before repo), cut like a main argument; "" when they name neither. Sent for
+// the same reason as inBase: the page must not read it from arguments it may
+// not have.
+func callTarget(args json.RawMessage) string {
+	var m map[string]any
+	if len(args) == 0 || json.Unmarshal(args, &m) != nil {
+		return ""
 	}
-	if keyArg != "" {
-		ev["key_arg"] = keyArg
+	for _, k := range []string{"lens", "repo"} {
+		if s, ok := m[k].(string); ok && s != "" {
+			return boundKeyArg(s)
+		}
 	}
-	if base {
+	return ""
+}
+
+// callWording is what a tool_call event, row and record say about a call
+// beyond its name and state.
+type callWording struct {
+	title, keyArg, target string
+	inBase                bool
+}
+
+// putWording adds a call's title, main argument, target and in_base to a
+// tool_call event, each only when it has one.
+func putWording(ev map[string]any, w callWording) {
+	if w.title != "" {
+		ev["title"] = w.title
+	}
+	if w.keyArg != "" {
+		ev["key_arg"] = w.keyArg
+	}
+	if w.target != "" {
+		ev["target"] = w.target
+	}
+	if w.inBase {
 		ev["in_base"] = true
 	}
 }

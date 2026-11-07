@@ -31,8 +31,11 @@ import type { ChatApproval, ChatCall, ChatCallSummary, ChatNotice, ChatSnapshot,
 
 /** A call's title and main argument from what the server sent (a view item, a
  *  tool_call event or a stored call), each only when present. */
-const wordingOf = (w: { title?: string; key_arg?: string; in_base?: boolean }): Pick<ToolCall, 'title' | 'keyArg' | 'inBase'> =>
-  ({ ...(w.title ? { title: w.title } : {}), ...(w.key_arg ? { keyArg: w.key_arg } : {}), ...(w.in_base ? { inBase: true } : {}) });
+const wordingOf = (w: { title?: string; key_arg?: string; target?: string; in_base?: boolean }): Pick<ToolCall, 'title' | 'keyArg' | 'target' | 'inBase'> =>
+  ({
+    ...(w.title ? { title: w.title } : {}), ...(w.key_arg ? { keyArg: w.key_arg } : {}),
+    ...(w.target ? { target: w.target } : {}), ...(w.in_base ? { inBase: true } : {}),
+  });
 
 export interface ToolCall {
   id: string; name: string; state: 'running' | 'done'; isError: boolean;
@@ -44,6 +47,8 @@ export interface ToolCall {
   /** The server's word that the call acts in a repo or lens (its arguments
    *  carry binding, repo or lens): the activity line says "in <target>". */
   inBase?: boolean;
+  /** The repo or lens the call's arguments name explicitly, as the server read it. */
+  target?: string;
   /** The call's arguments: in the snapshot always, and on a live `running` event. */
   args?: unknown;
   /** How long the tool ran, in ms, and its result in one number: on a finished
@@ -131,7 +136,7 @@ export type ChatEvent =
   | { kind: 'send_failed'; sendId: number }
   | { kind: 'text_delta'; text: string; turn: number }
   | { kind: 'thinking_delta'; text: string; turn: number }
-  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; arguments?: unknown; title?: string; key_arg?: string; in_base?: boolean; duration_ms?: number; summary?: ChatCallSummary; loaded?: string[]; started_ms?: number; ended_ms?: number; turn: number }
+  | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; arguments?: unknown; title?: string; key_arg?: string; in_base?: boolean; target?: string; duration_ms?: number; summary?: ChatCallSummary; loaded?: string[]; started_ms?: number; ended_ms?: number; turn: number }
   | { kind: 'approval'; approval: ChatApproval }
   | { kind: 'approval_answered'; callId: string }
   | { kind: 'usage'; usage: UsagePayload; cost_usd?: number; seq?: number; turn: number }
@@ -489,14 +494,14 @@ export const bindTarget = (c: ToolCall): string => argOf(c.args, ['lens', 'repo'
 
 /** The target a call acts on. A bind's is what it names; any other call's,
  *  when the server says it acts in a repo or lens (`inBase`: its arguments
- *  carry binding, repo or lens), is the repo or lens it names, else the target
- *  of the binding in force (`bound`). A call without inBase (the chat's loader,
- *  an unbound catalogue read) ran nowhere in particular. The flag, not the
- *  arguments, decides, because the live event drops large arguments: deciding
- *  from them would word a call one way live and another after a reload.
- *  Empty when none is known. */
+ *  carry binding, repo or lens), is the repo or lens the server says it names
+ *  (`target`), else the target of the binding in force (`bound`). A call
+ *  without inBase (the chat's loader, an unbound catalogue read) ran nowhere in
+ *  particular. Only the server's fields decide, never the arguments: the live
+ *  event drops large arguments, so reading them would word a call one way live
+ *  and another after a reload. Empty when none is known. */
 export const callTarget = (c: ToolCall, bound: string): string =>
-  isBind(c.name) ? bindTarget(c) || bound : c.inBase ? argOf(c.args, ['lens', 'repo']) || bound : '';
+  isBind(c.name) ? bindTarget(c) || bound : c.inBase ? c.target || bound : '';
 
 /** The target in force after `calls`: the last SUCCESSFUL bind's, starting from
  *  `bound`. A bind that returned an error bound nothing and changes nothing. */

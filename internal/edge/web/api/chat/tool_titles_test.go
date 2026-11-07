@@ -166,3 +166,39 @@ func TestChat_InBaseIsSentWithoutTheArguments(t *testing.T) {
 	require.True(t, callResult(t, h, "uid:501", id, "tu_l").InBase)
 	require.False(t, callResult(t, h, "uid:501", id, "tu_r").InBase)
 }
+
+// The repo or lens a call's arguments name explicitly is sent as `target` on
+// the running and done events, the snapshot row and the call record, so the
+// page never reads it from the arguments (which the running event drops over
+// 16 KiB). lens is preferred to repo, as the page always did. A call that
+// names neither has no target.
+//
+// SABOTAGE: chat.go, leave target off the running event -> the large call's
+// live event has no way to say "in alpha" and this fails.
+func TestChat_TargetIsSentWithoutTheArguments(t *testing.T) {
+	h := newHarness(t)
+	handle := h.bind(writer, "chat-00000000000000000000000000000083", "alpha")
+	big := map[string]any{"binding": handle, "repo": "alpha", "prefix": strings.Repeat("x", maxApprovalArgs+10)}
+	h.queue("a1",
+		toolStep("tu_c", "knomit_changes", big, usage),
+		toolStep("tu_q", "knomit_query", map[string]any{"binding": handle, "text": "q"}, usage),
+		toolStep("tu_x", "acme_lensed", map[string]any{"repo": "r", "lens": "L"}, usage),
+		textStep("done", usage))
+	id := h.create("uid:501", "a1")
+	s := h.attach("uid:501", id)
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "changes"))
+	evs, _ := drive(t, h, "uid:501", id, s, nil)
+	running, done := toolCallEvents(t, evs)
+
+	require.NotContains(t, running["tu_c"], "arguments", "over 16 KiB, the live event carries no arguments")
+	for _, ev := range []map[string]map[string]any{running, done} {
+		require.Equal(t, "alpha", ev["tu_c"]["target"])
+		require.Equal(t, "knomit_query", ev["tu_q"]["name"])
+		require.NotContains(t, ev["tu_q"], "target")
+		require.Equal(t, "L", ev["tu_x"]["target"], "lens is preferred to repo")
+	}
+	snap := snapshotCalls(t, h, "uid:501", id)
+	require.Equal(t, "alpha", snap["tu_c"]["target"])
+	require.NotContains(t, snap["tu_q"], "target")
+	require.Equal(t, "alpha", callResult(t, h, "uid:501", id, "tu_c").Target)
+}

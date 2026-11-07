@@ -165,6 +165,36 @@ describe('the activity line: titles, counts and targets', () => {
     expect(summary()).toBe(live);
   });
 
+  it('a >16 KiB call that names repo X explicitly reads "… in X" live and after a reload', async () => {
+    // The server sends the named repo as `target`; the live events have no arguments.
+    const bind: ChatViewItem = { kind: 'tool_call', id: 'b', name: 'knomit_bind', title: 'Bind', key_arg: 'knomit', state: 'done', arguments: { repo: 'knomit' } };
+    const bigArgs = { binding: 'h', repo: 'alpha', prefix: 'x'.repeat(17 * 1024) };
+    const snapOf = (items: ChatViewItem[], running: boolean): ChatSnapshot =>
+      ({ id: 'chat-a', provider: 'p', model: 'm', running, grants: [], pending_approvals: [], items: [{ kind: 'user', text: 'q' }, ...items] });
+    const summary = () => screen.getByTestId('chat-activity-summary').textContent;
+
+    stubFleetFetch({ [`GET ${BASE}`]: { body: snapOf([bind], true) } });
+    render(<ChatFacet chat={{ id: 'chat-a', provider: 'p', model: 'm' }} facet="chat" onGone={vi.fn()} />);
+    await screen.findByTestId('chat-tool-group');
+    act(() => { chatStream('chat-a')!.emit('tool_call', { id: 'c', name: 'knomit_changes', title: 'Changes', target: 'alpha', in_base: true, state: 'running', turn: 0 }); });
+    act(() => { chatStream('chat-a')!.emit('tool_call', { id: 'c', name: 'knomit_changes', title: 'Changes', target: 'alpha', in_base: true, state: 'done', turn: 0 }); });
+    const live = summary();
+    cleanup();
+
+    stubFleetFetch({ [`GET ${BASE}`]: { body: snapOf([bind, { kind: 'tool_call', id: 'c', name: 'knomit_changes', title: 'Changes', target: 'alpha', in_base: true, state: 'done', arguments: bigArgs }], false) } });
+    render(<ChatFacet chat={{ id: 'chat-a', provider: 'p', model: 'm' }} facet="chat" onGone={vi.fn()} />);
+    await screen.findByTestId('chat-tool-group');
+    expect(live).toBe('Bind knomit · Changes in alpha');
+    expect(summary()).toBe(live);
+  });
+
+  it('the page reads no repo or lens from a call\'s arguments: without `target` it is the binding in force', () => {
+    expect(line([
+      { id: 'b', name: 'knomit_bind', title: 'Bind', state: 'done', isError: false, args: { repo: 'knomit' } },
+      { id: 'c', name: 'knomit_changes', title: 'Changes', state: 'done', isError: false, inBase: true, args: { binding: 'h', repo: 'alpha' } },
+    ])).toBe('Bind knomit · Changes in knomit');
+  });
+
   it('a call without in_base names no target, whatever its arguments say', () => {
     expect(line([
       { id: 'b', name: 'knomit_bind', title: 'Bind', state: 'done', isError: false, args: { repo: 'alpha' } },

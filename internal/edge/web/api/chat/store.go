@@ -36,6 +36,8 @@ type callRecord struct {
 	KeyArg string `json:"key_arg,omitempty"`
 	// InBase: the call's arguments carry binding, repo or lens (see viewItem).
 	InBase bool `json:"in_base,omitempty"`
+	// Target: the repo or lens the arguments name explicitly (see viewItem).
+	Target string `json:"target,omitempty"`
 }
 
 // chatStore is one chat's directory.
