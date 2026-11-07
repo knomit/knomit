@@ -46,6 +46,14 @@ type ToolDef struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Schema      json.RawMessage `json:"input_schema"`
+	// Title and Key are for the person, never for the model: Title is the
+	// tool's own annotations.title (the words a chat row shows) and Key the
+	// argument names, in order of preference, whose first non-empty string
+	// value is the call's main argument. Neither is encoded (json "-"), so
+	// neither reaches CanonicalPrefix or an adapter's request: changing a
+	// title never changes the cached tool prefix.
+	Title string   `json:"-"`
+	Key   []string `json:"-"`
 }
 
 // Item is one addressable piece of a hook. Exactly one payload is set: Tool

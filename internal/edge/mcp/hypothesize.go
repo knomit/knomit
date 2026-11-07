@@ -56,6 +56,7 @@ type HypothesizeProgress struct {
 // without task support get the original synchronous behavior.
 func hypothesizeTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_hypothesize",
+		mcpgo.WithTitleAnnotation("Hypothesize"),
 		mcpgo.WithDescription("Generate NEW hypothesis facts from synthesis facts on the agent branch. This is a distinct operation from knomit_review — only invoke when the user has explicitly asked to hypothesize, generate predictions, or extend synthesis facts forward. Do NOT invoke as a follow-up to knomit_review or other maintenance tools without an explicit user request. Each work item presents one synthesis fact; the agent decides per-item whether to write a hypothesis (skipping is the expected outcome for most synth facts — see workflow). Call with no arguments to start a new session. Continue with session_id, item_id and response: session_id is required on every call after the first, and the result's `next` line names it. STOP when the result has done: true — the session is finished and that session_id can no longer be continued; calling with it again is an error. A start call may return done: true immediately when no synthesis facts are eligible; that is a normal, complete outcome, not a reason to retry."),
 		bindingArg(true),
 		mcpgo.WithString("session_id", mcpgo.Description("Session ID from the result you are answering. Required on every call after the first; omit it only to start.")),

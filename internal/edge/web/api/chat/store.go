@@ -31,6 +31,13 @@ type callRecord struct {
 	Result    string          `json:"result"`
 	IsError   bool            `json:"is_error"`
 	Elided    bool            `json:"elided"`
+	// Title and KeyArg word the call's row, as its tool_call events do.
+	Title  string `json:"title,omitempty"`
+	KeyArg string `json:"key_arg,omitempty"`
+	// InBase: the call's arguments carry binding, repo or lens (see viewItem).
+	InBase bool `json:"in_base,omitempty"`
+	// Target: the repo or lens the arguments name explicitly (see viewItem).
+	Target string `json:"target,omitempty"`
 }
 
 // chatStore is one chat's directory.

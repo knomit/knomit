@@ -4,10 +4,10 @@ import ReactMarkdown from 'react-markdown';
 import { markdownPlugins, markdownComponents } from './markdown';
 import type { ChatApproval, ApprovalDecision } from './chatApi';
 import type { ToolCall } from './chatState';
-import { toolCallLabel, toolKind, callTarget, boundAfter, keyArg, queryText, formatDuration, wallDurationMs } from './chatState';
+import { toolCallLabel, isBind, callTarget, boundAfter, formatDuration, wallDurationMs } from './chatState';
 import {
   APPROVAL_ALLOW, APPROVAL_DECLINE, APPROVAL_ALLOW_SESSION, APPROVAL_TARGET_UNRESOLVED, CHAT_STOP,
-  activitySummary, activitySteps, liveStep, resultCount,
+  activitySummary, activitySteps, resultCount,
 } from './chatCopy';
 import type { SummarySeg } from './chatCopy';
 
@@ -41,7 +41,7 @@ const segs = (list: SummarySeg[]) => list.map((s, i) => (s.strong ? <strong key=
  * timeline: the model's interstitial text (`lead`) and one row per call. A row
  * that has finished can be selected: the page then fetches that call's result
  * and shows it in the result panel. While the turn runs, the collapsed line
- * shows the live step in amber with a Stop pill. A call waiting for the person
+ * is drawn amber with a Stop pill. A call waiting for the person
  * carries its approval card inside its row, and holds its group open, since a
  * card nobody can see would stall the turn.
  */
@@ -70,12 +70,8 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
     targets.push(callTarget(c, inForce));
     inForce = boundAfter([c], inForce);
   }
-  const summary = activitySummary(calls.map((c, i) => ({ kind: toolKind(c.name), target: targets[i], failed: c.isError })));
+  const summary = activitySummary(calls.map((c, i) => ({ title: toolCallLabel(c), target: targets[i], bind: isBind(c.name), failed: c.isError })));
   const wall = wallDurationMs(calls);
-  const runningIdx = calls.findIndex(c => c.state === 'running');
-  const runningCall = runningIdx >= 0 ? calls[runningIdx] : null;
-  const liveText = live && runningCall && toolKind(runningCall.name) === 'query' && queryText(runningCall)
-    ? liveStep(targets[runningIdx], queryText(runningCall)) : null;
 
   return (
     <div data-testid="chat-tool-group" data-open={open} data-live={live || undefined} style={{ margin: '0 0 10px' }}>
@@ -83,16 +79,15 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
         <button type="button" data-testid="chat-tool-group-toggle" aria-expanded={open}
           onClick={() => setOpened(o => !o)} style={header}>
           <span style={tile}><KnomitMark /></span>
-          {liveText
-            ? <span data-testid="chat-activity-live" style={{ color: AMBER }}>{segs(liveText)}</span>
-            : summary.length > 0 && (
-              // Nothing to say (a group of failed binds only): no empty item, so no double gap.
-              <span data-testid="chat-activity-summary" style={{ color: live ? AMBER : '#8a8a8a', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {summary.map((piece, i) => (
-                  <span key={i}>{i > 0 && ' · '}{segs(piece)}</span>
-                ))}
-              </span>
-            )}
+          {summary.length > 0 && (
+            // Nothing to say (a group of failed binds only): no empty item, so no double gap.
+            // While the turn runs the same line is drawn amber: it never words the step itself.
+            <span data-testid="chat-activity-summary" style={{ color: live ? AMBER : '#8a8a8a', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {summary.map((piece, i) => (
+                <span key={i}>{i > 0 && ' · '}{segs(piece)}</span>
+              ))}
+            </span>
+          )}
           <span data-testid="chat-activity-steps" style={steps}>
             {activitySteps(calls.length)}{wall > 0 && ` · ${formatDuration(wall)}`}
           </span>
@@ -139,17 +134,21 @@ function ToolCallDot({ call, testId, onTimeline = false }: { call: ToolCall; tes
   return <span aria-hidden="true" data-call-part="dot" data-testid={testId} style={dot(call.state, call.isError, onTimeline)} />;
 }
 
-/** What a call's row says: its label (toolCallLabel), its key argument, and its
- *  size and time, in the row's colours (red for a failed call). */
+/** What a call's row says: "<title> · <main argument>" (toolCallLabel and the
+ *  main argument the server sent), then its size and time, in the row's
+ *  colours (red for a failed call: the colour says it failed, no word does). */
 function ToolCallLine({ call: c, testPrefix }: { call: ToolCall; testPrefix: string }) {
-  const arg = keyArg(c);
+  const arg = c.keyArg;
   return (
     <span data-call-part="line" style={line(c.isError)}>
-      <span data-call-part="label" style={{ color: c.state === 'running' ? AMBER : undefined }}>{toolCallLabel(c)}</span>
-      {arg && <span data-testid={`${testPrefix}-arg-${c.id}`} style={argMono}>{arg}</span>}
+      <span style={words}>
+        <span data-call-part="label" style={{ color: c.state === 'running' ? AMBER : undefined, flexShrink: 0 }}>{toolCallLabel(c)}</span>
+        {arg && <span data-call-part="sep" aria-hidden="true" style={sep}>·</span>}
+        {arg && <span data-call-part="arg" data-testid={`${testPrefix}-arg-${c.id}`} style={argMono}>{arg}</span>}
+      </span>
       {(c.summary || c.durationMs) && (
         <span data-testid={`${testPrefix}-meta-${c.id}`} style={metaMono}>
-          {c.summary && toolKind(c.name) === 'query' && <span data-testid={`${testPrefix}-size-${c.id}`}>{resultCount(c.summary.count)}</span>}
+          {c.summary && <span data-testid={`${testPrefix}-size-${c.id}`}>{resultCount(c.summary.count)}</span>}
           {c.durationMs ? <span data-testid={`${testPrefix}-time-${c.id}`}>{formatDuration(c.durationMs)}</span> : null}
         </span>
       )}
@@ -231,6 +230,9 @@ const line = (isError: boolean): CSSProperties => ({
 });
 // The heading: the row's dot beside the row's line, with the rail's gap (19px from dot to text, less the 7px dot).
 const headRow: CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0', margin: '0 0 12px' };
+// The title, the separator and the main argument: closer together than the meta.
+const words: CSSProperties = { display: 'flex', alignItems: 'baseline', gap: 6, minWidth: 0 };
+const sep: CSSProperties = { color: '#666', flexShrink: 0 };
 const argMono: CSSProperties = {
   fontFamily: 'var(--k-font-mono)', fontSize: 12, color: '#9aa4b2', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
 };

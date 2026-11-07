@@ -67,6 +67,7 @@ const (
 // learnTool returns the Tool definition for knomit_learn.
 func learnTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_learn",
+		mcpgo.WithTitleAnnotation("Learn"), withKeyArgs("moment_name"),
 		mcpgo.WithDescription("Write one or more facts to the knowledge base in a single commit. A fact that shares a subject with an existing one (similar text AND a shared entity) outside the category the automatic merge searches (its category and sub-categories) is refused with the candidates listed; update the existing fact, or resubmit with distinct_from naming the paths you have checked. Inside that merge scope a similar fact is written at its own path and the response notes the nearest neighbour; if it states the same claim, fold it into that fact with knomit_update and retract this one. A near-duplicate in the same category is merged into the existing fact automatically (the response says so, and for two hypotheses which prediction was dropped); name the existing path in distinct_from to keep the new fact separate, e.g. a counter-hypothesis. Name a hypothesis your fact confirms or refutes in its settles ([{path, outcome}]): it is cited, retracted in the same commit and the outcome recorded in the commit's Knomit-Outcome trailer. Without settles, an observation that matches a hypothesis in the merge scope still settles it by similarity: retracted in the same commit, noted in the response, no outcome recorded."),
 		bindingArg(true),
 		mcpgo.WithString("moment_name",

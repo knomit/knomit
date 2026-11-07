@@ -51,6 +51,8 @@ var changesAllowedCalls = map[string][]string{
 		"model.DecodeChangesCursor", "model.EncodeChangesCursor",
 		"req.GetInt", "req.GetString", "req.GetBool", "context.WithTimeout", "cancel",
 		"mcpgo.NewTool", "mcpgo.WithDescription", "mcpgo.WithString", "mcpgo.WithNumber", "mcpgo.WithBoolean",
+		// the tool's title and key argument names: schema metadata, no store.
+		"mcpgo.WithTitleAnnotation", "withKeyArgs",
 		"mcpgo.Description", "mcpgo.NewToolResultError", "mcpgo.NewToolResultText", "bindingArg",
 		"changesErrorText", "errStoreUnavailable.Error", "err.Error", "errors.Is", "fmt.Sprintf", "json.Marshal",
 		"len", "string", "make", "append",

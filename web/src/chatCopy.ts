@@ -65,58 +65,46 @@ export const CHAT_REVOKE_GRANT = 'Revoke';
  *  (`<url> → <this>`, the same shape as every other request error). */
 export const CHAT_SEND_TIMEOUT = 'no answer';
 
-/** C8. The row of a call to the loader tool in the "Used Knomit" group.
- *  Approved by the user 2026-11-05. */
-export function loadedToolsRow(names: string[]): string {
-  return `Loaded tools: ${names.join(', ')}`;
-}
-
 // ── APPROVED (2026-11-06) ──
 // Chat UX v2, PR 1 (design 2026-11-05-chat-ux-v2, section 2). Approved by the
-// user on 2026-11-06, with the singular forms ("1 step", "read 1 fact",
-// "used 1 tool", "Session (1 turn)") and the timeline verbs below.
+// user on 2026-11-06, with the singular forms ("1 step", "Session (1 turn)").
+// The per-tool verbs ("Bound to", "searched", "read N facts", "used N tools",
+// "Searching") were replaced the same day by the tools' own titles: the user's
+// ruling that a tool's wording comes from its MCP metadata, never this file.
 
-/** The activity line's words. ONE function words the whole summary: the pieces
- *  are joined with " · ". `strong` marks the parts drawn bold (the target and
- *  the counts). A tool with no wording here counts toward "used N tools". */
+/** The activity line's words. ONE function words the whole summary, and it
+ *  holds no word for any tool: every call is named by its tool's own title (the
+ *  server sends annotations.title; a tool with none is named by its raw name).
+ *  Calls are counted per (title, target) in first-appearance order and the
+ *  pieces joined with " · ": "Bind demo-kb · Query 2× in knomit". `strong`
+ *  marks the parts drawn bold (a bind's target and the counts). Approved by
+ *  the user 2026-11-06 (tool titles); "×" and " in " are the connectors. */
 export interface SummarySeg { text: string; strong?: boolean }
-/** `failed`: the call returned an error. A failed bind bound nothing, so it adds
- *  nothing to the line; a failed call of any other kind is counted as before. */
-export interface SummaryCall { kind: 'bind' | 'query' | 'read' | null; target: string; failed?: boolean }
+/** `title`: the call's title, else its tool name. `target`: for a bind, the repo
+ *  or lens it names; for any other call, where it ran ("" when not known).
+ *  `bind`: the call is a bind, whose target follows its title directly.
+ *  `failed`: the call returned an error. A failed bind bound nothing, so it adds
+ *  nothing to the line; a failed call of any other kind is counted like any other. */
+export interface SummaryCall { title: string; target: string; bind?: boolean; failed?: boolean }
 
 export function activitySummary(calls: SummaryCall[]): SummarySeg[][] {
-  const pieces: SummarySeg[][] = [];
-  const bound: string[] = [];
-  const queries = new Map<string, number>();
-  let reads = 0;
-  let other = 0;
+  // A bind with no readable target is said alone only when no bind named one:
+  // "Bind · Bind all" would say the same thing twice.
+  const named = calls.some(c => c.bind && !c.failed && c.target);
+  const groups: { title: string; target: string; bind: boolean; n: number }[] = [];
   for (const c of calls) {
-    if (c.kind === 'bind') { if (!c.failed && !bound.includes(c.target)) bound.push(c.target); }
-    else if (c.kind === 'query') queries.set(c.target, (queries.get(c.target) ?? 0) + 1);
-    else if (c.kind === 'read') reads++;
-    else other++;
+    if (c.bind && (c.failed || (!c.target && named))) continue;
+    const bind = !!c.bind;
+    const g = groups.find(x => x.title === c.title && x.target === c.target && x.bind === bind);
+    if (g) g.n++;
+    else groups.push({ title: c.title, target: c.target, bind, n: 1 });
   }
-  // A bind with no readable target says "Bound" only when no bind named one:
-  // "Bound · Bound to all" would say the same thing twice.
-  const named = bound.some(t => t !== '');
-  for (const t of bound) {
-    if (t) pieces.push([{ text: 'Bound to ' }, { text: t, strong: true }]);
-    else if (!named) pieces.push([{ text: 'Bound' }]);
-  }
-  for (const [t, n] of queries) {
-    pieces.push([{ text: 'searched ' }, { text: `${n}×`, strong: true }, ...(t ? [{ text: ' in ' + t }] : [])]);
-  }
-  if (reads) pieces.push([{ text: 'read ' }, { text: String(reads), strong: true }, { text: reads === 1 ? ' fact' : ' facts' }]);
-  if (other) pieces.push([{ text: 'used ' }, { text: String(other), strong: true }, { text: other === 1 ? ' tool' : ' tools' }]);
-  // The line opens a sentence: capitalize the first word.
-  const first = pieces[0]?.[0];
-  if (first) first.text = first.text.charAt(0).toUpperCase() + first.text.slice(1);
-  return pieces;
-}
-
-/** The running step of the collapsed line: Searching <t> for "<q>"… */
-export function liveStep(target: string, query: string): SummarySeg[] {
-  return [{ text: 'Searching ' }, ...(target ? [{ text: target, strong: true }, { text: ' ' }] : []), { text: `for "${query}"…` }];
+  return groups.map(g => [
+    { text: g.title },
+    ...(g.bind && g.target ? [{ text: ' ' }, { text: g.target, strong: true }] : []),
+    ...(g.n > 1 ? [{ text: ' ' }, { text: `${g.n}×`, strong: true }] : []),
+    ...(!g.bind && g.target ? [{ text: ' in ' + g.target }] : []),
+  ]);
 }
 
 /** The activity line's step count: "N steps · T" (the mockup words one as "1 step"). */
@@ -138,17 +126,6 @@ export const COST_UNPRICED = '–';
 /** The cost card's first line: "Turn N · <model>". */
 export const costCardHeader = (turn: number, model: string): string => `Turn ${turn} · ${model}`;
 export const costSession = (turns: number): string => `Session (${turns} ${turns === 1 ? 'turn' : 'turns'})`;
-
-/** The verb of a timeline row for the tools that have wording; every other tool
- *  keeps toolRowLabel. A query that is still running reads "Searching". */
-export function toolVerb(kind: 'bind' | 'query' | 'read' | null, running: boolean): string | null {
-  switch (kind) {
-    case 'bind': return 'Bound';
-    case 'query': return running ? 'Searching' : 'Searched';
-    case 'read': return 'Read';
-    default: return null;
-  }
-}
 
 /** The top-bar pill and the composer's meter row. */
 export const PILL_SESSION = 'session';

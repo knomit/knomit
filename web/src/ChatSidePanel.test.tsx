@@ -31,7 +31,7 @@ const FACT = {
 const calls = {
   tu_1: { name: 'knomit_query', arguments: { text: 'first' }, result: 'RESULT-ONE', is_error: false, elided: false },
   // A materialize as the model really sends it: `file`, `audience` and the binding handle; no repo.
-  tu_2: { name: 'knomit_materialize', arguments: { file: 'kb/decisions/web/two.md', audience: 'agent', binding: 'bnd_xyz' }, result: JSON.stringify({ text: '# Two\n', has_more: false }), is_error: false, elided: false },
+  tu_2: { name: 'knomit_materialize', title: 'Materialize', arguments: { file: 'kb/decisions/web/two.md', audience: 'agent', binding: 'bnd_xyz' }, result: JSON.stringify({ text: '# Two\n', has_more: false }), is_error: false, elided: false },
 };
 
 function routes() {
@@ -409,11 +409,12 @@ describe('the side panel: target, width clamp, errors, keys', () => {
   });
 
   it('a bind result is crumbed by the target it names (name, like lens/repo), not the binding in force before it', async () => {
-    stubFleetFetch({ [`GET ${BASE}/calls/tu_b`]: { body: { name: 'knomit_bind', arguments: { name: 'B' }, result: 'ok', is_error: false, elided: false } } });
+    // The call endpoint carries the title too, for a call the transcript no longer holds.
+    stubFleetFetch({ [`GET ${BASE}/calls/tu_b`]: { body: { name: 'knomit_bind', title: 'Bind', key_arg: 'B', arguments: { name: 'B' }, result: 'ok', is_error: false, elided: false } } });
     render(<Harness bound="A" />); // the binding in force BEFORE the call is A
     act(() => api.open({ kind: 'result', callId: 'tu_b' }));
     await screen.findByTestId('chat-result-text');
-    expect(crumb()).toBe('B / Bound');
+    expect(crumb()).toBe('B / Bind');
   });
 
   it('the footer items are the mockup items: keycap, word, keycap, word, count, with no extra flex items for the separators', async () => {
@@ -432,7 +433,7 @@ describe('the side panel: target, width clamp, errors, keys', () => {
     act(() => api.open(R2));
     await screen.findByTestId('chat-result-fact');
     expect(screen.queryByTestId('chat-panel-browse')).toBeNull();
-    expect(crumb()).toBe('Read / kb / decisions / web');
+    expect(crumb()).toBe('Materialize / kb / decisions / web');
   });
 
   it('clampPanelWidth: the minimum, the share of the container, and no bound without a container', () => {
@@ -508,10 +509,10 @@ describe('the side panel: target, width clamp, errors, keys', () => {
 // row itself (same dot, label, argument, size and time, same success or failure
 // state), drawn by the same code, never a second wording of the tool.
 describe('a tool call\'s panel header is the row it opens from', () => {
-  const okBind: ToolCall = { id: 'tu_ok', name: 'knomit_bind', state: 'done', isError: false, args: { name: 'alpha' }, durationMs: 3 };
-  const badBind: ToolCall = { id: 'tu_bad', name: 'knomit_bind', state: 'done', isError: true, args: { name: 'demo-kb' }, durationMs: 1 };
+  const okBind: ToolCall = { id: 'tu_ok', name: 'knomit_bind', title: 'Bind', keyArg: 'alpha', state: 'done', isError: false, args: { name: 'alpha' }, durationMs: 3 };
+  const badBind: ToolCall = { id: 'tu_bad', name: 'knomit_bind', title: 'Bind', keyArg: 'demo-kb', state: 'done', isError: true, args: { name: 'demo-kb' }, durationMs: 1 };
   const other: ToolCall = { id: 'tu_x', name: 'acme_frobnicate', state: 'done', isError: false, args: { q: 1 }, durationMs: 1200 };
-  const loader: ToolCall = { id: 'tu_l', name: 'load_tools', state: 'done', isError: false, loaded: ['knomit_query', 'knomit_bind'] };
+  const loader: ToolCall = { id: 'tu_l', name: 'load_tools', title: 'Load tools', keyArg: 'knomit_query, knomit_bind', state: 'done', isError: false, loaded: ['knomit_query', 'knomit_bind'] };
   const served = (c: ToolCall) => ({ body: { name: c.name, arguments: c.args ?? {}, result: c.isError ? 'no lens named "demo-kb"' : 'ok', is_error: c.isError, elided: false } });
 
   /** The transcript row and the panel, side by side, for the same call. */
@@ -574,7 +575,7 @@ describe('a tool call\'s panel header is the row it opens from', () => {
 
   it('the panels word no tool themselves: no tool label or verb is written in their source', () => {
     for (const src of [sidePanelSrc, resultPanelSrc]) {
-      expect(src).not.toMatch(/\btoolRowLabel\b|\btoolVerb\b|knomit: Knomit|'Bound|'Searched|'Read'/);
+      expect(src).not.toMatch(/\btoolRowLabel\b|\btoolVerb\b|knomit: Knomit|'Bound|'Searched|'Read'|'Bind'|'Query'/);
     }
   });
 });
@@ -582,10 +583,10 @@ describe('a tool call\'s panel header is the row it opens from', () => {
 describe('the activity line of a group with a failed bind', () => {
   it('says nothing for the failed bind, and the call after it searched where the chat was bound', () => {
     const calls: ToolCall[] = [
-      { id: 'b1', name: 'knomit_bind', state: 'done', isError: true, args: { name: 'nosuch-kb' } },
-      { id: 'q1', name: 'knomit_query', state: 'done', isError: false, args: { text: 'x' } },
+      { id: 'b1', name: 'knomit_bind', title: 'Bind', state: 'done', isError: true, args: { name: 'nosuch-kb' } },
+      { id: 'q1', name: 'knomit_query', title: 'Query', state: 'done', isError: false, args: { binding: 'h', text: 'x' }, inBase: true },
     ];
     render(<ChatToolGroup lead={[]} calls={calls} approvals={{}} selectedId={null} bound="r1" onSelect={vi.fn()} onAnswer={vi.fn()} />);
-    expect(screen.getByTestId('chat-activity-summary').textContent).toBe('Searched 1× in r1');
+    expect(screen.getByTestId('chat-activity-summary').textContent).toBe('Query in r1');
   });
 });
