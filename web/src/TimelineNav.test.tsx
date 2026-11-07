@@ -40,6 +40,14 @@ it('clicking a non-active commit selects (scrubs to) it', async () => {
   expect(onScrub).toHaveBeenCalledWith('older22');
 });
 
+// The row's hash is CommitHash, the one component a chat answer's commit link
+// draws too (user ruling: the same format as the timeline, reused, not copied).
+it('draws each row\'s hash with CommitHash', async () => {
+  render(<TimelineNav repo="r" branch="b" factPath="kb/a.md" activeCommit="newest1" onScrub={() => {}} onOpenFileAt={() => {}} />);
+  await waitFor(() => screen.getByText('first'));
+  expect(screen.getAllByTestId('commit-hash').map(e => e.textContent)).toEqual(['newest1', 'older22']);
+});
+
 // The card starts CLOSED: this column is a list of versions first, and a merge
 // commit's files-affected list is long enough to bury every other version under
 // a card the reader never asked for.

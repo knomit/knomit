@@ -84,6 +84,14 @@ func TestIsMutatingRequest(t *testing.T) {
 		{"POST", "/api/v1/chat-providers", true},
 		{"PUT", "/api/v1/repos/core/branches/main/facts/x/chats/y", true},
 		{"POST", "/api/v1/repos/core/chats", true},
+		// POST /facts/resolve only reads (it looks fact handles up), so it is
+		// not a write; the pattern is anchored on both ends.
+		{"POST", "/api/v1/facts/resolve", false},
+		{"POST", "/api/v1/facts/resolvex", true},
+		{"POST", "/api/v1/facts/resolve/x", true},
+		{"DELETE", "/api/v1/facts/resolve", true},
+		{"PUT", "/api/v1/facts/resolve", true},
+		{"POST", "/api/v1/repos/core/branches/main/facts/resolve", true},
 	}
 	for _, c := range cases {
 		if got := isMutatingRequest(c.method, c.path); got != c.want {
@@ -248,5 +256,33 @@ func TestHandler_Writable_MountsChat(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"providers":[]`) {
 		t.Errorf("no registry should list no providers: %s", rec.Body)
+	}
+}
+
+// POST /facts/resolve is a read: a principal holding only Read gets through
+// the write gate, and a read-only (demo) server serves it.
+func TestFactsResolve_IsARead(t *testing.T) {
+	reader := auth.Principal{Kind: auth.KindBridge, ID: "uid:777", Via: auth.ViaSocket}
+	g := auth.StaticGrants{reader.String(): {auth.Read: {}}}
+	reached := 0
+	h := writeGate(g, false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest("POST", "/api/v1/facts/resolve", nil)
+	req = req.WithContext(auth.WithPrincipal(req.Context(), reader))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || reached != 1 {
+		t.Fatalf("POST /facts/resolve as a read-only principal = %d (reached %d), want 204", rec.Code, reached)
+	}
+
+	s := &Server{ReadOnly: true, APIOnly: true, Manager: newTestManagerWithRepos(t)}
+	rec = httptest.NewRecorder()
+	r := fromLoopback(httptest.NewRequest("POST", "/api/v1/facts/resolve", strings.NewReader(`{"handles":["deadbeef"]}`)))
+	r.Header.Set("Content-Type", "application/json")
+	s.Handler().ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Fatalf("read-only server POST /facts/resolve = %d %s, want 200 []", rec.Code, rec.Body)
 	}
 }

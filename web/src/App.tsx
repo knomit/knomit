@@ -1462,7 +1462,9 @@ export default function App() {
   }), [addChat, dispatchView, repos, lenses, creates]);
   // The chat side panel's "Open in Browse": switch to the repository, then
   // open the fact once its branch has landed (a context switch clears it).
-  const pendingBrowse = useRef<{ ctx: BrowseContext; path: string } | null>(null);
+  // A chat commit link lands the same way, then anchors Browse at that commit
+  // (asOf history, as the filter bar's "as of" does), with no fact opened.
+  const pendingBrowse = useRef<{ ctx: BrowseContext; path: string; commit?: string } | null>(null);
   const openPendingBrowse = useCallback(() => {
     const p = pendingBrowse.current;
     const cur = stateRef.current;
@@ -1472,8 +1474,15 @@ export default function App() {
       : cur.context.kind === 'lens' && cur.context.name === p.ctx.name;
     if (!here) return;
     pendingBrowse.current = null;
-    navigate({ view: 'library', factPath: p.path, reveal: true });
-  }, [navigate]);
+    if (p.commit) dispatch({ type: 'SET_AS_OF', asOf: { mode: 'history', commit: p.commit } });
+    else navigate({ view: 'library', factPath: p.path, reveal: true });
+  }, [navigate, dispatch]);
+  const onOpenCommit = useCallback((repo: string, commit: string) => {
+    const ctx: BrowseContext = { kind: 'repo', repo };
+    pendingBrowse.current = { ctx, path: '', commit };
+    onSelectTarget(ctx);
+    openPendingBrowse();
+  }, [onSelectTarget, openPendingBrowse]);
   // `target` is a repo or a lens (a chat binds to either). A lens addresses a
   // fact as kb://<store>/<path>, a repo by the bare path.
   const onOpenInBrowse = useCallback((target: string, file: string) => {
@@ -1964,7 +1973,7 @@ export default function App() {
               <div key={c.id} data-testid={`chat-body-${c.id}`}
                 style={draftBody(!serverOpen && displayed.kind === 'chat' && displayed.id === c.id)}>
                 <ErrorBoundary variant="inline" label="The chat hit an error">
-                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} onOpenInBrowse={onOpenInBrowse} />
+                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} onOpenInBrowse={onOpenInBrowse} onOpenCommit={onOpenCommit} repos={repos} />
                 </ErrorBoundary>
               </div>
             ))}

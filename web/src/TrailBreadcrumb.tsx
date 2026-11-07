@@ -71,6 +71,9 @@ export function TrailBreadcrumb({ repo, branch, lensName, trail, titles, onJump 
   useEffect(() => {
     let cancelled = false;
     for (const crumb of trail) {
+      // Defence in depth: a crumb without a fact has no title to fetch (the
+      // server answers 400 "Missing fact path").
+      if (!crumb.factPath) continue;
       const key = crumbKey(crumb);
       // Already labelled — the RightPanel cached this fact's title when we
       // navigated to it (the common case, and the only one that resolves a

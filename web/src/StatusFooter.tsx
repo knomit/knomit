@@ -90,7 +90,7 @@ export const StatusFooter = memo(function StatusFooter({ state, version, searchK
   // Every create with work still to do, cancelling included.
   const createCount = runningCreates(useRepoCreates());
   const p = pillContent(state.asOf);
-  const trailHops = selectTrail(state).length - 1; // number of hops (N)
+  const trailHops = Math.max(0, selectTrail(state).length - 1); // number of hops (N)
 
   // Anchored covers history AND diff: both already name their commits in the
   // descriptor, so neither wants head printed next to them.

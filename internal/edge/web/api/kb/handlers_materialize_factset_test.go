@@ -915,7 +915,7 @@ func newEmbFactSet(t *testing.T) (http.Handler, *repos.RepoInstance) {
 	branch.Use(httpx.BranchMiddleware)
 	lens := r.Route("/lenses/{lens}", func(chi.Router) {})
 	lens.Use(lensFromURL(m))
-	Mount(branch, lens, "kb", emb, m)
+	Mount(r, branch, lens, "kb", emb, m)
 	return asPrincipal("u1", r), ri
 }
 

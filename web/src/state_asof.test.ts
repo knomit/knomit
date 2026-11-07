@@ -165,3 +165,11 @@ describe('temporal anchor (no flag)', () => {
     expect(isLive(init)).toBe(true);
   });
 });
+
+describe("selectTrail with no fact open", () => {
+  it("has no crumb for a view that names no fact (Browse as of a commit)", () => {
+    const s = reducer(init, { type: "SET_AS_OF", asOf: { mode: "history", commit: "c1" } });
+    expect(s.factPath ?? "").toBe("");
+    expect(selectTrail(s)).toEqual([]);
+  });
+});

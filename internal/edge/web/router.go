@@ -214,7 +214,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 
 	// The KB surface (api/kb): a branch's facts, topics, commits, search and
 	// the other reads, and a lens's federated reads.
-	kb.Mount(branch, lensBound, s.OntologyRoot, s.Embedder, s.Manager)
+	kb.Mount(r, branch, lensBound, s.OntologyRoot, s.Embedder, s.Manager)
 
 	// Index-rebuild jobs (api/jobs).
 	jobs.Mount(branch, s.Manager)

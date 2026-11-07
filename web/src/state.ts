@@ -901,8 +901,11 @@ export interface TrailCrumb {
 // the current view; any other run keeps its oldest entry (jumping there pops
 // the whole run).
 export function selectTrail(s: AppState): TrailCrumb[] {
+  // No fact open (Browse as of a commit, say) is not a crumb: a crumb names a
+  // fact, and an empty path is neither a title to fetch nor a place to jump to.
   const current: TrailCrumb = { factPath: s.factPath ?? '', asOf: s.asOf, pops: 0 };
-  if (isLive(s)) return [current];
+  const noFact = current.factPath === '';
+  if (isLive(s)) return noFact ? [] : [current];
   const prefix: TrailCrumb[] = [];
   for (let i = s.navStack.length - 1; i >= 0; i--) {
     const e = s.navStack[i];
@@ -911,7 +914,7 @@ export function selectTrail(s: AppState): TrailCrumb[] {
     if (e.asOf.mode === 'live') break;
   }
   const out: TrailCrumb[] = [];
-  for (const c of [...prefix, current]) {
+  for (const c of noFact ? prefix : [...prefix, current]) {
     const last = out[out.length - 1];
     if (last && last.factPath === c.factPath) {
       if (c === current) out[out.length - 1] = c;

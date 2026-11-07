@@ -142,3 +142,9 @@ it('lens context: labels a cached (retracted) crumb from the cache without fetch
   expect(screen.queryByText('6cf51b30')).toBeNull(); // never the raw hash
   expect(api.getLensFact).not.toHaveBeenCalled();     // reused, not re-fetched
 });
+
+it("never asks for a fact title when a crumb names no fact", async () => {
+  render(<TrailBreadcrumb repo="r" branch="b" trail={[{ factPath: "", asOf: hist("bbb1111") }]} onJump={vi.fn()} />);
+  await new Promise(r => setTimeout(r, 20));
+  expect(api.fact).not.toHaveBeenCalled();
+});
