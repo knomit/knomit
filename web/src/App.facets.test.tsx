@@ -1717,8 +1717,8 @@ describe('a chat target', () => {
         return answer(r, b, path, c);
       });
     };
-    const inExperimentOnAFact = async (chip: string) => {
-      const m = await toTheChipsFact({ start: 'core-kb', mode: 'recent', ms: 0, branch: chip, status: (_r, b) => (b === 'read/branch' ? statusOf('read/branch') : EXP_STATUS) });
+    const inExperimentOnAFact = async (chip: string, mode: 'recent' | 'path' = 'recent') => {
+      const m = await toTheChipsFact({ start: 'core-kb', mode, ms: 0, branch: chip, status: (_r, b) => (b === 'read/branch' ? statusOf('read/branch') : EXP_STATUS) });
       onlyOnExp(m);
       fireEvent.click(await screen.findByTestId('since-fork-toggle'));
       await waitFor(() => expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + ROW0));
@@ -1751,8 +1751,8 @@ describe('a chat target', () => {
     // The experiment may have ended while the reader was away, an agent's doing or not.
     // SABOTAGE: no re-read; any failure treated as gone; a gone branch left in place.
     const gone = Object.assign(new Error('no such branch'), { status: 404 });
-    const afterAway = async (restored: (b?: string) => unknown) => {
-      const m = await inExperimentOnAFact('read/branch');
+    const afterAway = async (restored: (b?: string) => unknown, mode: 'recent' | 'path' = 'recent') => {
+      const m = await inExperimentOnAFact('read/branch', mode);
       m.status.mockClear();
       m.status.mockImplementation(async (_r: string, b?: string) => (b === 'exp/try' ? restored(b) : statusOf(b || 'machine/test')));
       // What each branch lists: the experiment's fact is only on the experiment.
@@ -1772,6 +1772,15 @@ describe('a chat target', () => {
       expect(body).not.toContain('BODY OF ' + ROW0);
       expect(screen.queryByTestId('filter-chip')).toBeNull();
       expect(window.location.search).not.toContain('exp');
+    });
+    // In the tree nothing selects a row by itself, so only closing the fact stops a 404.
+    it('the restored branch is gone, in the tree: the fact is closed and Browse shows its summary', async () => {
+      await afterAway(() => { throw gone; }, 'path');
+      await waitFor(() => expect(screen.queryByTestId('since-fork-toggle')).toBeNull());
+      expect(await screen.findByTestId('stats-view')).toBeInTheDocument();
+      const body = screen.getByTestId('browse-facet').textContent;
+      expect(body).not.toContain('no fact at path');
+      expect(body).not.toContain('BODY OF ' + ROW0);
     });
     it('a failure that does not say the branch is gone leaves the reader on it', async () => {
       const m = await afterAway(() => { throw new Error('network down'); });
