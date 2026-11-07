@@ -250,7 +250,9 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
  * App keeps one mounted per live chat, so a chat's stream and transcript
  * survive the reader looking at a repository.
  */
-export function ChatFacet({ chat, facet, onGone, onNewChat, onOpenInBrowse, repos }: {
+export function ChatFacet({ chat, facet, onGone, onNewChat, onOpenInBrowse, onOpenCommit, repos }: {
+  /** A commit link in an answer: Browse that repo as of that commit. */
+  onOpenCommit?: (repo: string, commit: string) => void;
   chat: ChatInfo;
   /** The repos the page lists: a repo chip in an answer names one of them. */
   repos?: RepoRef[];
@@ -309,7 +311,7 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onOpenInBrowse, repo
             <ChatPanel state={state} selectedId={selectedId} actionError={newChatError || actionError} notSent={notSent} landed={landed} modelName={chat.name || chat.model}
               context={{ used: state.ctxTokens, window: ctxWindow }}
               onSend={send} onStop={stop} onSelect={onSelect} onAnswer={answer}
-              factLinks={{ repos: repos ?? NO_REPOS, openKey: openFactKey, onOpen: onOpenFact, onBrowse: onOpenInBrowse }}
+              factLinks={{ repos: repos ?? NO_REPOS, openKey: openFactKey, onOpen: onOpenFact, onBrowse: onOpenInBrowse, onCommit: onOpenCommit }}
               onNewChat={onNewChat ? () => {
                 setNewChatError('');
                 Promise.resolve(onNewChat(chat)).catch(() => setNewChatError(NEW_CHAT_ERROR));

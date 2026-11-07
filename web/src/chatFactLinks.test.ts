@@ -11,12 +11,14 @@ describe('isFactCandidate', () => {
       'synthesis/agent-access-is-blast-radius.md',
       'kb://3ec012f5b4d2/kb/decisions/web/chat/results/3fb0f049.md',
       'kb://knomit-kb/kb/a/b.md',
+      // Commit hashes, 7 to 40 lowercase hex: the server looks them up in the turn's one repo.
+      'abc1234', 'deadbeefcafe', 'abc1234' + 'f'.repeat(33),
     ]) expect(isFactCandidate(c), c).toBe(true);
   });
 
   it('leaves everything else as code', () => {
     for (const c of [
-      '', 'deadbeefcafe', '3FC7797', 'abc1234', 'npm run lint', 'web/src/App.tsx', 'internal/edge/web/readonly.go',
+      '', '3FC7797', 'abc123', 'abc1234' + 'f'.repeat(34), 'npm run lint', 'web/src/App.tsx', 'internal/edge/web/readonly.go',
       'kb://', 'kb://3ec012f5b4d2', 'a/../b.md', 'kb/a b/c.md', 'TypeIcon', 'agent/mindev.local-8ef0cd32',
     ]) expect(isFactCandidate(c), c).toBe(false);
   });

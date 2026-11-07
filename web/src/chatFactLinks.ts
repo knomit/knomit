@@ -27,21 +27,26 @@ export interface ResolvedFact {
   kind?: string;
   origin?: string;
   sources?: number;
+  /** Set (the full hash) when the handle is a COMMIT the server found in the
+   *  turn's one repo; the fact fields are then empty. */
+  commit?: string;
 }
 
 /** The repos the page knows: a kb://<store> chip names one by id or name. */
 export interface RepoRef { name: string; id?: string }
 
 const SHORT_ID = /^[0-9a-f]{8}$/;
+const COMMIT_HASH = /^[0-9a-f]{7,40}$/;
 const KB_URI = /^kb:\/\/[^\s/]+\/\S+$/;
 const PATH = /^[\w.-]+(?:\/[\w.-]+)+$/;
 
-/** Whether inline code `code` may name a fact: an 8-hex short id, a fact path
- *  or handle (slashes, ending in `.md` or in an 8-hex id), or a kb:// URI with
- *  a path. Anything else is code to the reader and is never asked about. */
+/** Whether inline code `code` may name a fact or a commit: a 7-40 hex hash (an
+ *  8-hex one may be a fact's short id), a fact path or handle (slashes, ending
+ *  in `.md` or in an 8-hex id), or a kb:// URI with a path. Anything else is
+ *  code to the reader and is never asked about. */
 export function isFactCandidate(code: string): boolean {
   const s = code.trim();
-  if (SHORT_ID.test(s)) return true;
+  if (COMMIT_HASH.test(s)) return true;
   if (s.includes('..')) return false;
   if (KB_URI.test(s)) return true;
   if (!PATH.test(s)) return false;
@@ -105,7 +110,9 @@ const SEPARATOR = /^[\s,;·/&]*(?:and)?[\s,;·/&]*$/i;
 function mark(n: Node, facts: ReadonlyMap<string, ResolvedFact>, repos: RepoRef[]): void {
   if (n.type === 'inlineCode') {
     const v = (n.value ?? '').trim();
-    if (facts.has(v)) n.data = { ...n.data, hProperties: { ...n.data?.hProperties, 'data-fact': v } };
+    const f = facts.get(v);
+    if (f?.commit) n.data = { ...n.data, hProperties: { ...n.data?.hProperties, 'data-commit': v } };
+    else if (f) n.data = { ...n.data, hProperties: { ...n.data?.hProperties, 'data-fact': v } };
     else {
       const repo = repoChipName(v, repos);
       if (repo) n.data = { ...n.data, hProperties: { ...n.data?.hProperties, 'data-repo': repo } };
@@ -116,7 +123,10 @@ function mark(n: Node, facts: ReadonlyMap<string, ResolvedFact>, repos: RepoRef[
   if (n.type === 'tableCell') collapseCell(n, facts);
 }
 
-const isFact = (n: Node, facts: ReadonlyMap<string, ResolvedFact>) => n.type === 'inlineCode' && facts.has((n.value ?? '').trim());
+const isFact = (n: Node, facts: ReadonlyMap<string, ResolvedFact>) => {
+  const f = n.type === 'inlineCode' ? facts.get((n.value ?? '').trim()) : undefined;
+  return !!f && !f.commit;
+};
 
 /** A table cell citing several facts keeps the first link, then "+N": the
  *  other links, and the separators between them, leave the cell. */
@@ -145,6 +155,8 @@ export interface FactLinkEnv {
   onOpen?: (f: ResolvedFact) => void;
   /** Cmd-click, and the card's Open in Browse. */
   onBrowse?: (repo: string, path: string) => void;
+  /** A commit link: Browse that repo as of that commit. */
+  onCommit?: (repo: string, commit: string) => void;
 }
 
 const NO_FACTS: ReadonlyMap<string, ResolvedFact> = new Map();

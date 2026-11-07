@@ -9,6 +9,7 @@ import { PANEL_OPEN_IN_BROWSE } from './chatCopy';
 import { createPortal } from 'react-dom';
 import { FactMetaLine } from './FactMetaLine';
 import { FactBandPath } from './FactBand';
+import { CommitHash } from './TimelineNav';
 import type { Fact } from './api';
 
 // The fact links of a chat answer (design §3): the chip, its hover card, the
@@ -112,6 +113,21 @@ const asFact = (f: ResolvedFact): Fact => ({
 });
 
 const CARD_W = 340;
+
+/** A commit link: the hash as the timeline draws it (CommitHash), opening
+ *  Browse on its repo as of that commit. The full hash is the title. */
+export function CommitLink({ handle }: { handle: string }) {
+  const env = useContext(FactLinkContext);
+  const f = env.facts.get(handle);
+  if (!f?.commit) return <code>{handle}</code>;
+  const { repo, commit } = f;
+  return (
+    <button type="button" data-testid="commit-link" className="k-commit-link" title={commit}
+      onClick={e => { e.preventDefault(); env.onCommit?.(repo, commit); }}>
+      <CommitHash commit={commit} />
+    </button>
+  );
+}
 
 /** A repo chip: the repo's colour dot (RepoDot) and its name, in a pill. */
 export function RepoLink({ name }: { name: string }) {

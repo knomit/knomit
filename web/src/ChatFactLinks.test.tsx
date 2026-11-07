@@ -130,6 +130,33 @@ describe('chat fact links', () => {
     ]);
   });
 
+  it('a commit hash the server resolved in the turn\'s repo is the timeline\'s CommitHash, linking to that version; others stay code', async () => {
+    const FULL = 'abc1234' + 'f'.repeat(33);
+    const onOpenCommit = vi.fn();
+    const fx = stubFleetFetch({
+      [`GET ${BASE}`]: { body: snapshot([
+        { kind: 'user', text: 'q' },
+        { kind: 'tool_call', id: 'tu_1', name: 'knomit_query', state: 'done', arguments: { text: 'x', repo: 'agentic-engineering' } },
+        { kind: 'assistant', text: 'Fixed in `abc1234`; `1111111` is elsewhere.' },
+      ]) },
+      [RESOLVE]: (body: unknown) => {
+        const b = body as { handles: string[]; prefer: string[] };
+        return { body: b.handles.includes('abc1234') && b.prefer[0] === 'agentic-engineering'
+          ? [{ handle: 'abc1234', id: '', title: '', type: '', repo: 'agentic-engineering', branch: 'agent/test', path: '', excerpt: '', confidence: 0, commit: FULL }]
+          : [] };
+      },
+    });
+    render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} onOpenCommit={onOpenCommit} repos={[]} />);
+    const link = await screen.findByTestId('commit-link');
+    expect(resolveCalls(fx)[0].body).toEqual({ handles: ['abc1234', '1111111'], prefer: ['agentic-engineering'] });
+    expect(within(link).getByTestId('commit-hash')).toHaveTextContent('abc1234');
+    expect(link).toHaveAttribute('title', FULL);
+    const codes = [...screen.getByTestId('chat-turn-0').querySelectorAll('code')].map(c => c.textContent);
+    expect(codes).toEqual(['1111111']);
+    fireEvent.click(link);
+    expect(onOpenCommit).toHaveBeenCalledWith('agentic-engineering', FULL);
+  });
+
   it('a failed resolve leaves the code as code and is not retried, on this mount or the next', async () => {
     const { fx, unmount } = mount();
     fx.set(RESOLVE, { status: 500, body: { detail: 'boom' } });

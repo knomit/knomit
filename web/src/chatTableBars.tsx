@@ -1,6 +1,6 @@
 import type { Components } from 'react-markdown';
 import { markdownComponents, markdownPlugins } from './markdown';
-import { FactLink, FactLinksMore, RepoLink } from './ChatFactChip';
+import { CommitLink, FactLink, FactLinksMore, RepoLink } from './ChatFactChip';
 
 // A table cell in a chat answer that is a bare number gets a 40x4px bar scaled
 // to the largest number in its column. A remark plugin finds the numbers and
@@ -72,12 +72,14 @@ export const chatLivePlugins = [...chatPlugins, remarkCaret];
 
 export const chatComponents: Components = {
   ...markdownComponents,
-  // Inline code remarkFactLinks marked: a resolved fact is a fact link, a repo
-  // name a repo chip. Every other code span is code.
+  // Inline code remarkFactLinks marked: a resolved fact is a fact link, a
+  // resolved commit a commit link, a repo name a repo chip. Every other code
+  // span is code.
   code({ node: _node, children, ...rest }) {
     void _node;
-    const { ['data-fact']: fact, ['data-repo']: repo, ...props } = rest as Record<string, unknown>;
+    const { ['data-fact']: fact, ['data-commit']: commit, ['data-repo']: repo, ...props } = rest as Record<string, unknown>;
     if (typeof fact === 'string') return <FactLink handle={fact} />;
+    if (typeof commit === 'string') return <CommitLink handle={commit} />;
     if (typeof repo === 'string') return <RepoLink name={repo} />;
     return <code {...props}>{children}</code>;
   },

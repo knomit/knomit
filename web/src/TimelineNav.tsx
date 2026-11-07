@@ -10,6 +10,16 @@ const AGENT_EMAIL_DOMAIN = '@agents.knomit.io';
 // CommitAuthorLine renders the commit author as an icon + identity: a bot for
 // agent authors, a person for humans. It shows the username, falling back to
 // the email when no name was recorded. Renders nothing when neither is present.
+/** A commit as the timeline shows it: its first 7 characters, mono, blue. The
+ *  chat's commit links draw it too, so a hash reads the same everywhere. */
+export function CommitHash({ commit }: { commit: string }) {
+  return (
+    <span data-testid="commit-hash" style={{ flexShrink: 0, fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#8af' }}>
+      {commit.slice(0, 7)}
+    </span>
+  );
+}
+
 function CommitAuthorLine({ author }: { author?: CommitAuthor }) {
   if (!author || (!author.name && !author.email)) return null;
   const isAgent = author.email.endsWith(AGENT_EMAIL_DOMAIN);
@@ -239,10 +249,7 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                   }}>
                     {entry.operation || '·'}
                   </span>
-                  {/* 7-char hash */}
-                  <span style={{ flexShrink: 0, fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#8af' }}>
-                    {entry.commit.slice(0, 7)}
-                  </span>
+                  <CommitHash commit={entry.commit} />
                   {/* Badges: newest (HEAD/LAST) and active (AT) are independent */}
                   {newestBadge && (
                     <span style={{

@@ -76,7 +76,10 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   onNewChat?: () => void;
   /** The answers' fact links: the repos a repo chip may name, the fact open in
    *  the side panel, and what a link does. */
-  factLinks?: { repos: RepoRef[]; openKey: string | null; onOpen?: (f: ResolvedFact) => void; onBrowse?: (repo: string, path: string) => void };
+  factLinks?: {
+    repos: RepoRef[]; openKey: string | null; onOpen?: (f: ResolvedFact) => void; onBrowse?: (repo: string, path: string) => void;
+    onCommit?: (repo: string, commit: string) => void;
+  };
 }) {
   const [draft, setDraft] = useState('');
   // The finished turns' cited facts: one call for all not yet answered, each
@@ -178,7 +181,7 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
             const facts = turnFacts[ti];
             const factPlugin = remarkFactLinks(facts, repos);
             return (
-              <FactLinkContext.Provider key={ti} value={{ facts, openKey: factLinks?.openKey ?? null, onOpen: factLinks?.onOpen, onBrowse: factLinks?.onBrowse }}>
+              <FactLinkContext.Provider key={ti} value={{ facts, openKey: factLinks?.openKey ?? null, onOpen: factLinks?.onOpen, onBrowse: factLinks?.onBrowse, onCommit: factLinks?.onCommit }}>
               <div data-testid={`chat-turn-${ti}`} style={turnBox(ti > 0)}>
                 {t.user && (
                   <div data-testid="chat-user" data-sending={t.local && !t.local.accepted ? true : undefined} className="k-chat-user k-prose"
