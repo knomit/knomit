@@ -4,7 +4,7 @@ import type { Dispatch } from 'react';
 import { reducer, init, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
 import type { Action, BrowseContext, FactPanel, FilterChip } from './state';
 import type { BrowseFactRequest } from './chatPanelState';
-import { api, branchEventsUrl, fetchVersion, repoAvailable, brokenLensMember, subscribeRepoEvents } from './api';
+import { api, branchEventsUrl, fetchVersion, isNotFound, repoAvailable, brokenLensMember, subscribeRepoEvents } from './api';
 import type { RepoInfo, Lens, Status, RepoEvent, RepoDetails, ArchivedRepo } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
@@ -1540,6 +1540,29 @@ export default function App() {
     const target = { kind: 'chat', id } as const;
     dispatchView({ type: 'SELECT_PINNED', target, available: facetsFor(target, repos, lenses, creates) });
   }, [state.chatReturn, chats, dispatch, dispatchView, repos, lenses, creates]);
+  // Going back to a chat restored a branch from what the app knew when the reader
+  // left. An agent may have committed or rolled back the experiment since, so ask.
+  // Gone: Browse's normal view on the agent branch, because nothing on this one can
+  // be read. Any other failure says nothing about the branch, so the reader keeps it.
+  useEffect(() => {
+    if (!state.branchRecheck) return;
+    dispatch({ type: 'BRANCH_RECHECK_SERVED' });
+    const { repo, branch } = state;
+    if (!branch) return;
+    const still = () => stateRef.current.repo === repo && stateRef.current.branch === branch;
+    api.status(repo, branch)
+      .then(s => { if (still()) dispatch(statusAction(s)); })
+      .catch(async e => {
+        if (!isNotFound(e) || !still()) return;
+        const agent = await api.getAgentBranch(repo);
+        const s = await api.status(repo, agent);
+        if (!still()) return;
+        dispatch({ type: 'BRANCH_GONE' });
+        dispatch(statusAction(s));
+      })
+      .catch(() => { /* no branch to move to answers either: the status poll re-reads */ });
+    // Only the flag starts this; the rest is what it asks about.
+  }, [state.branchRecheck, state.repo, state.branch]); // eslint-disable-line react-hooks/exhaustive-deps
   // The fleet row: the fleet target, pinned over the context with its own
   // tabs (Members, Activity, Settings).
   const onPickFleet = useCallback(() => {

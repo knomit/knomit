@@ -12,7 +12,7 @@ import type { ChatCall } from './chatApi';
 import type { RepoRef } from './chatFactLinks';
 import { bindTarget, isBind, toolCallLabel, toolCallOf } from './chatState';
 import type { ToolCall } from './chatState';
-import { crumbOf, shownEntry } from './chatPanelState';
+import { crumbOf, shownEntry, typingIn } from './chatPanelState';
 import type { BrowseFactRequest, PanelAction, PanelState } from './chatPanelState';
 import { PANEL_CLOSE_LABEL, PANEL_KEY_CLOSE } from './chatCopy';
 
@@ -32,13 +32,6 @@ const arg = (call: ChatCall, ...names: string[]): string => {
 function isShown(el: HTMLElement | null): boolean {
   for (let n = el; n; n = n.parentElement) if (getComputedStyle(n).display === 'none') return false;
   return true;
-}
-
-/** Whether the key went to something the person types into. */
-function typingIn(el: Element | null): boolean {
-  if (!el) return false;
-  const tag = el.tagName;
-  return tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT' || (el as HTMLElement).isContentEditable === true;
 }
 
 /**

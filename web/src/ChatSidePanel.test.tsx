@@ -459,6 +459,77 @@ describe('the side panel: target, width clamp, errors, keys', () => {
     expect(screen.queryByTestId('fact-view')).toBeNull();
   });
 
+  // The panel's own Esc guards, on their own. SABOTAGE: remove either check.
+  it('a key something else already took leaves the panel open', async () => {
+    stubFleetFetch(routes());
+    render(<Harness />);
+    act(() => api.open(R1));
+    await screen.findByTestId('chat-side-panel');
+    const taker = (e: KeyboardEvent) => e.preventDefault();
+    window.addEventListener('keydown', taker, true);
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    window.removeEventListener('keydown', taker, true);
+    expect(screen.getByTestId('chat-side-panel')).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('chat-side-panel')).toBeNull());
+  });
+  it('Esc with a turn running leaves the panel open, whatever the chat column does with it', async () => {
+    stubFleetFetch(routes());
+    render(<Harness running />);
+    act(() => api.open(R1));
+    await screen.findByTestId('chat-side-panel');
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.getByTestId('chat-side-panel')).toBeInTheDocument();
+  });
+
+  // kb/decisions/web/chat/side-panel/c12285c0: Stop always wins. SABOTAGE: any focus
+  // outside the chat refuses it; a field or dialog out there no longer holds its Esc.
+  describe('Esc with a turn running and focus outside the chat', () => {
+    const running = async () => {
+      const fx = stubFleetFetch({
+        ...routes(),
+        [`GET ${BASE}`]: { body: snap({ running: true, items: [{ kind: 'user', text: 'q' }] }) },
+        [`POST ${BASE}/cancel`]: { body: {} },
+      });
+      render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} repos={[]} />);
+      await screen.findByTestId('chat-facet');
+      await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+      return fx;
+    };
+    const stops = (fx: ReturnType<typeof stubFleetFetch>) => fx.calls.filter(c => c.route === `POST ${BASE}/cancel`);
+    const outside = (html: string) => { const box = document.createElement('div'); box.innerHTML = html; document.body.appendChild(box); return box; };
+    let box: HTMLElement | null = null;
+    afterEach(() => { box?.remove(); box = null; });
+
+    it('on a plain control (the gear) it is Stop', async () => {
+      const fx = await running();
+      box = outside('<button>gear</button>');
+      const gear = box.querySelector('button')!;
+      gear.focus();
+      expect(document.activeElement).toBe(gear);
+      fireEvent.keyDown(gear, { key: 'Escape' });
+      await waitFor(() => expect(stops(fx)).toHaveLength(1));
+    });
+    it('in a field it is the field\'s', async () => {
+      const fx = await running();
+      box = outside('<input />');
+      const input = box.querySelector('input')!;
+      input.focus();
+      fireEvent.keyDown(input, { key: 'Escape' });
+      await new Promise(r => setTimeout(r, 20));
+      expect(stops(fx)).toHaveLength(0);
+    });
+    it('in a dialog it is the dialog\'s', async () => {
+      const fx = await running();
+      box = outside('<div role="dialog"><button>ok</button></div>');
+      const ok = box.querySelector('button')!;
+      ok.focus();
+      fireEvent.keyDown(ok, { key: 'Escape' });
+      await new Promise(r => setTimeout(r, 20));
+      expect(stops(fx)).toHaveLength(0);
+    });
+  });
+
   it('Esc while a turn runs and focus is inside the side panel is Stop too, and the panel stays', async () => {
     const fx = stubFleetFetch({
       ...routes(),

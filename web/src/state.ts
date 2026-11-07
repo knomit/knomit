@@ -47,10 +47,9 @@ interface NavEntry {
   // the trail, because Back from here is the chat and not what Browse held.
   fromChat?: string;
   repo: string;
-  // The branch this entry was left on, with what the app holds about it. A landing
-  // can move the branch, and factPath and filters mean nothing on another branch:
-  // back restores all of it, or the reader is on a branch they never left to, reading
-  // the old one's fact.
+  // The branch this entry was left on, with what the app holds about it. Only a
+  // chat's landing (fromChat) restores these: it can move the branch, and factPath
+  // and filters mean nothing on another one. Back inside Browse leaves the branch.
   branch: string;
   head: string;
   experiment: ExperimentInfo | null;
@@ -72,8 +71,8 @@ interface NavEntry {
   // one mount would return you to a view you were never in. SET_LENS_SOURCES
   // does not push either — a dropdown toggle refines the current view.
   lensSources: string[] | null;
-  // Since-fork in force when this entry was left: a way of looking too, since it
-  // changes which rows exist. A reveal clears it (Library would demote the tree).
+  // Since-fork in force when this entry was left. A chat's landing clears it
+  // (Library would demote the tree), and going back to the chat restores it.
   sinceFork: boolean;
 }
 
@@ -81,6 +80,9 @@ export interface AppState {
   // NAV_BACK popped an entry that came from this chat. App shows the chat (the
   // view state is not ours, see facets.ts) if it is still there, and clears this.
   chatReturn: string | null;
+  // Going back to a chat restored a branch from its entry. App reads that branch's
+  // status (it may be gone by now, and the entry may be stale), and clears this.
+  branchRecheck: boolean;
   // A landing's request to open a panel of the fact at `path`. FactView serves it
   // once and clears it.
   factPanelRequest: (FactPanel & { path: string }) | null;
@@ -196,6 +198,8 @@ export type Action =
   // `sort` rides APPLY_NAV for the same reason `filters` does: a reveal changes
   // the path scope, the sort axis and the open fact together, and they must land
   // in ONE entry or Back would undo them one at a time.
+  | { type: 'BRANCH_RECHECK_SERVED' }
+  | { type: 'BRANCH_GONE' }
   | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; sinceFork?: boolean; hop?: boolean; fromChat?: string; factPanel?: FactPanel }
   | { type: 'CHAT_RETURN_SERVED' }
   | { type: 'FACT_PANEL_SERVED' }
@@ -229,6 +233,7 @@ export const init: AppState = {
   lensWriteId: null,
   lensSources: null,
   chatReturn: null,
+  branchRecheck: false,
   factPanelRequest: null,
   factSource: null,
   view: 'library',
@@ -414,19 +419,23 @@ function applyAction(s: AppState, a: Action): AppState {
           branch: '',
           librarySort: prev.sort,
           lensSources: prev.lensSources,
-          sinceFork: prev.sinceFork,
           navStack: s.navStack.slice(0, -1),
         };
       }
-      // Left on another branch: go back to it, with what the app held about it.
-      const branchBack = prev.branch && prev.branch !== s.branch
-        ? { branch: prev.branch, headCommit: prev.head, experiment: prev.experiment, branchWritable: prev.branchWritable }
-        : { experiment: s.experiment };
+      // Back to a chat: what the reader left when the landing took them away. It is
+      // only what the app knew then, so App re-reads it (branchRecheck). Back inside
+      // Browse leaves the branch alone: a branch moved there by the picker or by an
+      // experiment ending is where the reader chose to be, and may be all there is.
+      const moved = !!prev.branch && prev.branch !== s.branch;
+      const branchBack = prev.fromChat ? {
+        ...(moved ? { branch: prev.branch, headCommit: prev.head, experiment: prev.experiment, branchWritable: prev.branchWritable } : {}),
+        // Only an experiment holds it, as SET_SINCE_FORK guards.
+        sinceFork: prev.sinceFork && !!(moved ? prev.experiment : s.experiment),
+        branchRecheck: true,
+      } : {};
       return {
         ...s,
         ...branchBack,
-        // Only an experiment holds it, as SET_SINCE_FORK guards.
-        sinceFork: prev.sinceFork && !!branchBack.experiment,
         chatReturn: prev.fromChat ?? null,
         view: prev.view,
         factPath: prev.factPath,
@@ -753,6 +762,13 @@ function applyAction(s: AppState, a: Action): AppState {
     }
     case 'CHAT_RETURN_SERVED':
       return s.chatReturn ? { ...s, chatReturn: null } : s;
+    case 'BRANCH_RECHECK_SERVED':
+      return s.branchRecheck ? { ...s, branchRecheck: false } : s;
+    case 'BRANCH_GONE':
+      // The branch restored for a return from a chat no longer exists. Nothing on it,
+      // or on the trail behind it, can be read; the status of the branch moved to
+      // comes with this.
+      return { ...s, view: 'library', factPath: null, asOf: { mode: 'live' }, filters: [], freeText: '', navStack: [], experiment: null, sinceFork: false };
     case 'FACT_PANEL_SERVED':
       return s.factPanelRequest ? { ...s, factPanelRequest: null } : s;
     case 'AMEND_NAV': {

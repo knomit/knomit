@@ -1748,6 +1748,45 @@ describe('a chat target', () => {
       expect(m.fact.mock.calls.at(-1)?.[1]).toBe('exp/try');
       expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'true');
     });
+    // The experiment may have ended while the reader was away, an agent's doing or not.
+    // SABOTAGE: no re-read; any failure treated as gone; a gone branch left in place.
+    const gone = Object.assign(new Error('no such branch'), { status: 404 });
+    const afterAway = async (restored: (b?: string) => unknown) => {
+      const m = await inExperimentOnAFact('read/branch');
+      m.status.mockClear();
+      m.status.mockImplementation(async (_r: string, b?: string) => (b === 'exp/try' ? restored(b) : statusOf(b || 'machine/test')));
+      // What each branch lists: the experiment's fact is only on the experiment.
+      m.recent.mockImplementation(async (_r: string, b: string) => ({ facts: [b === 'exp/try' ? { path: ROW0, title: 'Row zero' } : { path: PATH, title: 'One' }], total: 1 }));
+      await backThenBrowse();
+      return m;
+    };
+    it('the restored branch is gone: Browse\'s normal view on the agent branch, not a 404, and no experiment', async () => {
+      const m = await afterAway(() => { throw gone; });
+      expect(m.status).toHaveBeenCalledWith('core-kb', 'exp/try');
+      await waitFor(() => expect(m.status).toHaveBeenCalledWith('core-kb', 'machine/test'));
+      await waitFor(() => expect(screen.queryByTestId('since-fork-toggle')).toBeNull());
+      // The reader's sort is kept, and Recent selects its first row there, as it does.
+      await waitFor(() => expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + PATH));
+      const body = screen.getByTestId('browse-facet').textContent;
+      expect(body).not.toContain('no fact at path');
+      expect(body).not.toContain('BODY OF ' + ROW0);
+      expect(screen.queryByTestId('filter-chip')).toBeNull();
+      expect(window.location.search).not.toContain('exp');
+    });
+    it('a failure that does not say the branch is gone leaves the reader on it', async () => {
+      const m = await afterAway(() => { throw new Error('network down'); });
+      expect(m.status).toHaveBeenCalledWith('core-kb', 'exp/try');
+      expect(m.status).not.toHaveBeenCalledWith('core-kb', 'machine/test');
+      expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + ROW0);
+      expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'true');
+    });
+    it('the re-read refreshes what the entry held: a write gate that changed while away', async () => {
+      const m = await afterAway(() => ({ ...EXP_STATUS, head: 'newhead', writable: false }));
+      expect(m.status).toHaveBeenCalledWith('core-kb', 'exp/try');
+      await waitFor(() => expect(screen.getByTestId('retract-btn')).toBeDisabled());
+      expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'true');
+    });
+
     it('a landing on the same experiment branch: since-fork is off there, and Back turns it on again', async () => {
       await inExperimentOnAFact('exp/try');
       expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'false');

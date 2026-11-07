@@ -47,6 +47,13 @@ export interface BrowseFactRequest {
   filter?: FilterChip;
 }
 
+/** Whether the key went to something the person types into. */
+export function typingIn(el: Element | null): boolean {
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT' || (el as HTMLElement).isContentEditable === true;
+}
+
 // ── width ──
 
 export const PANEL_WIDTH_KEY = 'knomit.chatPanelWidth';

@@ -64,18 +64,17 @@ export async function resolveNavRequest(
     // no HEAD list at all) would silently become another fact at that commit.
     // The tree selects nothing by itself.
     //
-    // SINCE-FORK GOES TOO: Library counts it as a content filter, so it demotes
-    // Path to Recent exactly as a chip does, and row 0 would then replace the fact.
-    // Without it, the three things that can demote the tree are all gone. Back
-    // restores it (NavEntry), with the rest of what the reader left.
+    // FROM A CHAT, SINCE-FORK GOES TOO: Library counts it as a content filter, so it
+    // demotes Path to Recent exactly as a chip does, and row 0 would then replace the
+    // fact. Going back to the chat restores it (NavEntry). A reveal inside Browse (a
+    // highlight) leaves it: the reader set it there, and has no such way back.
     const dir = parentDir(displayLensPath(req.factPath));
     dispatch({
       type: 'APPLY_NAV', view: 'library', factPath: req.factPath, asOf: req.asOf ?? { mode: 'live' },
       filters: [{ category: 'path', value: dir }, ...(req.filter ? [req.filter] : [])],
       freeText: '',
       sort: 'path',
-      sinceFork: false,
-      ...(req.fromChat ? { fromChat: req.fromChat } : {}),
+      ...(req.fromChat ? { fromChat: req.fromChat, sinceFork: false } : {}),
       ...(req.factPanel ? { factPanel: req.factPanel } : {}),
     });
     return;

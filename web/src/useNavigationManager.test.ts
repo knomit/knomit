@@ -82,6 +82,13 @@ describe('resolveNavRequest', () => {
 
   // ── Reveal: land in the tree where the fact lives ─────────────────────────
 
+  it('since-fork is cleared by a reveal from a chat, and left alone by one inside Browse', async () => {
+    await resolveNavRequest({ view: 'library', factPath: 'kb/a/b.md', reveal: true, fromChat: 'c1' }, makeState(), dispatch);
+    expect(vi.mocked(dispatch).mock.lastCall?.[0]).toMatchObject({ fromChat: 'c1', sinceFork: false });
+    await resolveNavRequest({ view: 'library', factPath: 'kb/a/b.md', reveal: true }, makeState(), dispatch);
+    expect(vi.mocked(dispatch).mock.lastCall?.[0]).not.toHaveProperty('sinceFork');
+  });
+
   it('reveal navigates the tree to the fact\'s folder and opens it', async () => {
     // Opening a highlight used to set the fact and leave the left panel wherever
     // it was — usually the ontology root — so you arrived at a fact with no idea
@@ -96,7 +103,6 @@ describe('resolveNavRequest', () => {
       filters: [{ category: 'path', value: 'kb/technology/ai/security' }],
       freeText: '',
       sort: 'path',
-      sinceFork: false,
     });
   });
 
