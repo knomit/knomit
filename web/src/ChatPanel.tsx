@@ -8,6 +8,8 @@ import { ContextMeter } from './ChatPill';
 import { TurnNotices, NoticeLine } from './ChatNotice';
 import { SendingLine, ThinkingPlaceholder, StoppedMark } from './ChatWaiting';
 import { chatPlugins, chatLivePlugins, chatComponents } from './chatTableBars';
+import { FactLinkContext, useTurnFacts, remarkFactLinks, turnPrefer } from './chatFactLinks';
+import type { RepoRef, ResolvedFact } from './chatFactLinks';
 import { boundAfter, compactCount, sessionCost } from './chatState';
 import type { ChatState, ChatTurn, ToolCall } from './chatState';
 import type { ApprovalDecision } from './chatApi';
@@ -33,6 +35,11 @@ function blocksOf(turn: ChatTurn): Block[] {
   return out;
 }
 
+/** A turn's answer: its text blocks, in order. */
+const answerOf = (blocks: Block[]): string => blocks.filter(b => b.kind === 'text').map(b => (b as { text: string }).text).join('\n\n');
+
+const NO_REPOS: RepoRef[] = [];
+
 /** The size of the chat's context: tokens used by the latest prompt, and the
  *  model's window (0 until it is known). */
 export interface ChatContextUse { used: number; window: number }
@@ -48,7 +55,7 @@ const TRANSCRIPT_COLUMN: CSSProperties = { ...COLUMN, margin: 'auto auto 0' };
  * faint strip), its activity line, its final text as markdown, and a cost
  * footer; the server's price-tier warning; and the rounded box to write in.
  */
-export function ChatPanel({ state, selectedId, actionError, notSent, landed, modelName, context, onSend, onStop, onSelect, onAnswer, onNewChat }: {
+export function ChatPanel({ state, selectedId, actionError, notSent, landed, modelName, context, onSend, onStop, onSelect, onAnswer, onNewChat, factLinks }: {
   state: ChatState;
   selectedId: string | null;
   /** The last failed cancel or answer. */
@@ -67,8 +74,21 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   onAnswer: (callId: string, decision: ApprovalDecision) => void;
   /** Start an empty chat with the same model (the notices' action). */
   onNewChat?: () => void;
+  /** The answers' fact links: the repos a repo chip may name, the fact open in
+   *  the side panel, and what a link does. */
+  factLinks?: {
+    repos: RepoRef[]; openKey: string | null; onOpen?: (f: ResolvedFact) => void; onBrowse?: (repo: string, path: string) => void;
+    onCommit?: (repo: string, commit: string) => void;
+  };
 }) {
   const [draft, setDraft] = useState('');
+  // The finished turns' cited facts: one call for all not yet answered, each
+  // looked for first in the repos its turn worked in.
+  const turnFacts = useTurnFacts(
+    state.turns.map((t, ti) => (state.running && ti === state.turns.length - 1 ? null : answerOf(blocksOf(t)))),
+    state.turns.map((_, ti) => turnPrefer(state.turns, ti)),
+  );
+  const repos = factLinks?.repos ?? NO_REPOS;
   const scroller = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -157,9 +177,12 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
             const live = state.running && ti === state.turns.length - 1;
             const blocks = blocksOf(t);
             const lastBlock = blocks[blocks.length - 1];
-            const answer = blocks.filter(b => b.kind === 'text').map(b => (b as { text: string }).text).join('\n\n');
+            const answer = answerOf(blocks);
+            const facts = turnFacts[ti];
+            const factPlugin = remarkFactLinks(facts, repos);
             return (
-              <div key={ti} data-testid={`chat-turn-${ti}`} style={turnBox(ti > 0)}>
+              <FactLinkContext.Provider key={ti} value={{ facts, openKey: factLinks?.openKey ?? null, onOpen: factLinks?.onOpen, onBrowse: factLinks?.onBrowse, onCommit: factLinks?.onCommit }}>
+              <div data-testid={`chat-turn-${ti}`} style={turnBox(ti > 0)}>
                 {t.user && (
                   <div data-testid="chat-user" data-sending={t.local && !t.local.accepted ? true : undefined} className="k-chat-user k-prose"
                     style={t.local && !t.local.accepted ? sendingStrip : undefined}>
@@ -174,7 +197,7 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
                   if (b.kind === 'text') {
                     return (
                       <div key={b.key} data-testid="chat-text" className="k-prose k-chat-answer">
-                        <ReactMarkdown remarkPlugins={live && b === lastBlock ? chatLivePlugins : chatPlugins} components={chatComponents}>{b.text}</ReactMarkdown>
+                        <ReactMarkdown remarkPlugins={[...(live && b === lastBlock ? chatLivePlugins : chatPlugins), factPlugin]} components={chatComponents}>{b.text}</ReactMarkdown>
                       </div>
                     );
                   }
@@ -194,6 +217,7 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
                     sessionCostUsd={total} sessionTurns={state.turns.length} />
                 )}
               </div>
+              </FactLinkContext.Provider>
             );
           })}
           {actionError && <div role="alert"><NoticeLine tone="blocked" testId="chat-action-error" lead={actionError} /></div>}

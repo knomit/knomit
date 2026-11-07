@@ -294,7 +294,14 @@ type SearchOptions struct {
 	// empty must not pass it and expect nothing back: it has to short-circuit
 	// its own answer. Making emptiness mean "match nothing" here would turn
 	// every unset field into a silent zero-result filter.
-	PathsIn       []string
+	PathsIn []string
+	// IDsIn restricts the result to facts whose FILE NAME is one of these
+	// short ids (<id>.md, in any directory), in addition to every other
+	// filter. It is how a cited short id (the 8 hex of a fact's file name) is
+	// looked up without knowing its path. An id that is not lowercase hex
+	// matches nothing, so no caller can put a LIKE wildcard in. Empty means
+	// no restriction, like PathsIn.
+	IDsIn         []string
 	MinConfidence float64
 	MinSimilarity float64 // cosine similarity threshold (0–1); 0 uses the active model's recall floor
 	// Diag, when non-nil, is filled by Search with what the vector step saw: how
@@ -465,6 +472,17 @@ func newFactFilter(q SearchOptions) *factFilter {
 			args[i] = p
 		}
 		f.add(" AND f.path IN ("+ph[:len(ph)-1]+")", args...)
+	}
+	if len(q.IDsIn) > 0 {
+		ors := []string{"0"}
+		var args []any
+		for _, id := range q.IDsIn {
+			if isLowerHex(id) {
+				ors = append(ors, "f.path LIKE ?")
+				args = append(args, "%/"+id+".md")
+			}
+		}
+		f.add(" AND ("+strings.Join(ors, " OR ")+")", args...)
 	}
 	if len(q.IncludeTypes) > 0 {
 		ph := strings.Repeat("?,", len(q.IncludeTypes))
@@ -1240,4 +1258,18 @@ func (fq *FactQuery) search(ctx context.Context, branch string, q SearchOptions)
 		out = append(out, SearchResult{FactWithBody: c.rec, Score: c.score * 100.0})
 	}
 	return out, nil
+}
+
+// isLowerHex reports whether s is a non-empty run of 0-9a-f: a short fact id
+// safe to put inside a LIKE pattern.
+func isLowerHex(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }

@@ -254,8 +254,10 @@ export const PROVIDER_CLOUD = 'cloud';
 // the design gives the back, forward and close buttons no accessible name, and
 // these are the shortest words that name them. Approved by the user with the rest.
 
-/** Header button. Design copy table, "Fact links" row. */
+/** Header button, and the fact link's hover card. Design copy table, "Fact links" row. */
 export const PANEL_OPEN_IN_BROWSE = 'Open in Browse';
+/** A table cell citing several facts: the first link, then "+N" (the rest). Design copy table, "Fact links" row. */
+export const factLinksMore = (n: number): string => `+${n}`;
 /** The tool result's two tabs. Design copy table, "Side panel" row. */
 export const PANEL_TAB_RESULT = 'Result';
 export const PANEL_TAB_ARGUMENTS = 'Arguments';

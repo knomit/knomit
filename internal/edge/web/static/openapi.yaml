@@ -130,6 +130,71 @@ paths:
             application/yaml:
               schema: { type: string }
 
+  /facts/resolve:
+    post:
+      tags: [facts]
+      summary: Resolve fact handles to facts
+      description: |
+        Looks up the fact handles a chat answer cites, in one call: an 8-hex
+        short id (the fact's file name), a fact path with or without the `kb/`
+        root and the `.md` extension (lowercased after the root, as the store
+        spells paths), or `kb://<repo id or name>/<path>`. Only repos the
+        caller may read are searched, each at its read branch; the fleet
+        repository never is. A kb:// handle is looked for only in its repo.
+        Any other handle is looked for first in the `prefer` repos, in that
+        order, and the first that holds it answers; otherwise in every other
+        repo, where a handle found in exactly one repo resolves and a handle
+        found in two or more is ambiguous and OMITTED (never picked by name).
+        `prefer` never widens what the caller may read. A handle that matches
+        nothing, names a repo the caller cannot read, or is a private (dot)
+        path is OMITTED from the answer, never an error. Results follow the
+        order of the handles, once per distinct handle. Only the facts
+        returned are read. It only reads: the read-only gate and the write
+        gate both let it through.
+
+        COMMIT HASHES. A handle of 7 to 40 lowercase hex that names no fact
+        (an 8-hex one is tried as a fact's short id first) is looked up as a
+        commit, but only when `prefer` comes down to exactly ONE repo the
+        caller may read: a hash names no repo. It answers when that repo's
+        read branch has exactly one commit with that prefix and the commit
+        object exists. The item then carries `commit` (the full hash) with
+        `handle`, `repo` and `branch`; its fact fields are empty. No single
+        repo, an abbreviation two commits share, or a hash the repo does not
+        hold: the handle is omitted.
+      operationId: resolveFacts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [handles]
+              properties:
+                handles:
+                  type: array
+                  maxItems: 100
+                  items: { type: string }
+                prefer:
+                  type: array
+                  description: |
+                    The repos to look in first, in order: repo names, repo
+                    ids (12 hex or full, as kb:// carries them) or lens names
+                    (a lens stands for its write repo, then its reads). Names
+                    the caller cannot read, or that name nothing, are ignored.
+                  items: { type: string }
+      responses:
+        "200":
+          description: The handles that resolved
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ResolvedFact" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+
   /repos:
     get:
       tags: [repos]
@@ -6301,6 +6366,24 @@ components:
       required: [_links]
       properties:
         _links: { $ref: "#/components/schemas/LinkMap" }
+
+    ResolvedFact:
+      type: object
+      required: [handle, id, title, type, repo, branch, path, excerpt, kind, origin, sources]
+      properties:
+        handle: { type: string, description: "The handle as it was asked." }
+        id: { type: string, description: "The fact's short id: its file name without .md." }
+        title: { type: string }
+        type: { type: string, description: "The fact type (observation, policy, …)." }
+        repo: { type: string, description: "The repo name the fact was found in." }
+        branch: { type: string, description: "The branch it was read at: the repo's read branch." }
+        path: { type: string, description: "The full fact path, e.g. kb/invariants/web/gate/3fc77970.md." }
+        excerpt: { type: string, description: "The start of the body as one line, at most 300 characters. Empty when the fact could not be parsed." }
+        confidence: { type: number, description: "Absent (not 0) when the fact could not be read or parsed, and on a commit item." }
+        kind: { type: string, description: "epistemic or pragmatic; empty when the fact could not be parsed or names none." }
+        origin: { type: string, description: "authored, distilled or discovered (the resolved origin); empty when the fact could not be parsed." }
+        sources: { type: integer, description: "0 when the fact could not be parsed." }
+        commit: { type: string, description: "Only on an item answering a commit hash handle: the full commit hash. Its fact fields are then empty." }
 
     Version:
       type: object

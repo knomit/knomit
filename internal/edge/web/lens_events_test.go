@@ -276,7 +276,7 @@ func TestLensEvents_StaleBindingEndsTheStream(t *testing.T) {
 			next.ServeHTTP(w, r.WithContext(repos.WithRepoInstance(repos.WithBinding(r.Context(), repos.BindingFromContext(staleCtx)), repos.BindingFromContext(staleCtx).Write())))
 		})
 	})
-	kb.Mount(br, lens, "kb", env.emb, env.m)
+	kb.Mount(chi.NewRouter(), br, lens, "kb", env.emb, env.m)
 	srv := httptest.NewServer(lens)
 	t.Cleanup(srv.Close)
 	reqCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

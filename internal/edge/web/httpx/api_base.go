@@ -5,6 +5,12 @@ import "strings"
 // APIBase is the URL prefix for the API router.
 const APIBase = "/api/v1"
 
+// FactsResolvePath is the fact resolver's route under APIBase (api/kb mounts
+// it). The read-only and write gates exempt exactly this path (it only reads),
+// and the root document links to it; it lives here because both web and
+// api/kb need it and only router.go and server.go may import an api package.
+const FactsResolvePath = "/facts/resolve"
+
 // UnscopedMCPPath is the unscoped MCP endpoint, relative to the API router.
 // The router serves it, and every path under it (UnscopedMCPPattern), as the
 // unscoped endpoint, where the client picks a repo or lens with knomit_bind.
