@@ -54,6 +54,8 @@ export interface ChatViewItem {
   /** On a user item: how the turn it opens went (see chat.go viewItem). */
   usage?: { input: number; cache_read: number; cache_write: number; output: number };
   cost_usd?: number; warning?: string; error?: string; cancelled?: boolean;
+  /** The turn's cost by token kind (adds up to cost_usd). */
+  cost_rows?: { input: number; cache_read: number; cache_write: number; output: number };
   /** On the call to the loader tool: the tools that call loaded. */
   loaded?: string[];
 }

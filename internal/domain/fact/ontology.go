@@ -816,9 +816,29 @@ func ValidatePlacement(o *Ontology, topic, category string) (string, error) {
 		}
 	}
 	if strings.TrimSpace(category) == "" {
-		return "", fmt.Errorf("category is required")
+		return "", ErrCategoryRequired
 	}
 	return topicCategory, nil
+}
+
+// Placement refusals. Callers branch on these with errors.Is / errors.As,
+// never on Error() text; the texts are the REST wording and must not change
+// without the REST contract.
+var (
+	// ErrCategoryRequired: the category is blank.
+	ErrCategoryRequired = errors.New("category is required")
+	// ErrEmptyPath: there is no topic path at all (topic and category blank).
+	ErrEmptyPath = errors.New("validate path: empty path")
+)
+
+// UnknownTopicError: the first segment of the path names no top-level topic.
+// Topic is that first segment, exactly as ValidatePath judged it (so for the
+// topic "bogus/x" it is "bogus"); it is "" when the topic was missing but a
+// category was given.
+type UnknownTopicError struct{ Topic string }
+
+func (e *UnknownTopicError) Error() string {
+	return fmt.Sprintf("validate path: unknown topic %q", e.Topic)
 }
 
 // ValidatePath checks that path is valid against this ontology.
@@ -827,13 +847,13 @@ func ValidatePlacement(o *Ontology, topic, category string) (string, error) {
 // remaining segments are accepted as freeform.
 func (o *Ontology) ValidatePath(path string) error {
 	if path == "" {
-		return fmt.Errorf("validate path: empty path")
+		return ErrEmptyPath
 	}
 	parts := strings.Split(path, "/")
 	// Lowercase the topic for lookup — ontology keys are always lowercase.
 	node, ok := o.Topics[strings.ToLower(parts[0])]
 	if !ok {
-		return fmt.Errorf("validate path: unknown topic %q", parts[0])
+		return &UnknownTopicError{Topic: parts[0]}
 	}
 	for _, seg := range parts[1:] {
 		if node == nil || node.Children == nil {

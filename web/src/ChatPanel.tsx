@@ -212,7 +212,8 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
                 )}
                 <TurnNotices turn={t} modelName={modelName} onNewChat={onNewChat} />
                 {t.usage && !live && (
-                  <ChatTurnFooter usage={t.usage} costUsd={t.costUsd} answer={answer}
+                  <ChatTurnFooter usage={t.usage} costUsd={t.costUsd} costRows={t.costRows}
+                    turnNumber={ti + 1} modelName={modelName} answer={answer}
                     sessionCostUsd={total} sessionTurns={state.turns.length} />
                 )}
               </div>

@@ -34,15 +34,8 @@ const (
 )
 
 // errMissingHandle is the unscoped endpoint's "you did not pass one". It names
-// the tool that mints a handle and the argument that carries it, because that
-// pair is the entire repair.
-func errMissingHandle(tool string) string {
-	return fmt.Sprintf(
-		"%s requires a `binding` argument: the opaque handle knomit_bind returned. "+
-			"Call knomit_bind with a repo or lens name, then pass its `binding` value on this and every "+
-			"later tool call. There is no session fallback — the handle is the only thing that says "+
-			"which knowledge base this call is for.", tool)
-}
+// the tool that mints a handle; the argument is named in the first words.
+const errMissingHandle = "binding is missing: pass the handle knomit_bind returned"
 
 // bindingArg is the `binding` parameter, declared by every tool the gate
 // protects. Declaring it matters twice over: rejectUnknownArguments derives its
@@ -223,7 +216,7 @@ func gateBinding(mgr *repos.Manager, tool mcpgo.Tool, mode gateMode, next mcpser
 				// catalogue, no `bound`.
 				return next(ctx, req)
 			}
-			return mcpgo.NewToolResultError(errMissingHandle(tool.Name)), nil
+			return mcpgo.NewToolResultError(errMissingHandle), nil
 		}
 
 		// The endpoint the handle must have been minted on: "" for the

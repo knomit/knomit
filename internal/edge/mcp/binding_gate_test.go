@@ -67,9 +67,7 @@ func TestGate_MissingHandleIsRefused(t *testing.T) {
 			require.True(t, res.IsError)
 			require.False(t, spy.called, "the handler must not run")
 			text := resultText(t, res)
-			require.Contains(t, text, "knomit_bind")
-			require.Contains(t, text, "`binding`")
-			require.Contains(t, text, "knomit_query", "the error must name the tool that refused")
+			require.Equal(t, "binding is missing: pass the handle knomit_bind returned", text)
 		})
 	}
 }

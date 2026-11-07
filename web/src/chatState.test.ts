@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { chatReducer, initialChatState, toolRowLabel, usageLine, formatCost, snapshotState } from './chatState';
-import type { ChatEvent, ChatState } from './chatState';
+import { chatReducer, initialChatState, toolRowLabel, usageLine, formatCost, snapshotState, boundAfter, boundBeforeCall } from './chatState';
+import type { ChatEvent, ChatState, ChatTurn, ToolCall } from './chatState';
 import type { ChatApproval, ChatSnapshot, ChatViewItem } from './chatApi';
 
 const run = (events: ChatEvent[], from: ChatState = initialChatState): ChatState => events.reduce(chatReducer, from);
@@ -309,5 +309,19 @@ describe('usage line', () => {
   it('formats small and large costs', () => {
     expect(formatCost(0.00004)).toBe('<$0.0001');
     expect(formatCost(1.5)).toBe('$1.50');
+  });
+});
+
+describe('the binding in force: a failed bind binds nothing', () => {
+  const bind = (id: string, name: string, isError: boolean): ToolCall => ({ id, name: 'knomit_bind', state: 'done', isError, args: { name } });
+  const query: ToolCall = { id: 'q', name: 'knomit_query', state: 'done', isError: false, args: { text: 'x' } };
+  it('boundAfter: a bind that succeeded moves it, one that failed leaves it where it was', () => {
+    expect(boundAfter([bind('a', 'alpha', false)], 'all')).toBe('alpha');
+    expect(boundAfter([bind('a', 'nosuch', true)], 'all')).toBe('all');
+    expect(boundAfter([bind('a', 'alpha', false), bind('b', 'nosuch', true)], '')).toBe('alpha');
+  });
+  it('boundBeforeCall: a call after a failed bind belongs to the binding before it', () => {
+    const turns = [{ user: 'u', parts: [{ kind: 'group', calls: [bind('a', 'alpha', false), bind('b', 'nosuch', true), query] }] }] as unknown as ChatTurn[];
+    expect(boundBeforeCall(turns, 'q')).toBe('alpha');
   });
 });

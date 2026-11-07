@@ -106,7 +106,7 @@ func TestLearn_PrivatePath_RejectsTopicAndCategory(t *testing.T) {
 		}},
 	})
 	require.True(t, result.IsError)
-	require.Contains(t, resultText(t, result), "cannot be combined")
+	require.Contains(t, resultText(t, result), "give topic and category, or path, not both")
 }
 
 func TestLearn_PrivatePath_OutsideWritableRootRefused(t *testing.T) {

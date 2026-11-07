@@ -112,8 +112,8 @@ func learnToolSchemaProperties() map[string]any {
 		// them for private state, and JSON Schema cannot express
 		// "one or the other" in a list. The descriptions carry the
 		// rule instead.
-		"topic":    map[string]any{"type": "string", "description": "Top-level ontology topic (e.g. technology, people, science). REQUIRED unless you supply path."},
-		"category": map[string]any{"type": "string", "description": "Category path within the topic (e.g. languages/go/concurrency). REQUIRED unless you supply path."},
+		"topic":    map[string]any{"type": "string", "description": "This repo's ontology topic. Required unless you give path."},
+		"category": map[string]any{"type": "string", "description": "Category path within the topic. Required unless you give path."},
 		"path":     map[string]any{"type": "string", "description": "ARTIFACTS ONLY. An explicit repo path under " + fact.ArtifactsRoot + "/<area>/, e.g. " + fact.ArtifactsRoot + "/<area>/<name>.md, for an agent's working file that is not knowledge — a periodic job's bookkeeping. At least one folder deep; no segment may be empty or begin with a dot, and no \"..\". Mutually exclusive with topic/category: supply one or the other, never both. A file written here is INVISIBLE to knomit_query, knomit_changes, triggers, the UI and export, by design; address it later by this exact path. " + fact.PrivateRoot + "/ (the system: ontology, triggers, recipes, skills) and every path with a segment beginning with a dot are closed to the fact tools — they change only through git. Fails if the path already exists — use knomit_update to write a new revision."},
 		"title":    map[string]any{"type": "string", "description": "Fact title (short, descriptive)."},
 		"body":     map[string]any{"type": "string", "description": "Fact body in natural language. State compound conditions in full — name every component; never abbreviate a multi-part condition into a catchier summary. Include the consequence a consumer should act on. For rules and policies, name the foreseeable misreading (what the fact does NOT mean) if you can see one."},
@@ -253,6 +253,27 @@ func validateBatchTypeConsistency(inputs []learnFactInput) error {
 	return nil
 }
 
+// placementRefusal words a fact.ValidatePlacement refusal for knomit_learn. It
+// never decides anything: it maps the typed errors to the agent-facing copy.
+func placementRefusal(i int, ontology *fact.Ontology, err error) error {
+	valid := ""
+	if ontology != nil {
+		valid = strings.Join(ontology.TopicNames(), ", ")
+	}
+	var unknown *fact.UnknownTopicError
+	switch {
+	case errors.Is(err, fact.ErrEmptyPath):
+		return fmt.Errorf("fact %d: topic and category are missing (or give path for an artifact); valid topics: %s", i, valid)
+	case errors.As(err, &unknown) && unknown.Topic == "":
+		return fmt.Errorf("fact %d: topic is missing (or give path for an artifact); valid: %s", i, valid)
+	case errors.As(err, &unknown):
+		return fmt.Errorf("fact %d: unknown topic %q; valid: %s", i, unknown.Topic, valid)
+	case errors.Is(err, fact.ErrCategoryRequired):
+		return fmt.Errorf("fact %d: category is missing", i)
+	}
+	return fmt.Errorf("fact %d: %v", i, err)
+}
+
 // validateAndBuildFacts validates each input against the ontology, assigns it a
 // server-generated path, and renders it into the pending-write map.
 //
@@ -277,6 +298,9 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 		// same rule for every write path; this is the same rule, reported
 		// with the fact's index.
 		if err := fact.ValidateTitle(fi.Title); err != nil {
+			if errors.Is(err, fact.ErrTitleRequired) {
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: title is missing", i)
+			}
 			return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
 		}
 		var path string
@@ -285,14 +309,15 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 			// Artifact: an explicit caller-chosen path, no ontology.
 			if fi.Topic != "" || fi.Category != "" {
 				return nil, nil, nil, nil, fmt.Errorf(
-					"fact %d: path cannot be combined with topic or category — supply one or the other", i)
+					"fact %d: give topic and category, or path, not both", i)
 			}
 			path = fact.NormalizePath(ontologyRoot, fi.Path)
 			if msg := closedToFactTools(path); msg != "" {
 				return nil, nil, nil, nil, fmt.Errorf("fact %d: %s", i, msg)
 			}
 			if !fact.IsArtifactPath(path) {
-				return nil, nil, nil, nil, fmt.Errorf("fact %d: %s", i, notAnArtifactPath(path))
+				return nil, nil, nil, nil, fmt.Errorf(
+					"fact %d: path %q is not an artifact path (%s/<area>/<name>.md)", i, fi.Path, fact.ArtifactsRoot)
 			}
 			// Empty topicCategory is the downstream signal: skip ontology
 			// validation and skip dedup-merge for this fact.
@@ -301,9 +326,11 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 			// The same placement check the REST create runs (POST .../facts):
 			// one rule for both write APIs, because a lens read skips a member
 			// whose ontology lacks the topic.
+			// ValidatePlacement alone decides accept or refuse; its typed
+			// refusals are only re-worded here, with the repo's topic names.
 			tc, err := fact.ValidatePlacement(ontology, fi.Topic, fi.Category)
 			if err != nil {
-				return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
+				return nil, nil, nil, nil, placementRefusal(i, ontology, err)
 			}
 			topicCategory = tc
 			path = fact.BuildFactPath(ontologyRoot, fi.Topic, fi.Category)
@@ -1156,7 +1183,7 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 		}
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
-			return mcpgo.NewToolResultError("moment_name is required"), nil
+			return mcpgo.NewToolResultError("moment_name is missing"), nil
 		}
 		if err := checkMomentName(momentName); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
@@ -1187,7 +1214,7 @@ func LearnHandler(embedders ...model.BatchEmbedder) func(context.Context, mcpgo.
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		if len(factInputs) == 0 && len(retractPaths) == 0 {
-			return mcpgo.NewToolResultError("facts must not be empty (unless retract names what to retract)"), nil
+			return mcpgo.NewToolResultError("facts is empty (unless retract is given)"), nil
 		}
 		retracting := make(map[string]bool, len(retractPaths))
 		for _, p := range retractPaths {

@@ -147,7 +147,7 @@ func TestLearn_MoveIsOneCommit(t *testing.T) {
 	r, err = LearnHandler(emb)(ctx, moveReq("nothing", []any{}))
 	require.NoError(t, err)
 	require.True(t, r.IsError)
-	require.Contains(t, resultText(t, r), "facts must not be empty")
+	require.Contains(t, resultText(t, r), "facts is empty (unless retract is given)")
 }
 
 // T-A2 RetractMissingRefusesAll: retracting an ABSENT leaf in a directory that

@@ -80,7 +80,9 @@ export function loadedToolsRow(names: string[]): string {
  *  are joined with " · ". `strong` marks the parts drawn bold (the target and
  *  the counts). A tool with no wording here counts toward "used N tools". */
 export interface SummarySeg { text: string; strong?: boolean }
-export interface SummaryCall { kind: 'bind' | 'query' | 'read' | null; target: string }
+/** `failed`: the call returned an error. A failed bind bound nothing, so it adds
+ *  nothing to the line; a failed call of any other kind is counted as before. */
+export interface SummaryCall { kind: 'bind' | 'query' | 'read' | null; target: string; failed?: boolean }
 
 export function activitySummary(calls: SummaryCall[]): SummarySeg[][] {
   const pieces: SummarySeg[][] = [];
@@ -89,7 +91,7 @@ export function activitySummary(calls: SummaryCall[]): SummarySeg[][] {
   let reads = 0;
   let other = 0;
   for (const c of calls) {
-    if (c.kind === 'bind') { if (!bound.includes(c.target)) bound.push(c.target); }
+    if (c.kind === 'bind') { if (!c.failed && !bound.includes(c.target)) bound.push(c.target); }
     else if (c.kind === 'query') queries.set(c.target, (queries.get(c.target) ?? 0) + 1);
     else if (c.kind === 'read') reads++;
     else other++;
@@ -128,11 +130,13 @@ export const cachedLabel = (pct: number): string => `${pct}% cached`;
 /** The cost hover card. */
 export const COST_ROW_INPUT = 'Input';
 export const COST_ROW_CACHE_READ = 'Cache read';
-export const COST_ROW_CACHE_WRITE = 'Cache write (5m)';
+export const COST_ROW_CACHE_WRITE = 'Cache write';
 export const COST_ROW_OUTPUT = 'Output';
 export const COST_THIS_TURN = 'This turn';
 /** Shown for a cost when the model has no price card. */
 export const COST_UNPRICED = '–';
+/** The cost card's first line: "Turn N · <model>". */
+export const costCardHeader = (turn: number, model: string): string => `Turn ${turn} · ${model}`;
 export const costSession = (turns: number): string => `Session (${turns} ${turns === 1 ? 'turn' : 'turns'})`;
 
 /** The verb of a timeline row for the tools that have wording; every other tool

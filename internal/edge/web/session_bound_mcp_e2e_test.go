@@ -118,8 +118,7 @@ func TestSessionBoundMCP_EndToEnd(t *testing.T) {
 	// A gated tool fails closed, naming the tool to call and the argument.
 	text, isErr = callTool(t, h, sid, "knomit_query", `{"text":"anything"}`)
 	require.True(t, isErr, "knomit_query must fail with no handle: %s", text)
-	require.Contains(t, text, "knomit_bind")
-	require.Contains(t, text, "`binding`")
+	require.Equal(t, wantMissingHandle, text)
 
 	// Bind the writable repo and keep the handle.
 	alpha := bindHandle(t, h, sid, "alpha")
@@ -178,9 +177,7 @@ func TestSessionBoundMCP_HandleErrors(t *testing.T) {
 	// Missing.
 	text, isErr := callTool(t, h, sid, "knomit_query", `{"text":"x"}`)
 	require.True(t, isErr)
-	require.Contains(t, text, "knomit_bind")
-	require.Contains(t, text, "`binding`")
-	require.Contains(t, text, "knomit_query")
+	require.Equal(t, wantMissingHandle, text)
 
 	// Unknown — including the name, which is the thing a model will reach for.
 	for _, bad := range []string{"never-minted", "alpha", "repo:uid-alpha"} {
