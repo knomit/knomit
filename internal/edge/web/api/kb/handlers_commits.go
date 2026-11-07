@@ -92,7 +92,11 @@ func commitDetail(
 			}
 		}
 		// The commit that removed a file has no version of it: its last title
-		// before the commit.
+		// before the commit. A row with any other action had a version here, so a
+		// failed read above leaves it untitled rather than naming it by an older one.
+		if f.Action != "deleted" {
+			continue
+		}
 		if result, rerr := gs.ReadFact(ctx, branch, f.Path, &facts.ReadFactOpts{BeforeCommit: hash}); rerr == nil && result.Content != "" {
 			if parsed, perr := fact.ParseFact(f.Path, result.Content); perr == nil {
 				files[i].Title = parsed.Title

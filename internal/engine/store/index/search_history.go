@@ -112,11 +112,19 @@ func (hq *HistoryQuery) CommitDetail(ctx context.Context, commitHash, pathPrefix
 		commitHash,
 	).Scan(&committedAt, &message, &operation, &authorName, &authorEmail)
 	if err != nil {
-		// No rows is not "no commit": commit_log has one row per changed path, so
-		// a commit that changed nothing has none (it is on branch_commits and
-		// commit_parents only). It answers from the commit itself, with no files.
+		// No rows is not "no commit": commit_log has one row per changed path, so a
+		// commit that changed nothing has none. It is still on branch_commits, written
+		// in the same transaction as any commit_log rows
+		// (kb/invariants/store/three-table-commit-index), so there it is known empty
+		// and answers from the commit itself, with no files. A commit the object store
+		// holds but the index has not recorded may have real changes: not an answer.
+		var recorded int
+		if !errors.Is(err, sql.ErrNoRows) ||
+			db.QueryRowContext(ctx, `SELECT 1 FROM branch_commits WHERE commit_hash = ? LIMIT 1`, commitHash).Scan(&recorded) != nil {
+			return nil, fmt.Errorf("CommitDetail: commit not found in history index: %s", commitHash)
+		}
 		m, ok := hq.rh.CommitMetaOf(commitHash)
-		if !errors.Is(err, sql.ErrNoRows) || !ok {
+		if !ok {
 			return nil, fmt.Errorf("CommitDetail: commit not found in history index: %s", commitHash)
 		}
 		return &CommitDetailResult{

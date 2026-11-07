@@ -7459,7 +7459,9 @@ components:
       properties:
         path:   { type: string }
         action: { type: string, enum: [added, modified, deleted] }
-        title:  { type: string }
+        title:
+          type: string
+          description: The fact's title at this commit, not its current one. A deleted file has none at the commit, so it carries its last title before it. Absent when the file cannot be read as a fact.
         _links: { $ref: "#/components/schemas/LinkMap" }
 
     CommitDetail:

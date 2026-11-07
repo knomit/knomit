@@ -434,3 +434,24 @@ func TestHandleCommits_UnknownRepo_Returns404(t *testing.T) {
 		t.Errorf("content-type: got %q, want application/problem+json", got)
 	}
 }
+
+// Only a row the commit deleted takes its last title before the commit. A modified
+// row whose version at the commit cannot be parsed stays untitled: the older title
+// would name a version this commit replaced. Sabotage: fall back on any failure
+// (the row reads "A v1 title").
+func TestHandleCommitDetail_OnlyADeletedRowFallsBackToAnOlderTitle(t *testing.T) {
+	ctx := context.Background()
+	m, svcs := newRealStoreManager(t, "alpha")
+	svc := svcs["alpha"]
+	s := &Server{Manager: m, OntologyRoot: commitsRoot}
+	const branch, url = commitsAgentBranch, "agent:test"
+	_, err := svc.Facts().WriteFact(ctx, branch, "kb/a.md", commitsFactText("A v1 title"), "learn a", "learn")
+	require.NoError(t, err)
+	res, err := svc.Facts().WriteFact(ctx, branch, "kb/a.md", "---\nconfidence: [unclosed\n---\n# broken\n", "break a", "update")
+	require.NoError(t, err)
+
+	body := getCommitDetail(t, s, url, res.CommitHash)
+	require.Len(t, body.Files, 1, "%+v", body.Files)
+	require.Equal(t, "modified", body.Files[0].Action)
+	require.Empty(t, body.Files[0].Title)
+}
