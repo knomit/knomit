@@ -19,22 +19,34 @@ function holdsEsc(el: HTMLElement): boolean {
 
 // ── Focus ───────────────────────────────────────────────────────────────────
 
+/** What the page around a materialized view tells its Focus. */
+export interface MatFocusScope {
+  /** The view is not on screen (a chat stays mounted behind Browse): its Focus is
+   *  remembered but has no effect on the shell or the keyboard until it is again. */
+  hidden?: boolean;
+  /** Esc belongs to something else right now (a running turn's Stop). */
+  yieldsEsc?: () => boolean;
+}
+
 /** Focus: opening a materialized view takes over the screen. The app shell's
- *  rail, library column, browse toolbar and facet tabs are hidden (CSS keyed on
- *  data-mat-focus, see materialize.css); the app's top bar and the article's own
- *  bar remain. ON by default; with it off NOTHING is hidden and the view only
+ *  rail, library column, browse toolbar and facet tabs are hidden, and in a chat
+ *  the chat column beside the view (CSS keyed on data-mat-focus, see
+ *  materialize.css); the app's top bar and the article's own bar remain. ON by default; with it off NOTHING is hidden and the view only
  *  replaces the right-hand panel. Not remembered and not in the URL (it is how
  *  the reader chooses to read, not what is materialized). The toggle, Esc and
  *  Back end it; Back and leaving the view also restore everything. */
-export function useMatFocus(onExit?: () => void): [boolean, (f: boolean | ((f: boolean) => boolean)) => void] {
+export function useMatFocus(onExit?: () => void, scope: MatFocusScope = {}): [boolean, (f: boolean | ((f: boolean) => boolean)) => void] {
   const [focus, setFocus] = useState(true);
   // With onExit (the FactSet view, user ruling 2026-11-02 on #710 M2), leaving
   // Focus by Esc IS leaving the view: onExit runs instead of Focus turning off.
   // Without it (the single-fact view) Esc only turns Focus off.
   const exit = useRef(onExit);
   useEffect(() => { exit.current = onExit; }, [onExit]);
+  const yieldsEsc = useRef(scope.yieldsEsc);
+  useEffect(() => { yieldsEsc.current = scope.yieldsEsc; });
+  const hidden = !!scope.hidden;
   useEffect(() => {
-    if (!focus) return;
+    if (!focus || hidden) return;
     const root = document.documentElement;
     root.dataset.matFocus = '1';
     // Esc never reaches the shell while focus is on (its Escape clears the filters,
@@ -47,6 +59,7 @@ export function useMatFocus(onExit?: () => void): [boolean, (f: boolean | ((f: b
       // An open tool-group flyout (ModeFlyout, the FactSet's Top/Back) takes
       // its own Esc: it collapses, the view stays.
       if (a?.closest?.('[data-keeps-esc="true"]')) return;
+      if (yieldsEsc.current?.()) return;
       e.stopImmediatePropagation();
       if (a && holdsEsc(a)) {
         a.blur();
@@ -57,7 +70,7 @@ export function useMatFocus(onExit?: () => void): [boolean, (f: boolean | ((f: b
     };
     window.addEventListener('keydown', onKey, true);
     return () => { delete root.dataset.matFocus; window.removeEventListener('keydown', onKey, true); };
-  }, [focus]);
+  }, [focus, hidden]);
   return [focus, setFocus];
 }
 

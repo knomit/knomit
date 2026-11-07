@@ -47,7 +47,14 @@ interface NavEntry {
   // the trail, because Back from here is the chat and not what Browse held.
   fromChat?: string;
   repo: string;
+  // The branch this entry was left on, with what the app holds about it. A landing
+  // can move the branch, and factPath and filters mean nothing on another branch:
+  // back restores all of it, or the reader is on a branch they never left to, reading
+  // the old one's fact.
   branch: string;
+  head: string;
+  experiment: ExperimentInfo | null;
+  branchWritable: boolean;
   view: View;
   filters: FilterChip[];
   freeText: string;
@@ -65,14 +72,17 @@ interface NavEntry {
   // one mount would return you to a view you were never in. SET_LENS_SOURCES
   // does not push either — a dropdown toggle refines the current view.
   lensSources: string[] | null;
+  // Since-fork in force when this entry was left: a way of looking too, since it
+  // changes which rows exist. A reveal clears it (Library would demote the tree).
+  sinceFork: boolean;
 }
 
 export interface AppState {
   // NAV_BACK popped an entry that came from this chat. App shows the chat (the
   // view state is not ours, see facets.ts) if it is still there, and clears this.
   chatReturn: string | null;
-  // A landing's request to open a panel of the fact at `path`. RightPanel serves
-  // it once and clears it.
+  // A landing's request to open a panel of the fact at `path`. FactView serves it
+  // once and clears it.
   factPanelRequest: (FactPanel & { path: string }) | null;
   repo: string;
   // context is the browse surface (repo | lens). In a repo context, repo/branch
@@ -257,6 +267,9 @@ function pushNav(s: AppState, fromChat?: string): NavEntry[] {
     ...(fromChat ? { fromChat } : {}),
     repo: s.repo,
     branch: s.branch,
+    head: s.headCommit,
+    experiment: s.experiment,
+    branchWritable: s.branchWritable,
     view: s.view,
     filters: [...s.filters],
     freeText: s.freeText,
@@ -264,6 +277,7 @@ function pushNav(s: AppState, fromChat?: string): NavEntry[] {
     asOf: s.asOf,
     sort: s.librarySort,
     lensSources: s.lensSources === null ? null : [...s.lensSources],
+    sinceFork: s.sinceFork,
   };
   const stack = [...s.navStack, entry];
   if (stack.length > 20) stack.shift();
@@ -400,11 +414,19 @@ function applyAction(s: AppState, a: Action): AppState {
           branch: '',
           librarySort: prev.sort,
           lensSources: prev.lensSources,
+          sinceFork: prev.sinceFork,
           navStack: s.navStack.slice(0, -1),
         };
       }
+      // Left on another branch: go back to it, with what the app held about it.
+      const branchBack = prev.branch && prev.branch !== s.branch
+        ? { branch: prev.branch, headCommit: prev.head, experiment: prev.experiment, branchWritable: prev.branchWritable }
+        : { experiment: s.experiment };
       return {
         ...s,
+        ...branchBack,
+        // Only an experiment holds it, as SET_SINCE_FORK guards.
+        sinceFork: prev.sinceFork && !!branchBack.experiment,
         chatReturn: prev.fromChat ?? null,
         view: prev.view,
         factPath: prev.factPath,

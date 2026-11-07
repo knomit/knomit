@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, Dispatch, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import type { CSSProperties, Dispatch, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from 'react';
 import { api } from './api';
 import { ChatCommitView } from './ChatCommitView';
 import type { CommitMemo } from './ChatCommitView';
@@ -48,7 +48,7 @@ function typingIn(el: Element | null): boolean {
  * Browse's Back returns to the chat. The panel's only differences are the × in the
  * band and no retract button.
  */
-function PanelFact({ repo, branch, path, commit, close, onBrowse, repos, repoNames, serverReadOnly }: {
+function PanelFact({ repo, branch, path, commit, close, onBrowse, repos, repoNames, serverReadOnly, onScreen, runningRef }: {
   repo: string;
   branch: string;
   path: string;
@@ -58,6 +58,8 @@ function PanelFact({ repo, branch, path, commit, close, onBrowse, repos, repoNam
   repos?: RepoRef[];
   repoNames?: Record<string, string>;
   serverReadOnly: boolean;
+  onScreen: boolean;
+  runningRef: RefObject<boolean>;
 }) {
   const [branchWritable, setBranchWritable] = useState(false);
   useEffect(() => {
@@ -98,6 +100,7 @@ function PanelFact({ repo, branch, path, commit, close, onBrowse, repos, repoNam
       bandAction={close}
       hideRetract
       materializeInUrl={false}
+      materializeFocus={{ hidden: !onScreen, yieldsEsc: () => runningRef.current }}
     />
   );
 }
@@ -119,7 +122,7 @@ function PanelFact({ repo, branch, path, commit, close, onBrowse, repos, repoNam
  * else already took (defaultPrevented) is left alone, as is a chat that is not on
  * screen.
  */
-export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplitterDown, onBrowse, repos, repoNames, serverReadOnly = false, boundFor, callFor }: {
+export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplitterDown, onBrowse, repos, repoNames, serverReadOnly = false, onScreen = true, boundFor, callFor }: {
   chatId: string;
   panel: PanelState;
   dispatch: Dispatch<PanelAction>;
@@ -133,6 +136,8 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
   repos?: RepoRef[];
   repoNames?: Record<string, string>;
   serverReadOnly?: boolean;
+  /** Whether the chat is on screen. It stays mounted behind Browse. */
+  onScreen?: boolean;
   /** The repo or lens the chat was bound to when a call ran (a result with no
    *  target of its own belongs to it). */
   boundFor?: (callId: string) => string;
@@ -210,7 +215,8 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
                   entry: { kind: 'fact', repo: entry.repo, branch: entry.branch, path, commit: entry.commit },
                 })} />
               : <PanelFact key={`${entry.repo}\0${entry.branch}\0${entry.path}\0${entry.commit ?? ''}`} repo={entry.repo} branch={entry.branch} path={entry.path}
-                  commit={entry.commit} close={close} onBrowse={onBrowse} repos={repos} repoNames={repoNames} serverReadOnly={serverReadOnly} />}
+                  commit={entry.commit} close={close} onBrowse={onBrowse} repos={repos} repoNames={repoNames} serverReadOnly={serverReadOnly}
+                  onScreen={onScreen} runningRef={runningRef} />}
         </div>
         <div data-testid="chat-panel-footer" style={footer}>
           <span style={keycap}>{PANEL_KEY_CLOSE.slice(0, PANEL_KEY_CLOSE.indexOf(' '))}</span>

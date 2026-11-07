@@ -127,6 +127,14 @@ html[data-mat-focus] [data-testid='bar-divider'],
 html[data-mat-focus] [data-testid='browse-toolbar'],
 html[data-mat-focus] [data-shell-region='library'],
 html[data-mat-focus] [data-testid='library-splitter'] { display: none !important; }
+/* In a chat the view is in the side panel, so the panel takes the window, as the
+   right-hand column does in Browse. The chat column is folded rather than undisplayed:
+   ChatPanel reads display to know whether its chat is on screen, and Esc during a
+   running turn is still its Stop. */
+html[data-mat-focus] [data-testid='chat-panel-splitter'],
+html[data-mat-focus] [data-testid='chat-panel-footer'] { display: none !important; }
+html[data-mat-focus] .k-chat-main { flex: 0 0 0 !important; width: 0 !important; overflow: hidden !important; visibility: hidden !important; }
+html[data-mat-focus] .k-chat-result { flex: 1 1 0 !important; width: 100% !important; max-width: none !important; max-height: none !important; }
 .k-mat-link .k-mat-n { color: #7f8b9c; font-family: var(--k-font-mono); font-size: 10.5px; margin-left: 4px; }
 
 .k-mat-actions { display: inline-flex; align-items: center; gap: 10px; flex-shrink: 0; }

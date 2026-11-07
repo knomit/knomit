@@ -1378,3 +1378,26 @@ describe('per-repo read-only', () => {
     expect(readOnlyTitle(s)).toBe(READ_ONLY_TITLE);
   });
 });
+
+// kb/invariants/ui/navigation/nav-entry-captures-ways-of-looking: a way of looking
+// is on the entry and comes back on both arms; a branch comes back with what it had.
+describe('NAV_BACK restores the branch and since-fork', () => {
+  const exp = { name: 'try', parent: 'main', fork_commit: 'f0rk' } as AppState['experiment'];
+  const onExp: AppState = { ...init, repo: 'r', context: { kind: 'repo', repo: 'r' }, branch: 'exp/try', headCommit: 'h1', experiment: exp, sinceFork: true, branchWritable: true, factPath: 'kb/a.md' };
+  const land = (s: AppState) => reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/b.md', asOf: { mode: 'live' }, sinceFork: false, fromChat: 'c1' });
+  const toMain = (s: AppState) => reducer(s, { type: 'SET_STATUS', head: 'h2', branch: 'main', embeddingsEnabled: false, ontologyRoot: 'kb', branchWritable: false, experiment: null });
+
+  it('a landing then a branch move: back is the old branch, head, experiment, write gate, fact and since-fork', () => {
+    const away = toMain(land(onExp));
+    expect(away).toMatchObject({ branch: 'main', experiment: null, sinceFork: false, factPath: 'kb/b.md' });
+    expect(reducer(away, { type: 'NAV_BACK' })).toMatchObject({ branch: 'exp/try', headCommit: 'h1', experiment: exp, branchWritable: true, sinceFork: true, factPath: 'kb/a.md', chatReturn: 'c1' });
+  });
+  it('on the same branch it keeps the newer head and the experiment as they are', () => {
+    const away = reducer(land(onExp), { type: 'SET_HEAD', head: 'h9' });
+    expect(reducer(away, { type: 'NAV_BACK' })).toMatchObject({ branch: 'exp/try', headCommit: 'h9', sinceFork: true });
+  });
+  it('since-fork never comes back outside an experiment', () => {
+    const left = reducer(land(onExp), { type: 'SET_STATUS', head: 'h1', branch: 'exp/try', embeddingsEnabled: false, ontologyRoot: 'kb', experiment: null });
+    expect(reducer(left, { type: 'NAV_BACK' }).sinceFork).toBe(false);
+  });
+});

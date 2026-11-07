@@ -21,8 +21,7 @@ export function CommitHash({ commit }: { commit: string }) {
 // CommitAuthorLine renders the commit author as an icon + identity: a bot for
 // agent authors, a person for humans. It shows the username, falling back to
 // the email when no name was recorded. Renders nothing when neither is present.
-// The chat's commit view draws it too.
-export function CommitAuthorLine({ author }: { author?: CommitAuthor }) {
+function CommitAuthorLine({ author }: { author?: CommitAuthor }) {
   if (!author || (!author.name && !author.email)) return null;
   const isAgent = author.email.endsWith(AGENT_EMAIL_DOMAIN);
   const label = author.name || author.email;
@@ -46,9 +45,8 @@ export function CommitAuthorLine({ author }: { author?: CommitAuthor }) {
   );
 }
 
-/** The label above a commit's file rows: the timeline's detail card and the
- *  chat's commit view. */
-export function CommitFilesLabel({ label, count }: { label: string; count: number }) {
+/** The label above a commit's file rows. */
+function CommitFilesLabel({ label, count }: { label: string; count: number }) {
   return (
     <div data-testid="commit-files-label" style={{ fontSize: 9, color: '#555', fontFamily: 'var(--k-font-mono)', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 6 }}>
       {label} · {count}
@@ -58,7 +56,7 @@ export function CommitFilesLabel({ label, count }: { label: string; count: numbe
 
 /** One file a commit touched: its action's glyph, its title, its path. `self`
  *  marks the fact the reader is on ("you are here"). */
-export function CommitFileRow({ file, self = false, disabled = false, onOpen }: {
+function CommitFileRow({ file, self = false, disabled = false, onOpen }: {
   file: CommitFile;
   self?: boolean;
   disabled?: boolean;

@@ -1490,9 +1490,10 @@ export default function App() {
     if (p.branch && p.branch !== cur.branch) {
       // The branch and the fact land in one render, and it is flushed here for
       // the same reason the effect below is a layout effect: a list read still
-      // in flight must be dropped before it can answer and select row 0. A branch
-      // that cannot be read leaves the one on screen: the commit is the repo's,
-      // so the fact still reads there.
+      // in flight must be dropped before it can answer and select row 0. The landing
+      // goes first: its entry is what the reader left, so it has to catch the old
+      // branch with the old fact and filters. A branch that cannot be read leaves
+      // the one on screen: the commit is the repo's, so the fact still reads there.
       const repo = cur.repo;
       const branch = p.branch;
       p.branch = undefined;
@@ -1500,8 +1501,8 @@ export default function App() {
         .then(s => {
           if (pendingBrowse.current !== p || stateRef.current.repo !== repo) return;
           flushSync(() => {
-            dispatch(statusAction(s));
             landPendingBrowse();
+            dispatch(statusAction(s));
           });
         })
         .catch(() => { if (pendingBrowse.current === p) flushSync(landPendingBrowse); });
@@ -2020,7 +2021,8 @@ export default function App() {
               <div key={c.id} data-testid={`chat-body-${c.id}`}
                 style={draftBody(!serverOpen && displayed.kind === 'chat' && displayed.id === c.id)}>
                 <ErrorBoundary variant="inline" label="The chat hit an error">
-                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} onBrowseFact={onBrowseFact} repos={repos} repoNames={repoNames} serverReadOnly={state.serverReadOnly} />
+                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} onBrowseFact={onBrowseFact} repos={repos} repoNames={repoNames} serverReadOnly={state.serverReadOnly}
+                    onScreen={!serverOpen && displayed.kind === 'chat' && displayed.id === c.id} />
                 </ErrorBoundary>
               </div>
             ))}

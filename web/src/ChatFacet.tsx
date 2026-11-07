@@ -255,13 +255,15 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
  * App keeps one mounted per live chat, so a chat's stream and transcript
  * survive the reader looking at a repository.
  */
-export function ChatFacet({ chat, facet, onGone, onNewChat, onBrowseFact, repos, repoNames, serverReadOnly = false }: {
+export function ChatFacet({ chat, facet, onGone, onNewChat, onBrowseFact, repos, repoNames, serverReadOnly = false, onScreen = true }: {
   chat: ChatInfo;
   /** The repos the page lists: a repo chip in an answer names one of them. */
   repos?: RepoRef[];
   /** What the fact view reads from the page, as Browse does (see FactView). */
   repoNames?: Record<string, string>;
   serverReadOnly?: boolean;
+  /** Whether this chat is the one on screen. Every chat stays mounted. */
+  onScreen?: boolean;
   /** Send the reader to Browse on a fact, from this chat. */
   onBrowseFact?: (chatId: string, req: BrowseFactRequest) => void;
   /** Start an empty chat with this chat's model (a notice's "New chat"). */
@@ -332,7 +334,7 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onBrowseFact, repos,
           {openEntry && (
             <ChatSidePanel chatId={chat.id} panel={panel} dispatch={dispatchPanel} running={state.running}
               width={panelWidth} onSplitterDown={onSplitterDown} onBrowse={onBrowseFact ? req => onBrowseFact(chat.id, req) : undefined}
-              repos={repos} repoNames={repoNames} serverReadOnly={serverReadOnly}
+              repos={repos} repoNames={repoNames} serverReadOnly={serverReadOnly} onScreen={onScreen && facet === 'chat'}
               boundFor={callId => boundBeforeCall(state.turns, callId)} callFor={callId => findCall(state.turns, callId)} />
           )}
         </div>

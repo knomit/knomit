@@ -9,8 +9,10 @@ import { init } from './state';
 import type { AppState } from './state';
 import { panelReducer } from './chatPanelState';
 import type { BrowseFactRequest, PanelEntry } from './chatPanelState';
+import type { RepoRef } from './chatFactLinks';
 import { installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
 import { stubFleetFetch } from './fleetTestFetch';
+import materializeCss from './materialize.css?raw';
 
 // Browse and the chat's side panel mount ONE fact view (FactView). These render
 // the same fact in both, through what each really mounts, and compare what is on
@@ -60,9 +62,10 @@ function Browse({ commit }: { commit?: string }) {
   return <RightPanel state={state} dispatch={() => {}} onScrub={() => {}} onHopRef={() => {}} onHopEdge={() => {}} repoNames={{}} incoming={edges.incoming} outgoing={edges.outgoing} edgesError={edges.error} refCommits={edges.refCommits} />;
 }
 
-function Panel({ entry, onBrowse }: { entry: PanelEntry; onBrowse?: (r: BrowseFactRequest) => void }) {
+function Panel({ entry, onBrowse, repos, serverReadOnly, onScreen, running = false }: { entry: PanelEntry; onBrowse?: (r: BrowseFactRequest) => void; repos?: RepoRef[]; serverReadOnly?: boolean; onScreen?: boolean; running?: boolean }) {
   const [panel, dispatch] = useReducer(panelReducer, { entry });
-  return <ChatSidePanel chatId="c" panel={panel} dispatch={dispatch} running={false} width={470} onSplitterDown={() => {}} onBrowse={onBrowse} />;
+  // Off screen is display:none on an ancestor, as App draws a chat behind Browse.
+  return <div style={onScreen === false ? { display: 'none' } : undefined}><ChatSidePanel chatId="c" panel={panel} dispatch={dispatch} running={running} width={470} onSplitterDown={() => {}} onBrowse={onBrowse} repos={repos} serverReadOnly={serverReadOnly} onScreen={onScreen} /></div>;
 }
 
 const settled = async (root: HTMLElement) => {
@@ -90,7 +93,7 @@ const inPanel = (entry: Omit<Extract<PanelEntry, { kind: 'fact' }>, 'kind' | 're
   render(<Panel onBrowse={onBrowse} entry={{ kind: 'fact', repo: 'r1', branch: 'main', path: PATH, ...entry }} />).container;
 
 beforeEach(() => { installFakeEventSource(); localStorage.clear(); window.history.replaceState(null, '', '/'); vi.mocked(FactView).mockClear(); });
-afterEach(() => { cleanup(); uninstallFakeEventSource(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); uninstallFakeEventSource(); vi.unstubAllGlobals(); delete document.documentElement.dataset.matFocus; });
 
 describe('a fact in Browse and in the chat panel', () => {
   it('live: the same component, the same DOM', async () => {
@@ -194,5 +197,126 @@ describe('a fact in Browse and in the chat panel', () => {
     const b = within(await settled(inBrowse()));
     fireEvent.click(b.getByTestId('materialize-btn'));
     await waitFor(() => expect(window.location.search).not.toBe(''));
+  });
+});
+
+// The one place the panel can write: the editor of a fact that cannot be parsed. It
+// follows the same gate as Browse, from what the panel learns about the repo and branch.
+// SABOTAGE: treat every branch as writable; ignore a subscription; ignore a read-only server.
+describe('the panel\'s write gate', () => {
+  const entry: PanelEntry = { kind: 'fact', repo: 'r1', branch: 'main', path: PATH };
+  const broken = { ...FACT, parse_error: 'bad yaml', body: 'raw', as_of: { commit: NEWEST, date: '2026-11-01T10:00:00Z' } };
+  const statusRoute = (writable: boolean) => ({ [`GET ${BRANCH}`]: { body: { head: NEWEST, branch: 'main', writable, ontology_root: 'kb', index_state: 'ready' } } });
+  const settle = () => new Promise(r => setTimeout(r, 30));
+
+  it('a writable branch of an ordinary repo can save, and the save goes to that branch', async () => {
+    const fx = stubFleetFetch({ ...common, ...routes(BRANCH, broken), ...statusRoute(true), [`PUT ${BRANCH}/facts/${PATH}`]: { body: FACT } });
+    render(<Panel entry={entry} />);
+    const save = await screen.findByTestId('fact-save-btn');
+    await waitFor(() => expect(save).toBeEnabled());
+    fireEvent.click(save);
+    await waitFor(() => expect(fx.calls.some(c => c.route === `PUT ${BRANCH}/facts/${PATH}`)).toBe(true));
+  });
+  it('a branch the server says cannot be written cannot save', async () => {
+    stubFleetFetch({ ...common, ...routes(BRANCH, broken), ...statusRoute(false) });
+    render(<Panel entry={entry} />);
+    const save = await screen.findByTestId('fact-save-btn');
+    await settle();
+    expect(save).toBeDisabled();
+  });
+  it('a subscription cannot save, whatever its branch says', async () => {
+    stubFleetFetch({ ...common, ...routes(BRANCH, broken), ...statusRoute(true) });
+    render(<Panel entry={entry} repos={[{ name: 'r1', mode: 'subscribe' }]} />);
+    const save = await screen.findByTestId('fact-save-btn');
+    await settle();
+    expect(save).toBeDisabled();
+  });
+  it('a read-only server cannot save', async () => {
+    stubFleetFetch({ ...common, ...routes(BRANCH, broken), ...statusRoute(true) });
+    render(<Panel entry={entry} serverReadOnly />);
+    const save = await screen.findByTestId('fact-save-btn');
+    await settle();
+    expect(save).toBeDisabled();
+  });
+  it('a fact read at a commit cannot save', async () => {
+    const atRoutes = routes(`${BRANCH}/commits/${AT}`, broken);
+    stubFleetFetch({ ...common, ...atRoutes, ...statusRoute(true) });
+    render(<Panel entry={{ ...entry, commit: AT }} />);
+    const save = await screen.findByTestId('fact-save-btn');
+    await settle();
+    expect(save).toBeDisabled();
+  });
+});
+
+describe('the ×', () => {
+  it('is there while the fact loads, before there is a band', async () => {
+    let release: () => void = () => {};
+    stubFleetFetch({ ...common, ...routes(BRANCH, { ...FACT, as_of: { commit: NEWEST, date: '2026-11-01T10:00:00Z' } }) });
+    const inner = fetch as unknown as (input: string, init?: RequestInit) => Promise<Response>;
+    vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+      if (String(input).endsWith(`/facts/${PATH}`)) await new Promise<void>(r => { release = r; });
+      return inner(input, init);
+    }));
+    render(<Panel entry={{ kind: 'fact', repo: 'r1', branch: 'main', path: PATH }} />);
+    expect(await screen.findByText('Loading...')).toBeInTheDocument();
+    expect(screen.queryByTestId('fact-band')).toBeNull();
+    expect(screen.getByTestId('chat-panel-close')).toBeInTheDocument();
+    release();
+    await screen.findByTestId('fact-band');
+  });
+  it('is in the materialize view\'s bar, and it closes the panel, Focus with it', async () => {
+    stubFleetFetch({ ...common, ...routes(BRANCH, { ...FACT, as_of: { commit: NEWEST, date: '2026-11-01T10:00:00Z' } }) });
+    const p = within(await settled(inPanel()));
+    fireEvent.click(p.getByTestId('materialize-btn'));
+    const actions = await screen.findByTestId('mat-actions');
+    expect(document.documentElement.dataset.matFocus).toBe('1');
+    fireEvent.click(within(actions).getByTestId('chat-panel-close'));
+    await waitFor(() => expect(screen.queryByTestId('chat-side-panel')).toBeNull());
+    expect(document.documentElement.dataset.matFocus).toBeUndefined();
+  });
+  it('Browse\'s materialize view has none', async () => {
+    stubFleetFetch({ ...common, ...routes(BRANCH, { ...FACT, as_of: { commit: NEWEST, date: '2026-11-01T10:00:00Z' } }) });
+    const b = within(await settled(inBrowse()));
+    fireEvent.click(b.getByTestId('materialize-btn'));
+    const actions = await screen.findByTestId('mat-actions');
+    expect(within(actions).queryByTestId('chat-panel-close')).toBeNull();
+  });
+});
+
+// A chat stays mounted behind Browse. SABOTAGE: useMatFocus ignores `hidden`.
+describe('the panel\'s Focus while its chat is not on screen', () => {
+  const entry: PanelEntry = { kind: 'fact', repo: 'r1', branch: 'main', path: PATH };
+  const inFocus = async () => {
+    stubFleetFetch({ ...common, ...routes(BRANCH, { ...FACT, as_of: { commit: NEWEST, date: '2026-11-01T10:00:00Z' } }) });
+    const utils = render(<Panel entry={entry} />);
+    fireEvent.click(within(await settled(utils.container)).getByTestId('materialize-btn'));
+    await screen.findByTestId('mat-actions');
+    expect(document.documentElement.dataset.matFocus).toBe('1');
+    return utils;
+  };
+  it('has no effect on the shell, and comes back with the chat', async () => {
+    const { rerender } = await inFocus();
+    rerender(<Panel entry={entry} onScreen={false} />);
+    expect(document.documentElement.dataset.matFocus).toBeUndefined();
+    rerender(<Panel entry={entry} onScreen />);
+    expect(document.documentElement.dataset.matFocus).toBe('1');
+  });
+  it('does not take Esc', async () => {
+    const { rerender } = await inFocus();
+    rerender(<Panel entry={entry} onScreen={false} />);
+    const shell = vi.fn();
+    window.addEventListener('keydown', shell);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    window.removeEventListener('keydown', shell);
+    expect(shell).toHaveBeenCalledOnce();
+    // It was not spent on the hidden view: Focus is still on when the chat returns.
+    rerender(<Panel entry={entry} onScreen />);
+    expect(document.documentElement.dataset.matFocus).toBe('1');
+  });
+  it('fills the window in a chat, through the same attribute', () => {
+    const rule = materializeCss.slice(materializeCss.indexOf("html[data-mat-focus]"));
+    for (const sel of ['.k-chat-main', '.k-chat-result', "[data-testid='chat-panel-splitter']", "[data-testid='chat-panel-footer']"]) expect(rule).toContain(`html[data-mat-focus] ${sel}`);
+    // Undisplayed, ChatPanel would think its chat is off screen and Esc could not Stop.
+    expect(rule).not.toMatch(/\.k-chat-main[^{]*\{[^}]*display: none/);
   });
 });

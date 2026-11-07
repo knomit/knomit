@@ -6,6 +6,7 @@ import type { Fact, RefGroup } from './api';
 import type { Action, FactPanel, FactReading } from './state';
 import { selectAnchorCommit, isReadOnly, isLive, READ_ONLY_TITLE, readOnlyTitle as readOnlyTitleFor, isLensContext, factHistoryAnchor, factTitleKey, openFactSourceResolved } from './state';
 import { MaterializeView } from './MaterializeView';
+import type { MatFocusScope } from './useMatFocus';
 import { parseMaterializeParams, writeMaterializeParams } from './materializeOptions';
 import type { MatOptions } from './materializeApi';
 import { NoVersionAtCommit } from './NoVersionAtCommit';
@@ -260,13 +261,15 @@ export interface FactViewProps {
   /** The materialize view keeps its options in the page's query string, as Browse
    *  does. Off, they stay here and the URL is left alone. */
   materializeInUrl?: boolean;
+  /** See MatFocusScope. */
+  materializeFocus?: MatFocusScope;
   /** What another of Browse's views shows in this fact's place (a FactSet, a diff). */
   replacedBy?: ReactNode;
   /** Shown when no fact is open. */
   noFact?: ReactNode;
 }
 
-export function FactView({ reading, dispatch, onScrub, onHopRef, onHopEdge, repoNames, refCommits = EMPTY_REF_COMMITS, incoming = EMPTY_EDGES, outgoing = EMPTY_EDGES, edgesError = null, onOpenPanel, bandAction, hideRetract = false, materializeInUrl = true, replacedBy, noFact }: FactViewProps) {
+export function FactView({ reading, dispatch, onScrub, onHopRef, onHopEdge, repoNames, refCommits = EMPTY_REF_COMMITS, incoming = EMPTY_EDGES, outgoing = EMPTY_EDGES, edgesError = null, onOpenPanel, bandAction, hideRetract = false, materializeInUrl = true, materializeFocus, replacedBy, noFact }: FactViewProps) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The commit an anchored read found this fact's repo does not hold (404
@@ -403,7 +406,7 @@ export function FactView({ reading, dispatch, onScrub, onHopRef, onHopEdge, repo
   // In a lens context the open fact must be read THROUGH the lens: factPath is
   // the RAW canonical address (bare for the write repo, kb://<id12>/… for a read
   // mount), which the repo-scoped api.fact endpoint can't resolve. getLensFact
-  // resolves it and returns the source mount, which RightPanel re-dispatches
+  // resolves it and returns the source mount, which this view re-dispatches
   // (coherent with Library's row-click open) so a failed/racing open can't strand
   // a stale factSource on the new factPath (the m30 regression).
   const lensCtx = isLensContext(reading);
@@ -619,6 +622,8 @@ export function FactView({ reading, dispatch, onScrub, onHopRef, onHopEdge, repo
           options={mat.options}
           onOptionsChange={options => setMat(m => ({ ...m, options }))}
           onBack={() => setMat(m => ({ ...m, open: false }))}
+          focusScope={materializeFocus}
+          barAction={bandAction}
         />
       </div>
     );

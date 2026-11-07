@@ -1707,6 +1707,103 @@ describe('a chat target', () => {
       expect(m.fact.mock.calls.filter(c => c[2] === PATH).every(c => c[1] === 'read/branch')).toBe(true);
     });
 
+    // A landing that moves the branch: its entry holds what the reader left, and Back
+    // restores all of it. The old fact does not exist on the branch landed on.
+    // SABOTAGE: status before the landing; NAV_BACK without the branch; no sinceFork in NavEntry.
+    const onlyOnExp = (m: Record<string, ReturnType<typeof vi.fn>>) => {
+      const answer = m.fact.getMockImplementation() as unknown as (...a: unknown[]) => unknown;
+      m.fact.mockImplementation(async (r: string, b: string, path: string, c?: string) => {
+        if (path === ROW0 && b !== 'exp/try') throw new Error(`no fact at path ${path} on branch ${b}`);
+        return answer(r, b, path, c);
+      });
+    };
+    const inExperimentOnAFact = async (chip: string) => {
+      const m = await toTheChipsFact({ start: 'core-kb', mode: 'recent', ms: 0, branch: chip, status: (_r, b) => (b === 'read/branch' ? statusOf('read/branch') : EXP_STATUS) });
+      onlyOnExp(m);
+      fireEvent.click(await screen.findByTestId('since-fork-toggle'));
+      await waitFor(() => expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + ROW0));
+      expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'true');
+      fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+      m.fact.mockClear();
+      fireEvent.click(await screen.findByTestId('fact-link'), { metaKey: true });
+      await landed(0);
+      return m;
+    };
+    const backThenBrowse = async () => {
+      fireEvent.keyDown(window, { key: '[', metaKey: true });
+      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
+      fireEvent.click(screen.getByTestId('rail-repo-core-kb'));
+      await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+      await act(async () => { await new Promise(r => setTimeout(r, 60)); });
+    };
+    it('leaving an experiment by a landing: Back restores the branch, the fact and since-fork, and Browse is not a 404', async () => {
+      const m = await inExperimentOnAFact('read/branch');
+      expect(m.fact.mock.calls.at(-1)?.[1]).toBe('read/branch');
+      expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + PATH);
+      expect(screen.queryByTestId('since-fork-toggle')).toBeNull(); // not in the experiment now
+      await backThenBrowse();
+      const body = screen.getByTestId('browse-facet').textContent;
+      expect(body).toContain('BODY OF ' + ROW0);
+      expect(body).not.toContain('no fact at path');
+      expect(m.fact.mock.calls.at(-1)?.[1]).toBe('exp/try');
+      expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'true');
+    });
+    it('a landing on the same experiment branch: since-fork is off there, and Back turns it on again', async () => {
+      await inExperimentOnAFact('exp/try');
+      expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'false');
+      await backThenBrowse();
+      expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'true');
+      expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + ROW0);
+    });
+    it('a landing that moves between ordinary branches restores the branch too', async () => {
+      const m = await toTheChipsFact({ start: 'core-kb', mode: 'recent', ms: 0, branch: 'read/branch', status: (_r, b) => statusOf(b || 'machine/test') });
+      const answer = m.fact.getMockImplementation() as unknown as (...a: unknown[]) => unknown;
+      m.fact.mockImplementation(async (r: string, b: string, path: string, c?: string) => {
+        if (path === ROW0 && b === 'read/branch') throw new Error('no fact at path');
+        return answer(r, b, path, c);
+      });
+      await waitFor(() => expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + ROW0));
+      fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+      fireEvent.click(await screen.findByTestId('fact-link'), { metaKey: true });
+      await landed(0);
+      await backThenBrowse();
+      expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + ROW0);
+      expect(m.fact.mock.calls.at(-1)?.[1]).toBe('machine/test');
+    });
+
+    // The chat stays mounted behind Browse, and its Focus must not reach it.
+    // SABOTAGE: useMatFocus ignores `hidden`; App does not pass onScreen.
+    const matFocus = () => document.documentElement.dataset.matFocus;
+    const inPanelFocus = async () => {
+      await toTheChipsFact({ start: 'core-kb', mode: 'path', ms: 0 });
+      const view = await openChip();
+      fireEvent.click(view.getByTestId('materialize-btn'));
+      await screen.findByTestId('mat-actions');
+      expect(matFocus()).toBe('1');
+    };
+    for (const [way, go] of [
+      ['cmd-click on a chip', () => fireEvent.click(screen.getByTestId('fact-link'), { metaKey: true })],
+      ['the rail', () => fireEvent.click(screen.getByTestId('rail-repo-core-kb'))],
+    ] as const) it(`the panel's Focus does not follow the reader to Browse by ${way}, and Esc there is Browse's`, async () => {
+      await inPanelFocus();
+      go();
+      await landed(0);
+      expect(matFocus()).toBeUndefined();
+      if (way === 'cmd-click on a chip') expect(screen.getAllByTestId('filter-chip').length).toBeGreaterThan(0);
+      fireEvent.keyDown(window, { key: 'Escape' }); // Browse's: CLEAR_FILTERS
+      await waitFor(() => expect(screen.queryAllByTestId('filter-chip')).toHaveLength(0));
+      fireEvent.click(screen.getByTestId('rail-chat-chat-a'));
+      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
+      expect(matFocus()).toBe('1'); // it was not spent, and the chat is as it was
+    });
+    it('the chat\'s Settings tab hides the panel, and its Focus with it', async () => {
+      await inPanelFocus();
+      fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+      await waitFor(() => expect(matFocus()).toBeUndefined());
+      fireEvent.click(screen.getByRole('tab', { name: 'Chat' }));
+      await waitFor(() => expect(matFocus()).toBe('1'));
+    });
+
     // S4: a branch that cannot be read lands in the same task as the rejection, or the
     // list read in flight answers first and selects row 0.
     it('a branch that cannot be read lands on the fact even with the list answering in the same microtask', async () => {

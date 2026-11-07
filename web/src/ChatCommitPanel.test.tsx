@@ -335,6 +335,44 @@ describe('a commit chip opens the commit in the side panel', () => {
     expect(screen.queryByTestId('chat-side-panel')).toBeNull();
   });
 
+  // kb/decisions/web/chat/side-panel/c12285c0: Stop always wins, Focus included.
+  // SABOTAGE: useMatFocus takes Esc without asking (yieldsEsc): Focus goes off, no cancel.
+  describe('Esc in the panel\'s materialize Focus', () => {
+    const inFocus = async (running: boolean) => {
+      const fx = mount({
+        [`GET ${BASE}`]: { body: { ...snapshot(), running, items: [...snapshot().items, ...(running ? [{ kind: 'user', text: 'and?' } as const] : [])] } },
+        [`POST ${BASE}/cancel`]: { body: {} },
+        [`GET ${REPO}/commits/${FULL}/facts/${CHANGED}`]: { body: factAt(CHANGED, 'The changed fact', 'x', FULL) },
+      }).fx;
+      await clickChip();
+      await screen.findByTestId('chat-commit');
+      fireEvent.click(rowFor('The changed fact'));
+      fireEvent.click(await screen.findByTestId('materialize-btn'));
+      await screen.findByTestId('mat-actions');
+      expect(document.documentElement.dataset.matFocus).toBe('1');
+      return fx;
+    };
+    afterEach(() => { delete document.documentElement.dataset.matFocus; });
+    const cancels = (fx: ReturnType<typeof stubFleetFetch>) => fx.calls.filter(c => c.route === `POST ${BASE}/cancel`);
+
+    it('with a turn running it is Stop, and Focus stays', async () => {
+      const fx = await inFocus(true);
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+      await waitFor(() => expect(cancels(fx)).toHaveLength(1));
+      expect(document.documentElement.dataset.matFocus).toBe('1');
+      expect(screen.getByTestId('chat-side-panel')).toBeInTheDocument();
+    });
+    it('with no turn running it leaves Focus, then closes the panel', async () => {
+      const fx = await inFocus(false);
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+      await waitFor(() => expect(document.documentElement.dataset.matFocus).toBeUndefined());
+      expect(screen.getByTestId('chat-side-panel')).toBeInTheDocument();
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+      await waitFor(() => expect(screen.queryByTestId('chat-side-panel')).toBeNull());
+      expect(cancels(fx)).toHaveLength(0);
+    });
+  });
+
   it('Esc closes it and the chip reopens it', async () => {
     mount();
     await clickChip();

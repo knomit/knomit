@@ -66,7 +66,8 @@ export async function resolveNavRequest(
     //
     // SINCE-FORK GOES TOO: Library counts it as a content filter, so it demotes
     // Path to Recent exactly as a chip does, and row 0 would then replace the fact.
-    // Without it, the three things that can demote the tree are all gone.
+    // Without it, the three things that can demote the tree are all gone. Back
+    // restores it (NavEntry), with the rest of what the reader left.
     const dir = parentDir(displayLensPath(req.factPath));
     dispatch({
       type: 'APPLY_NAV', view: 'library', factPath: req.factPath, asOf: req.asOf ?? { mode: 'live' },
