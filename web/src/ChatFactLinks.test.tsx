@@ -131,6 +131,17 @@ describe('chat fact links', () => {
     ]);
   });
 
+  it('a failed bind to a second repo is left out of prefer, so the turn still names one repo', async () => {
+    const { fx } = mount(snapshot([
+      { kind: 'user', text: 'q' },
+      { kind: 'tool_call', id: 'tu_1', name: 'knomit_bind', state: 'done', arguments: { repo: 'agentic-engineering' } },
+      { kind: 'tool_call', id: 'tu_2', name: 'knomit_bind', state: 'done', is_error: true, arguments: { repo: 'no-such-repo' } },
+      { kind: 'assistant', text: 'see `3fc77970`' },
+    ]));
+    await screen.findByTestId('fact-link');
+    expect(resolveCalls(fx)[0].body).toEqual({ handles: ['3fc77970'], prefer: ['agentic-engineering'] });
+  });
+
   it('a fact the server could not parse (no confidence) shows no confidence in the card, as Browse leaves a missing one out', async () => {
     const { confidence: _c, kind: _k, origin: _o, sources: _s, ...unparsed } = POLICY;
     void _c; void _k; void _o; void _s;

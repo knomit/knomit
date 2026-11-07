@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { factCandidates, isFactCandidate, repoChipName } from './chatFactLinks';
+import { factCandidates, isFactCandidate, repoChipName, turnPrefer } from './chatFactLinks';
+import type { ChatTurn, ToolCall } from './chatState';
 
 describe('isFactCandidate', () => {
   it('takes 8-hex short ids, fact handles and paths, and kb:// URIs', () => {
@@ -73,5 +74,41 @@ describe('repoChipName', () => {
     expect(repoChipName('kb://3ec012f5b4d2', full)).toBe('knomit-kb');
     expect(repoChipName('kb://3ec012f5b4d2aaaabbbbccccddddeeeeffff0000', full)).toBe('knomit-kb');
     expect(repoChipName('kb://3ec012f5b4d2aaaa', full)).toBeNull();
+  });
+});
+
+describe('turnPrefer', () => {
+  const call = (id: string, name: string, args: unknown, isError = false): ToolCall => ({ id, name, state: 'done', isError, args });
+  const turn = (...calls: ToolCall[]): ChatTurn => ({ parts: [{ kind: 'group', calls }] }) as unknown as ChatTurn;
+
+  it('a failed bind is not a repo the turn worked in, so one repo stays preferred', () => {
+    const t = turn(
+      call('a', 'knomit_bind', { repo: 'one' }),
+      call('b', 'knomit_bind', { repo: 'two' }, true),
+      call('c', 'knomit_query', { text: 'x' }),
+    );
+    expect(turnPrefer([t], 0)).toEqual(['one']);
+  });
+
+  it('a successful bind to the second repo does count, latest first', () => {
+    const t = turn(
+      call('a', 'knomit_bind', { repo: 'one' }),
+      call('b', 'knomit_bind', { repo: 'two' }),
+    );
+    expect(turnPrefer([t], 0)).toEqual(['two', 'one']);
+  });
+
+  it('a failed call that is not a bind keeps counting', () => {
+    const t = turn(
+      call('a', 'knomit_bind', { repo: 'one' }),
+      call('b', 'knomit_query', { text: 'x', repo: 'two' }, true),
+    );
+    expect(turnPrefer([t], 0)).toEqual(['two', 'one']);
+  });
+
+  it('a failed bind in an earlier turn leaves the binding in force as it was', () => {
+    const first = turn(call('a', 'knomit_bind', { repo: 'one' }), call('b', 'knomit_bind', { repo: 'two' }, true));
+    const second = turn(call('c', 'knomit_query', { text: 'x' }));
+    expect(turnPrefer([first, second], 1)).toEqual(['one']);
   });
 });

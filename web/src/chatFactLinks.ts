@@ -9,7 +9,7 @@
 import { createContext, useEffect, useRef, useState } from 'react';
 import { factLinksMore } from './chatCopy';
 import { resolveFactHandles } from './chatApi';
-import { boundAfter, callTarget } from './chatState';
+import { boundAfter, callTarget, toolKind } from './chatState';
 import type { ChatTurn } from './chatState';
 
 /** One answer of POST /api/v1/facts/resolve. */
@@ -243,6 +243,9 @@ const argStr = (args: unknown, name: string): string => {
  * prefer: what each of its calls acted on (a bind's target, a call's repo or
  * lens argument, else the binding in force) and the store of a kb:// file it
  * named, latest call first; then the binding in force when the turn began.
+ * A bind that failed worked in nothing, as boundAfter also holds, so it does
+ * not count: a failed bind to a second repo must not stop a commit link from
+ * resolving (the server resolves a hash only with exactly one repo preferred).
  * Tool RESULTS are not in the transcript (they are fetched lazily), so a
  * kb:// in a result does not count.
  */
@@ -254,7 +257,7 @@ export function turnPrefer(turns: ChatTurn[], ti: number): string[] {
   for (const p of turns[ti]?.parts ?? []) {
     if (p.kind !== 'group') continue;
     for (const c of p.calls) {
-      own.push(callTarget(c, bound));
+      if (!(toolKind(c.name) === 'bind' && c.isError)) own.push(callTarget(c, bound));
       const store = /^kb:\/\/([^/\s]+)\//.exec(argStr(c.args, 'file') || argStr(c.args, 'path'))?.[1];
       if (store) own.push(store);
       bound = boundAfter([c], bound);
