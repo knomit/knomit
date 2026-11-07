@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, Dispatch, MouseEvent as ReactMouseEvent } from 'react';
+import { ChatCommitView } from './ChatCommitView';
 import { ChatFactView } from './ChatFactView';
 import { ChatResultPanel } from './ChatResultPanel';
 import { FacetSplitter } from './FacetColumns';
@@ -47,8 +48,8 @@ function typingIn(el: Element | null): boolean {
 }
 
 /**
- * ChatSidePanel is the 470px panel on the right of a chat: a fact or a tool
- * result, a 40px header (back, forward, breadcrumb, Open in Browse, close) and
+ * ChatSidePanel is the 470px panel on the right of a chat: a fact, a commit or
+ * a tool result, a 40px header (back, forward, breadcrumb, Open in Browse, close) and
  * a footer. It is mounted only while open, so it costs nothing before a step is
  * clicked; the chat column beside it narrows to make room.
  *
@@ -70,8 +71,9 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
   running: boolean;
   width: number;
   onSplitterDown: (e: ReactMouseEvent) => void;
-  /** Open this fact in Browse. Absent where the page cannot navigate. */
-  onOpenInBrowse?: (repo: string, path: string) => void;
+  /** Open this fact in Browse, at `commit` when the panel shows it as it read
+   *  at a commit. Absent where the page cannot navigate. */
+  onOpenInBrowse?: (repo: string, path: string, commit?: string) => void;
   /** The repo or lens the chat was bound to when a call ran (a result with no
    *  target of its own belongs to it). */
   boundFor?: (callId: string) => string;
@@ -125,8 +127,14 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
 
   if (!entry) return null;
   const known = entry.kind === 'result' ? calls[entry.callId] : undefined;
-  const crumb = entry.kind === 'fact' ? crumbOf(entry.repo, entry.path) : known?.crumb ?? [];
-  const browse = entry.kind === 'fact' ? { repo: entry.repo, path: entry.path } : known?.browse;
+  const crumb = entry.kind === 'fact' ? crumbOf(entry.repo, entry.path)
+    : entry.kind === 'commit' ? [entry.repo, entry.commit.slice(0, 7)] : known?.crumb ?? [];
+  // Browse has no repo-at-commit view, so a commit offers no way there. A fact
+  // read at a commit opens at that commit: the latest version (or none, if it
+  // was retracted) is not what the reader was looking at.
+  const browse: { repo: string; path: string; commit?: string } | undefined = entry.kind === 'fact'
+    ? { repo: entry.repo, path: entry.path, ...(entry.commit ? { commit: entry.commit } : {}) }
+    : entry.kind === 'result' ? known?.browse : undefined;
   const canBack = panel.index > 0;
   const canForward = panel.index < panel.entries.length - 1;
 
@@ -145,7 +153,7 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
             ))}
           </div>
           {browse && onOpenInBrowse && (
-            <button type="button" data-testid="chat-panel-browse" onClick={() => onOpenInBrowse(browse.repo, browse.path)} style={browseBtn}>
+            <button type="button" data-testid="chat-panel-browse" onClick={() => { if (browse.commit) onOpenInBrowse(browse.repo, browse.path, browse.commit); else onOpenInBrowse(browse.repo, browse.path); }} style={browseBtn}>
               {PANEL_OPEN_IN_BROWSE}{ICON_EXTERNAL}
             </button>
           )}
@@ -155,7 +163,12 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
           {entry.kind === 'result'
             ? <ChatResultPanel chatId={chatId} callId={entry.callId} row={callFor?.(entry.callId)} onCall={onCall} />
-            : <ChatFactView repo={entry.repo} branch={entry.branch} path={entry.path} commit={entry.commit} />}
+            : entry.kind === 'commit'
+              ? <ChatCommitView repo={entry.repo} branch={entry.branch} commit={entry.commit} onOpenFact={(path, removed) => dispatch({
+                  type: 'open',
+                  entry: { kind: 'fact', repo: entry.repo, branch: entry.branch, path, commit: entry.commit, ...(removed ? { removed: true } : {}) },
+                })} />
+              : <ChatFactView repo={entry.repo} branch={entry.branch} path={entry.path} commit={entry.commit} removed={entry.removed} />}
         </div>
         <div data-testid="chat-panel-footer" style={footer}>
           {keyHint(PANEL_KEY_CLOSE)}{keyHint(PANEL_KEY_BACK)}

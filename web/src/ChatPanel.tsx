@@ -78,7 +78,7 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
    *  the side panel, and what a link does. */
   factLinks?: {
     repos: RepoRef[]; openKey: string | null; onOpen?: (f: ResolvedFact) => void; onBrowse?: (repo: string, path: string) => void;
-    onCommit?: (repo: string, commit: string) => void;
+    onCommit?: (repo: string, branch: string, commit: string) => void;
   };
 }) {
   const [draft, setDraft] = useState('');

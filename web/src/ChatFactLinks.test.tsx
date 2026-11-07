@@ -161,9 +161,8 @@ describe('chat fact links', () => {
     vi.useRealTimers();
   });
 
-  it('a commit hash the server resolved in the turn\'s repo is the timeline\'s CommitHash, linking to that version; others stay code', async () => {
+  it('a commit hash the server resolved in the turn\'s repo is the timeline\'s CommitHash; others stay code', async () => {
     const FULL = 'abc1234' + 'f'.repeat(33);
-    const onOpenCommit = vi.fn();
     const fx = stubFleetFetch({
       [`GET ${BASE}`]: { body: snapshot([
         { kind: 'user', text: 'q' },
@@ -177,7 +176,7 @@ describe('chat fact links', () => {
           : [] };
       },
     });
-    render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} onOpenCommit={onOpenCommit} repos={[]} />);
+    render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} repos={[]} />);
     const link = await screen.findByTestId('commit-link');
     expect(resolveCalls(fx)[0].body).toEqual({ handles: ['abc1234', '1111111'], prefer: ['agentic-engineering'] });
     expect(within(link).getByTestId('commit-hash')).toHaveTextContent('abc1234');
@@ -187,8 +186,6 @@ describe('chat fact links', () => {
     expect(link).toHaveAttribute('title', FULL);
     const codes = [...screen.getByTestId('chat-turn-0').querySelectorAll('code')].map(c => c.textContent);
     expect(codes).toEqual(['1111111']);
-    fireEvent.click(link);
-    expect(onOpenCommit).toHaveBeenCalledWith('agentic-engineering', FULL);
   });
 
   it('a failed resolve leaves the code as code and is not retried, on this mount or the next', async () => {

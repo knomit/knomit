@@ -1462,8 +1462,8 @@ export default function App() {
   }), [addChat, dispatchView, repos, lenses, creates]);
   // The chat side panel's "Open in Browse": switch to the repository, then
   // open the fact once its branch has landed (a context switch clears it).
-  // A chat commit link lands the same way, then anchors Browse at that commit
-  // (asOf history, as the filter bar's "as of" does), with no fact opened.
+  // A fact the panel shows as it read at a commit opens at that commit: the
+  // fact and its anchor as one position.
   const pendingBrowse = useRef<{ ctx: BrowseContext; path: string; commit?: string } | null>(null);
   const openPendingBrowse = useCallback(() => {
     const p = pendingBrowse.current;
@@ -1474,7 +1474,7 @@ export default function App() {
       : cur.context.kind === 'lens' && cur.context.name === p.ctx.name;
     if (!here) return;
     pendingBrowse.current = null;
-    if (p.commit) dispatch({ type: 'SET_AS_OF', asOf: { mode: 'history', commit: p.commit } });
+    if (p.commit) dispatch({ type: 'APPLY_NAV', view: 'library', factPath: p.path, asOf: { mode: 'history', commit: p.commit } });
     else navigate({ view: 'library', factPath: p.path, reveal: true });
   }, [navigate, dispatch]);
   const onOpenCommit = useCallback((repo: string, commit: string) => {
@@ -1485,9 +1485,9 @@ export default function App() {
   }, [onSelectTarget, openPendingBrowse]);
   // `target` is a repo or a lens (a chat binds to either). A lens addresses a
   // fact as kb://<store>/<path>, a repo by the bare path.
-  const onOpenInBrowse = useCallback((target: string, file: string) => {
+  const onOpenInBrowse = useCallback((target: string, file: string, commit?: string) => {
     const ctx: BrowseContext = lenses.some(l => l.name === target) ? { kind: 'lens', name: target } : { kind: 'repo', repo: target };
-    pendingBrowse.current = { ctx, path: ctx.kind === 'lens' ? file : file.replace(/^kb:\/\/[^/]+\//, '') };
+    pendingBrowse.current = { ctx, path: ctx.kind === 'lens' ? file : file.replace(/^kb:\/\/[^/]+\//, ''), ...(commit ? { commit } : {}) };
     onSelectTarget(ctx);
     openPendingBrowse();
   }, [lenses, onSelectTarget, openPendingBrowse]);

@@ -3,7 +3,7 @@ import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { TypeIcon } from './icons';
 import { RepoDot } from './settingsParts';
 import { defaultTypeStyle, typeStyles } from './utils';
-import { FactLinkContext, factKey } from './chatFactLinks';
+import { FactLinkContext, commitKey, factKey } from './chatFactLinks';
 import type { ResolvedFact } from './chatFactLinks';
 import { PANEL_OPEN_IN_BROWSE } from './chatCopy';
 import { createPortal } from 'react-dom';
@@ -118,16 +118,18 @@ const asFact = (f: ResolvedFact): Fact => ({
 
 const CARD_W = 340;
 
-/** A commit link: the hash as the timeline draws it (CommitHash), opening
- *  Browse on its repo as of that commit. The full hash is the title. */
+/** A commit link: the hash as the timeline draws it (CommitHash), opening the
+ *  commit in the side panel. The full hash is the title. It stays highlighted
+ *  while that commit is on screen, as a fact link does. */
 export function CommitLink({ handle }: { handle: string }) {
   const env = useContext(FactLinkContext);
   const f = env.facts.get(handle);
   if (!f?.commit) return <code>{handle}</code>;
-  const { repo, commit } = f;
+  const { repo, branch, commit } = f;
+  const open = env.openKey === commitKey(repo, branch, commit);
   return (
-    <button type="button" data-testid="commit-link" className="k-commit-link" title={commit}
-      onClick={e => { e.preventDefault(); env.onCommit?.(repo, commit); }}>
+    <button type="button" data-testid="commit-link" data-open={open ? 'true' : undefined} className={open ? 'k-commit-link k-commit-link--open' : 'k-commit-link'} title={commit}
+      onClick={e => { e.preventDefault(); env.onCommit?.(repo, branch, commit); }}>
       <CommitHash commit={commit} />
     </button>
   );

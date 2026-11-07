@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
-import type { CommitAuthor, CommitDetail } from './api';
+import type { CommitAuthor, CommitDetail, CommitFile } from './api';
 import { BotIcon, UserIcon, BroadcastIcon, ChevronLeftIcon, ChevronDownIcon } from './icons';
 
 // Agent commits are authored under the agents.knomit.io domain; everyone else
 // (humans, PR merges) is shown as a person.
 const AGENT_EMAIL_DOMAIN = '@agents.knomit.io';
+const AMBER = '#e5a23c';
 
 /** A commit as the timeline shows it: its first 7 characters, mono, blue. The
  *  chat's commit links draw it too, so a hash reads the same everywhere. */
@@ -20,7 +21,8 @@ export function CommitHash({ commit }: { commit: string }) {
 // CommitAuthorLine renders the commit author as an icon + identity: a bot for
 // agent authors, a person for humans. It shows the username, falling back to
 // the email when no name was recorded. Renders nothing when neither is present.
-function CommitAuthorLine({ author }: { author?: CommitAuthor }) {
+// The chat's commit view draws it too.
+export function CommitAuthorLine({ author }: { author?: CommitAuthor }) {
   if (!author || (!author.name && !author.email)) return null;
   const isAgent = author.email.endsWith(AGENT_EMAIL_DOMAIN);
   const label = author.name || author.email;
@@ -44,9 +46,70 @@ function CommitAuthorLine({ author }: { author?: CommitAuthor }) {
   );
 }
 
+/** The label above a commit's file rows: the timeline's detail card and the
+ *  chat's commit view. */
+export function CommitFilesLabel({ count }: { count: number }) {
+  return (
+    <div data-testid="commit-files-label" style={{ fontSize: 9, color: '#555', fontFamily: 'var(--k-font-mono)', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 6 }}>
+      Files affected · {count}
+    </div>
+  );
+}
+
+/** One file a commit touched: its action's glyph, its title, its path. `self`
+ *  marks the fact the reader is on ("you are here"). */
+export function CommitFileRow({ file, self = false, disabled = false, onOpen }: {
+  file: CommitFile;
+  self?: boolean;
+  disabled?: boolean;
+  onOpen: () => void;
+}) {
+  const glyph = file.action === 'added' ? '+' : file.action === 'deleted' ? '−' : '~';
+  const color = file.action === 'added' ? '#7c9' : file.action === 'deleted' ? '#f66' : '#aaf';
+  const isDeleted = file.action === 'deleted';
+  // The current fact is "you are here" — mark it with an amber
+  // arrow + band matching the active timeline row, not dimmed.
+  return (
+    <button
+      data-testid="timeline-file-row"
+      data-self={self ? 'true' : undefined}
+      data-action={file.action}
+      disabled={disabled}
+      onClick={() => { if (!disabled) onOpen(); }}
+      style={{
+        width: '100%', display: 'flex', alignItems: 'flex-start', gap: 8, padding: '5px 4px',
+        background: self ? 'rgba(229,162,60,0.10)' : 'none',
+        border: 'none', borderLeft: `2px solid ${self ? AMBER : 'transparent'}`,
+        outline: 'none', borderRadius: 3, textAlign: 'left',
+        cursor: disabled ? 'default' : 'pointer', color: 'inherit',
+      }}
+    >
+      <span style={{ color: self ? AMBER : color, fontFamily: 'var(--k-font-mono)', width: 12, fontSize: 12, flexShrink: 0, lineHeight: 1.3 }}>
+        {self ? '▸' : glyph}
+      </span>
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <span style={{
+          fontSize: 11, fontWeight: self ? 600 : 400,
+          color: self ? AMBER : isDeleted ? '#666' : '#ddd',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          textDecoration: isDeleted ? 'line-through' : 'none',
+        }}>
+          {file.title || file.path.split('/').pop()}
+        </span>
+        <span style={{ fontSize: 9, color: '#555', fontFamily: 'var(--k-font-mono)', lineHeight: 1.3, wordBreak: 'break-all' }}>
+          {file.path}
+        </span>
+      </span>
+      {self && (
+        <span data-testid="timeline-here-marker" style={{ fontSize: 8, color: AMBER, fontFamily: 'var(--k-font-mono)', flexShrink: 0, letterSpacing: 0.6, textTransform: 'uppercase' }}>here</span>
+      )}
+    </button>
+  );
+}
+
 // Two commit refs match if either is a prefix of the other, so a full
 // 40-char hash from one endpoint selects an abbreviated hash from another.
-function sameCommit(a: string | null, b: string | null): boolean {
+export function sameCommit(a: string | null, b: string | null): boolean {
   return !!a && !!b && (a.startsWith(b) || b.startsWith(a));
 }
 
@@ -76,8 +139,6 @@ interface Props {
   canBack?: boolean;
   onBack?: () => void;
 }
-
-const AMBER = '#e5a23c';
 
 export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onOpenFileAt, onReturnToLive, canBack = false, onBack }: Props) {
   const [entries, setEntries] = useState<FactEntry[]>([]);
@@ -321,54 +382,16 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                       {detail.message}
                     </div>
                   )}
-                  <div style={{ fontSize: 9, color: '#555', fontFamily: 'var(--k-font-mono)', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 6 }}>
-                    Files affected · {detail.files.length}
-                  </div>
-                  {detail.files.map(f => {
-                    const glyph = f.action === 'added' ? '+' : f.action === 'deleted' ? '−' : '~';
-                    const color = f.action === 'added' ? '#7c9' : f.action === 'deleted' ? '#f66' : '#aaf';
-                    const isDeleted = f.action === 'deleted';
-                    const isSelf = f.path === factPath;
-                    const isDisabled = isDeleted || isSelf;
-                    // The current fact is "you are here" — mark it with an amber
-                    // arrow + band matching the active timeline row, not dimmed.
-                    return (
-                      <button
-                        key={f.path}
-                        data-testid="timeline-file-row"
-                        data-self={isSelf ? 'true' : undefined}
-                        disabled={isDisabled}
-                        onClick={() => { if (!isDisabled) onOpenFileAt(f.path, activeCommit); }}
-                        style={{
-                          width: '100%', display: 'flex', alignItems: 'flex-start', gap: 8, padding: '5px 4px',
-                          background: isSelf ? 'rgba(229,162,60,0.10)' : 'none',
-                          border: 'none', borderLeft: `2px solid ${isSelf ? AMBER : 'transparent'}`,
-                          outline: 'none', borderRadius: 3, textAlign: 'left',
-                          cursor: isDisabled ? 'default' : 'pointer', color: 'inherit',
-                        }}
-                      >
-                        <span style={{ color: isSelf ? AMBER : color, fontFamily: 'var(--k-font-mono)', width: 12, fontSize: 12, flexShrink: 0, lineHeight: 1.3 }}>
-                          {isSelf ? '▸' : glyph}
-                        </span>
-                        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
-                          <span style={{
-                            fontSize: 11, fontWeight: isSelf ? 600 : 400,
-                            color: isSelf ? AMBER : isDeleted ? '#666' : '#ddd',
-                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                            textDecoration: isDeleted ? 'line-through' : 'none',
-                          }}>
-                            {f.title || f.path.split('/').pop()}
-                          </span>
-                          <span style={{ fontSize: 9, color: '#555', fontFamily: 'var(--k-font-mono)', lineHeight: 1.3, wordBreak: 'break-all' }}>
-                            {f.path}
-                          </span>
-                        </span>
-                        {isSelf && (
-                          <span data-testid="timeline-here-marker" style={{ fontSize: 8, color: AMBER, fontFamily: 'var(--k-font-mono)', flexShrink: 0, letterSpacing: 0.6, textTransform: 'uppercase' }}>here</span>
-                        )}
-                      </button>
-                    );
-                  })}
+                  <CommitFilesLabel count={detail.files.length} />
+                  {detail.files.map(f => (
+                    <CommitFileRow
+                      key={f.path}
+                      file={f}
+                      self={f.path === factPath}
+                      disabled={f.action === 'deleted' || f.path === factPath}
+                      onOpen={() => onOpenFileAt(f.path, activeCommit)}
+                    />
+                  ))}
                 </div>
               )}
             </div>

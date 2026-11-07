@@ -57,6 +57,8 @@ export function chatSpillWarning(window: number): string {
 
 /** The result panel, while a tool result is being fetched. */
 export const CHAT_RESULT_LOADING = 'Loading…';
+/** A fact read past its retraction, in the side panel: the commit that retracted it. */
+export const factRetractedAt = (commit: string): string => `retracted at ${commit}`;
 
 /** The button on a Settings grant row that takes the grant back. */
 export const CHAT_REVOKE_GRANT = 'Revoke';

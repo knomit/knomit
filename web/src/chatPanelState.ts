@@ -4,10 +4,10 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 // The chat's side panel: what it shows, the history of what it has shown, and
 // how wide it is.
 //
-// WHAT IT SHOWS is one of two things, so PR 6's fact links and the timeline's
-// steps open the same panel: a tool call's result, or a fact. Only tool results
-// can open it today; the fact entry is complete (the panel fetches it) so a
-// fact link only has to call open().
+// WHAT IT SHOWS is one of three things, so the fact links, the commit links and
+// the timeline's steps open the same panel: a tool call's result, a fact, or a
+// commit. A fact or commit entry is complete (the panel fetches it), so a link
+// only has to call open().
 //
 // HISTORY works like a browser's: open() drops whatever was ahead of the
 // current entry and pushes; back and forward move along. Closing the panel
@@ -16,7 +16,10 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 
 export type PanelEntry =
   | { kind: 'result'; callId: string }
-  | { kind: 'fact'; repo: string; branch: string; path: string; commit?: string };
+  /** `removed`: the commit retracted the fact, so a plain read at it is 404 and
+   *  the view reads the last version before it (?fallback=before). */
+  | { kind: 'fact'; repo: string; branch: string; path: string; commit?: string; removed?: boolean }
+  | { kind: 'commit'; repo: string; branch: string; commit: string };
 
 export interface PanelState {
   entries: PanelEntry[];
@@ -37,6 +40,7 @@ export const sameEntry = (a: PanelEntry | undefined, b: PanelEntry | undefined):
   if (!a || !b || a.kind !== b.kind) return false;
   if (a.kind === 'result' && b.kind === 'result') return a.callId === b.callId;
   if (a.kind === 'fact' && b.kind === 'fact') return a.repo === b.repo && a.branch === b.branch && a.path === b.path && a.commit === b.commit;
+  if (a.kind === 'commit' && b.kind === 'commit') return a.repo === b.repo && a.branch === b.branch && a.commit === b.commit;
   return false;
 };
 
