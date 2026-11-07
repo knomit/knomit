@@ -4244,7 +4244,8 @@ paths:
         argument the tool marks as its main one in its `_meta` under
         `io.knomit/key` (a list of argument names, the first non-empty string
         value wins; cut to 200 bytes). For the chat's loader tool `key_arg` is
-        the tools the call LOADED, comma-separated, once done. Each is absent
+        the tools the call LOADED, by their titles (a tool with none by its
+        name), comma-separated in load order, once done. Each is absent
         when there is none. Both are on the running and done events too.
         `in_base: true` says the call's arguments carry `binding`, `repo` or
         `lens` (the call acts in a repo or lens; absent otherwise). It is on

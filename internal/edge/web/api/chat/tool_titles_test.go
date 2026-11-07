@@ -111,10 +111,24 @@ func TestChat_LoaderCallCarriesTitleAndWhatItLoaded(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, blankMessage))
 	_, done := toolCallEvents(t, s.until("turn_done"))
 	require.Equal(t, "Load tools", done["tu_load"]["title"])
-	require.Equal(t, "knomit_explain", done["tu_load"]["key_arg"])
+	require.Equal(t, "Explain", done["tu_load"]["key_arg"], "the loaded tools by title, not raw name")
 	snap := snapshotCalls(t, h, "uid:501", id)
 	require.Equal(t, "Load tools", snap["tu_load"]["title"])
-	require.Equal(t, "knomit_explain", snap["tu_load"]["key_arg"])
+	require.Equal(t, "Explain", snap["tu_load"]["key_arg"])
+}
+
+// The loader's main argument words each loaded tool by its title, in load
+// order, and a tool with no title (or one the chat does not know) by its name.
+//
+// SABOTAGE: labels.go, return names unchanged -> the raw names come back.
+func TestLoadedTitles_TitlesInLoadOrderRawNameWithoutOne(t *testing.T) {
+	c := &chat{labels: map[string]toolLabel{
+		"knomit_query":   {title: "Query"},
+		"knomit_explain": {title: "Explain"},
+		"acme_untitled":  {},
+	}}
+	require.Equal(t, []string{"Query", "Explain", "acme_untitled", "other_tool"},
+		c.loadedTitles([]string{"knomit_query", "knomit_explain", "acme_untitled", "other_tool"}))
 }
 
 // A long main argument is cut at 200 bytes, never inside a rune: here "é"

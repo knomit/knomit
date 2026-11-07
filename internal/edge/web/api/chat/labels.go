@@ -58,6 +58,19 @@ func (c *chat) wording(name string, args json.RawMessage) callWording {
 	return w
 }
 
+// loadedTitles words the tools a loader call loaded: each one's title from its
+// MCP definition, its raw name when it has none. The order is the load order.
+func (c *chat) loadedTitles(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = n
+		if l, ok := c.labels[n]; ok && l.title != "" {
+			out[i] = l.title
+		}
+	}
+	return out
+}
+
 // boundKeyArg cuts s to maxKeyArg bytes on a rune boundary, marking the cut.
 func boundKeyArg(s string) string {
 	if len(s) <= maxKeyArg {

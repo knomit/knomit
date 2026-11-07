@@ -829,8 +829,10 @@ func (c *chat) onLoopEvent(ev llm.LoopEvent) {
 		sum := summarize(tu.Name, r.Content, r.IsError)
 		w := c.wording(tu.Name, tu.Args)
 		if len(loaded) > 0 {
-			// The loader's main argument is what it loaded, not what was asked for.
-			w.keyArg = boundKeyArg(strings.Join(loaded, ", "))
+			// The loader's main argument is what it loaded, not what was asked
+			// for, worded by the loaded tools' own titles (a tool with no
+			// title by its name), in load order.
+			w.keyArg = boundKeyArg(strings.Join(c.loadedTitles(loaded), ", "))
 		}
 		endedMS := nowMS()
 		var startedMS int64
