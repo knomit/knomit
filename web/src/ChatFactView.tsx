@@ -6,8 +6,8 @@ import { FactBand } from './FactBand';
 import { FactBody } from './FactBody';
 import { CHAT_RESULT_LOADING, factRetractedAt } from './chatCopy';
 import { NoticeLine } from './ChatNotice';
-import { CommitHash, sameCommit } from './TimelineNav';
-import { EDGE_ACCENT, EDGE_GLYPH, EDGE_LABEL, relativeTime } from './utils';
+import { CommitHash } from './TimelineNav';
+import { EDGE_ACCENT, EDGE_GLYPH, EDGE_LABEL, relativeTime, sameCommit } from './utils';
 import type { EdgeDir } from './utils';
 
 const noDispatch = () => {};

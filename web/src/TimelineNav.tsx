@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from './api';
 import type { CommitAuthor, CommitDetail, CommitFile } from './api';
 import { BotIcon, UserIcon, BroadcastIcon, ChevronLeftIcon, ChevronDownIcon } from './icons';
+import { sameCommit } from './utils';
 
 // Agent commits are authored under the agents.knomit.io domain; everyone else
 // (humans, PR merges) is shown as a person.
@@ -105,12 +106,6 @@ export function CommitFileRow({ file, self = false, disabled = false, onOpen }: 
       )}
     </button>
   );
-}
-
-// Two commit refs match if either is a prefix of the other, so a full
-// 40-char hash from one endpoint selects an abbreviated hash from another.
-export function sameCommit(a: string | null, b: string | null): boolean {
-  return !!a && !!b && (a.startsWith(b) || b.startsWith(a));
 }
 
 interface FactEntry {
