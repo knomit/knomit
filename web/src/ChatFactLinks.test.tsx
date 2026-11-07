@@ -142,6 +142,38 @@ describe('chat fact links', () => {
     expect(resolveCalls(fx)[0].body).toEqual({ handles: ['3fc77970'], prefer: ['agentic-engineering'] });
   });
 
+  // A resolver as the server is: a hash answers only with exactly one repo
+  // preferred; a short id two repos hold answers only with one of them preferred.
+  const serverLike = (fx: ReturnType<typeof stubFleetFetch>) => fx.set(RESOLVE, (body: unknown) => {
+    const { handles, prefer } = body as { handles: string[]; prefer: string[] };
+    const out: object[] = [];
+    if (handles.includes('abc1234') && prefer.length === 1) out.push({ handle: 'abc1234', id: '', title: '', type: '', repo: prefer[0], branch: 'agent/test', path: '', excerpt: '', commit: 'abc1234' + 'f'.repeat(33) });
+    if (handles.includes('3fc77970') && prefer.includes('second-repo')) out.push({ ...POLICY, repo: 'second-repo' });
+    return { body: out };
+  });
+  const bindOne = { kind: 'tool_call', id: 'tu_1', name: 'knomit_bind', state: 'done', title: 'Bind', in_base: true, target: 'agentic-engineering', arguments: { repo: 'agentic-engineering' } } as const;
+  const failedQuery = { kind: 'tool_call', id: 'tu_2', name: 'knomit_query', state: 'done', is_error: true, title: 'Query', in_base: true, target: 'second-repo', arguments: { text: 'x', repo: 'second-repo' } } as const;
+
+  it('a failed query naming a reachable second repo does not stop a commit chip', async () => {
+    const { fx } = mount(snapshot([{ kind: 'user', text: 'first' }]));
+    serverLike(fx);
+    fx.set(`GET ${BASE}`, { body: snapshot([{ kind: 'user', text: 'q' }, bindOne, failedQuery, { kind: 'assistant', text: 'Fixed in `abc1234`.' }]) });
+    act(() => { chatStream('chat-a')!.emit('ready', {}); });
+    await screen.findByTestId('commit-link');
+    expect(resolveCalls(fx).at(-1)!.body).toEqual({ handles: ['abc1234'], prefer: ['agentic-engineering'] });
+  });
+
+  it('a short id two repos hold, where only a failed call named one of them, stays plain code', async () => {
+    const { fx } = mount(snapshot([{ kind: 'user', text: 'first' }]));
+    serverLike(fx);
+    fx.set(`GET ${BASE}`, { body: snapshot([{ kind: 'user', text: 'q' }, bindOne, failedQuery, { kind: 'assistant', text: 'See `3fc77970`.' }]) });
+    act(() => { chatStream('chat-a')!.emit('ready', {}); });
+    await waitFor(() => expect(resolveCalls(fx).at(-1)?.body).toEqual({ handles: ['3fc77970'], prefer: ['agentic-engineering'] }));
+    await settle();
+    expect(screen.queryByTestId('fact-link')).toBeNull();
+    expect([...screen.getByTestId('chat-turn-0').querySelectorAll('code')].map(c => c.textContent)).toEqual(['3fc77970']);
+  });
+
   it('a fact the server could not parse (no confidence) shows no confidence in the card, as Browse leaves a missing one out', async () => {
     const { confidence: _c, kind: _k, origin: _o, sources: _s, ...unparsed } = POLICY;
     void _c; void _k; void _o; void _s;

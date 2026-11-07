@@ -103,18 +103,24 @@ describe('turnPrefer', () => {
     expect(turnPrefer([t], 0)).toEqual(['two', 'one']);
   });
 
-  it('a failed call that is not a bind keeps counting', () => {
+  it('a failed call that is not a bind adds nothing either: its repo, or the store of a kb:// file it named', () => {
     const t = turn(
       call('a', 'knomit_bind', { repo: 'one' }),
       call('b', 'knomit_query', { text: 'x', repo: 'two' }, true),
+      call('c', 'knomit_materialize', { file: 'kb://abc123def456/kb/a.md' }, true),
     );
-    expect(turnPrefer([t], 0)).toEqual(['two', 'one']);
+    expect(turnPrefer([t], 0)).toEqual(['one']);
   });
 
-  it('a call without in_base adds nothing, whatever its arguments name', () => {
-    const noBase: ToolCall = { id: 'b', name: 'knomit_explain', state: 'done', isError: false, args: { repo: 'two' } };
+  it('a failed bind does not move the binding in force, for the calls after it in the turn', () => {
+    const noRepo = (id: string): ToolCall => ({ id, name: 'knomit_query', state: 'done', isError: false, args: { text: 'x' }, inBase: true });
+    const t = turn(call('a', 'knomit_bind', { repo: 'one' }), call('b', 'knomit_bind', { repo: 'two' }, true), noRepo('c'));
+    expect(turnPrefer([t], 0)).toEqual(['one']);
+  });
+
+  it('a call without in_base adds nothing, whatever it names', () => {
+    const noBase: ToolCall = { id: 'b', name: 'knomit_explain', state: 'done', isError: false, args: { repo: 'two' }, target: 'two' };
     expect(turnPrefer([turn(call('a', 'knomit_bind', { repo: 'one' }), noBase)], 0)).toEqual(['one']);
-    // Not even the binding in force: on its own it names nothing.
     expect(turnPrefer([turn(noBase)], 0)).toEqual([]);
   });
 

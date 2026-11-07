@@ -10,7 +10,7 @@ import { createContext, useEffect, useRef, useState } from 'react';
 import { factLinksMore } from './chatCopy';
 import { resolveFactHandles } from './chatApi';
 import { boundAfter, callTarget } from './chatState';
-import type { ChatTurn, ToolCall } from './chatState';
+import type { ChatTurn } from './chatState';
 
 /** One answer of POST /api/v1/facts/resolve. */
 export interface ResolvedFact {
@@ -241,20 +241,21 @@ const argStr = (args: unknown, name: string): string => {
   return typeof v === 'string' ? v : '';
 };
 
-/** A call that would have moved the binding had it not failed: boundAfter's own
- *  rule, so this names no tool. */
-const failedBind = (c: ToolCall): boolean => c.isError && boundAfter([{ ...c, isError: false }], '') !== '';
-
 /**
- * turnPrefer is the repos turn ti worked in, for POST /facts/resolve's
- * prefer: what each of its calls acted on (a bind's target; a call the server
+ * turnPrefer is the repos turn ti worked in, for POST /facts/resolve's prefer:
+ * what each of its SUCCESSFUL calls acted on (a bind's target; a call the server
  * marks in_base, the server's target, else the binding in force; a call without
  * in_base ran nowhere in particular and adds nothing) and the store of a kb://
  * file it named, latest call first; then the binding in force when the turn
  * began.
- * A bind that failed worked in nothing, as boundAfter also holds, so it does
- * not count: a failed bind to a second repo must not stop a commit link from
- * resolving (the server resolves a hash only with exactly one repo preferred).
+ *
+ * A call that failed worked in nothing, so it adds nothing (user decision): a
+ * failed call naming a second reachable repo must not stop a commit link from
+ * resolving, since the server resolves a hash only with exactly one repo preferred.
+ * The accepted cost is that such a repo earns no preference either, so a short id
+ * that two repos hold, where only a failed call named one of them, is ambiguous and
+ * stays code. This rule is the prefer list's alone: callTarget and the activity line
+ * still see failed calls.
  * Tool RESULTS are not in the transcript (they are fetched lazily), so a
  * kb:// in a result does not count.
  */
@@ -266,10 +267,12 @@ export function turnPrefer(turns: ChatTurn[], ti: number): string[] {
   for (const p of turns[ti]?.parts ?? []) {
     if (p.kind !== 'group') continue;
     for (const c of p.calls) {
-      if (!failedBind(c)) own.push(callTarget(c, bound));
-      const store = /^kb:\/\/([^/\s]+)\//.exec(argStr(c.args, 'file') || argStr(c.args, 'path'))?.[1];
-      if (store) own.push(store);
-      bound = boundAfter([c], bound);
+      if (!c.isError) {
+        own.push(callTarget(c, bound));
+        const store = /^kb:\/\/([^/\s]+)\//.exec(argStr(c.args, 'file') || argStr(c.args, 'path'))?.[1];
+        if (store) own.push(store);
+      }
+      bound = boundAfter([c], bound); // a failed bind moves nothing
     }
   }
   const out: string[] = [];
