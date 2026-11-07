@@ -1,4 +1,5 @@
 import { useReducer, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { flushSync } from 'react-dom';
 import type { Dispatch } from 'react';
 import { reducer, init, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
 import type { Action, BrowseContext } from './state';
@@ -1462,9 +1463,16 @@ export default function App() {
   }), [addChat, dispatchView, repos, lenses, creates]);
   // The chat side panel's "Open in Browse": switch to the repository, then
   // open the fact once its branch has landed (a context switch clears it).
-  // A fact the panel shows as it read at a commit opens at that commit: the
-  // fact and its anchor as one position.
-  const pendingBrowse = useRef<{ ctx: BrowseContext; path: string; commit?: string } | null>(null);
+  // A fact the panel shows as it read at a commit opens at that commit, on the
+  // branch it was read from: another branch of the repo has a different history
+  // for the timeline to show.
+  const pendingBrowse = useRef<{ ctx: BrowseContext; path: string; commit?: string; branch?: string } | null>(null);
+  const landPendingBrowse = useCallback(() => {
+    const p = pendingBrowse.current;
+    if (!p) return;
+    pendingBrowse.current = null;
+    navigate({ view: 'library', factPath: p.path, reveal: true, ...(p.commit ? { asOf: { mode: 'history', commit: p.commit } } : {}) });
+  }, [navigate]);
   const openPendingBrowse = useCallback(() => {
     const p = pendingBrowse.current;
     const cur = stateRef.current;
@@ -1473,19 +1481,43 @@ export default function App() {
       ? cur.context.kind === 'repo' && cur.context.repo === p.ctx.repo
       : cur.context.kind === 'lens' && cur.context.name === p.ctx.name;
     if (!here) return;
-    pendingBrowse.current = null;
-    if (p.commit) dispatch({ type: 'APPLY_NAV', view: 'library', factPath: p.path, asOf: { mode: 'history', commit: p.commit } });
-    else navigate({ view: 'library', factPath: p.path, reveal: true });
-  }, [navigate, dispatch]);
+    if (p.branch && p.branch !== cur.branch) {
+      // The branch and the fact land in one render, and it is flushed here for
+      // the same reason the effect below is a layout effect: a list read still
+      // in flight must be dropped before it can answer and select row 0. A branch
+      // that cannot be read leaves the one on screen: the commit is the repo's,
+      // so the fact still reads there.
+      const repo = cur.repo;
+      const branch = p.branch;
+      p.branch = undefined;
+      api.status(repo, branch)
+        .then(s => {
+          if (pendingBrowse.current !== p || stateRef.current.repo !== repo) return;
+          flushSync(() => {
+            dispatch(statusAction(s));
+            landPendingBrowse();
+          });
+        })
+        .catch(() => { if (pendingBrowse.current === p) flushSync(landPendingBrowse); });
+      return;
+    }
+    landPendingBrowse();
+  }, [dispatch, landPendingBrowse]);
   // `target` is a repo or a lens (a chat binds to either). A lens addresses a
   // fact as kb://<store>/<path>, a repo by the bare path.
-  const onOpenInBrowse = useCallback((target: string, file: string, commit?: string) => {
+  const onOpenInBrowse = useCallback((target: string, file: string, commit?: { commit: string; branch: string }) => {
     const ctx: BrowseContext = lenses.some(l => l.name === target) ? { kind: 'lens', name: target } : { kind: 'repo', repo: target };
-    pendingBrowse.current = { ctx, path: ctx.kind === 'lens' ? file : file.replace(/^kb:\/\/[^/]+\//, ''), ...(commit ? { commit } : {}) };
+    pendingBrowse.current = { ctx, path: ctx.kind === 'lens' ? file : file.replace(/^kb:\/\/[^/]+\//, ''), ...commit };
     onSelectTarget(ctx);
     openPendingBrowse();
   }, [lenses, onSelectTarget, openPendingBrowse]);
-  useEffect(() => { openPendingBrowse(); }, [state.context, state.branch, openPendingBrowse]);
+  // A LAYOUT effect, and that is load-bearing. On the commit where a new repo's
+  // branch lands, the Library's list read starts under the OLD sort and filters.
+  // The landing must re-render before that read can answer, or its answer selects
+  // row 0 (AMEND_NAV, keeping the anchor just set) on top of the fact. An update
+  // from here renders in this same task and drops that read as stale; from a
+  // passive effect it would be a later render, however short the gap.
+  useLayoutEffect(() => { openPendingBrowse(); }, [state.context, state.branch, openPendingBrowse]);
   // The fleet row: the fleet target, pinned over the context with its own
   // tabs (Members, Activity, Settings).
   const onPickFleet = useCallback(() => {

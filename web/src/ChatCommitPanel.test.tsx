@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, cleanup, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup, within, act } from '@testing-library/react';
 import { ChatFacet } from './ChatFacet';
 import { CommitHash } from './TimelineNav';
 import { resetFactCache } from './chatFactLinks';
@@ -38,6 +38,13 @@ const snapshot = (): ChatSnapshot => ({
     { kind: 'user', text: 'q' },
     { kind: 'tool_call', id: 'tu_1', name: 'knomit_query', state: 'done', arguments: { text: 'x', repo: 'agentic-engineering' } },
     { kind: 'assistant', text: 'Fixed in `abc1234`.' },
+  ],
+});
+
+const twoChips = (): ChatSnapshot => ({
+  ...snapshot(), items: [
+    { kind: 'user', text: 'q' },
+    { kind: 'assistant', text: 'Fixed in `abc1234`, then in `9999999`.' },
   ],
 });
 
@@ -87,8 +94,11 @@ describe('a commit chip opens the commit in the side panel', () => {
     const { fx } = mount({
       [`GET ${REPO}/commits/${FULL}/facts/${CHANGED}`]: { body: factAt(CHANGED, 'The changed fact', 'THE OLD TEXT', FULL) },
       [`GET ${REPO}/facts/${CHANGED}`]: { body: factAt(CHANGED, 'The changed fact', 'THE NEW TEXT', NEWER) },
-      [`GET ${REPO}/commits/${FULL}/facts/${CHANGED}/incoming`]: { body: { _embedded: { refs: [] } } },
-      [`GET ${REPO}/commits/${FULL}/facts/${CHANGED}/outgoing`]: { body: { _embedded: { refs: [] } } },
+      [`GET ${REPO}/commits/${FULL}/facts/${CHANGED}/incoming`]: { body: { _embedded: { refs: [{ path: 'a.md', title: 'A', commit: 'c1' }, { path: 'b.md', title: 'B', commit: 'c2' }] } } },
+      [`GET ${REPO}/commits/${FULL}/facts/${CHANGED}/outgoing`]: { body: { _embedded: { refs: [{ path: 'c.md', title: 'C', commit: 'c3' }] } } },
+      // HEAD has other edges: a read there would show them, not just lose the counts.
+      [`GET ${REPO}/facts/${CHANGED}/incoming`]: { body: { _embedded: { refs: [{ path: 'x.md', title: 'X', commit: 'c4' }] } } },
+      [`GET ${REPO}/facts/${CHANGED}/outgoing`]: { body: { _embedded: { refs: [] } } },
       [`GET ${REPO}/facts/${CHANGED}/commits`]: { body: { _embedded: { commits: [{ commit: NEWER }, { commit: FULL }, { commit: OLDER }] } } },
     });
     await clickChip();
@@ -101,6 +111,9 @@ describe('a commit chip opens the commit in the side panel', () => {
     // The band says which version: this commit, the second of three, not v3.
     expect(within(fact).getByTestId('chat-fact-commit')).toHaveTextContent('abc1234');
     expect(await within(fact).findByTestId('chat-fact-version')).toHaveTextContent('v2');
+    // The edge counts are this commit's too.
+    expect(await within(fact).findByTestId('chat-fact-cited-by')).toHaveTextContent('cited by 2');
+    expect(within(fact).getByTestId('chat-fact-cites')).toHaveTextContent('cites 1');
     expect(screen.getByTestId('chat-panel-footer')).toHaveTextContent('2 of 2');
     expect(screen.queryByTestId('chat-fact-retracted')).toBeNull();
     // The panel's existing Back.
@@ -117,7 +130,7 @@ describe('a commit chip opens the commit in the side panel', () => {
     await screen.findByTestId('chat-commit');
     fireEvent.click(rowFor('The changed fact'));
     fireEvent.click(await screen.findByTestId('chat-panel-browse'));
-    expect(onOpenInBrowse).toHaveBeenCalledWith('agentic-engineering', CHANGED, FULL);
+    expect(onOpenInBrowse).toHaveBeenCalledWith('agentic-engineering', CHANGED, { commit: FULL, branch: 'agent/test' });
   });
 
   it('a fact the commit retracted opens its last version with ?fallback=before and says it was retracted, not a dead panel', async () => {
@@ -191,6 +204,86 @@ describe('a commit chip opens the commit in the side panel', () => {
     expect(await screen.findByTestId('chat-fact-error')).toHaveTextContent('no fact at that path');
     fireEvent.click(screen.getByTestId('chat-panel-back'));
     expect(await screen.findByTestId('chat-commit')).toBeInTheDocument();
+  });
+
+  // sameEntry must tell commits apart: otherwise the second chip is a no-op.
+  it('a second chip in the same repo opens its own commit', async () => {
+    const second = '9999999' + 'a'.repeat(33);
+    mount({
+      [`GET ${BASE}`]: { body: twoChips() },
+      'POST /api/v1/facts/resolve': { body: [
+        { handle: 'abc1234', id: '', title: '', type: '', repo: 'agentic-engineering', branch: 'agent/test', path: '', excerpt: '', confidence: 0, commit: FULL },
+        { handle: '9999999', id: '', title: '', type: '', repo: 'agentic-engineering', branch: 'agent/test', path: '', excerpt: '', confidence: 0, commit: second },
+      ] },
+      [`GET ${REPO}/commits/${second}`]: { body: { ...DETAIL, commit: second, message: 'the second commit' } },
+    });
+    await screen.findAllByTestId('commit-link');
+    fireEvent.click(screen.getAllByTestId('commit-link')[0]);
+    expect(await screen.findByTestId('chat-commit-message')).toHaveTextContent('learn(gate): three facts');
+    fireEvent.click(screen.getAllByTestId('commit-link')[1]);
+    await waitFor(() => expect(screen.getByTestId('chat-commit-message')).toHaveTextContent('the second commit'));
+    expect(screen.getByTestId('chat-panel-footer')).toHaveTextContent('2 of 2');
+    expect(screen.getByTestId('chat-panel-crumb')).toHaveTextContent('agentic-engineering / 9999999');
+  });
+
+  // The stale guard: the first commit's slow answer must not stand in for the second.
+  it('a slow answer for the previous commit never shows for the one now open', async () => {
+    const second = '9999999' + 'a'.repeat(33);
+    let answerFirst: (r: { body: unknown }) => void = () => {};
+    const fetchStub = () => {
+      const base = stubFleetFetch({
+        [`GET ${BASE}`]: { body: twoChips() },
+        'POST /api/v1/facts/resolve': { body: [
+          { handle: 'abc1234', id: '', title: '', type: '', repo: 'agentic-engineering', branch: 'agent/test', path: '', excerpt: '', confidence: 0, commit: FULL },
+          { handle: '9999999', id: '', title: '', type: '', repo: 'agentic-engineering', branch: 'agent/test', path: '', excerpt: '', confidence: 0, commit: second },
+        ] },
+        [`GET ${REPO}/commits/${second}`]: { body: { ...DETAIL, commit: second, message: 'the second commit' } },
+      });
+      const inner = fetch as unknown as (input: string, init?: RequestInit) => Promise<Response>;
+      vi.stubGlobal('fetch', vi.fn((input: string, init?: RequestInit) => String(input).endsWith(`/commits/${FULL}`)
+        ? new Promise<Response>(res => { answerFirst = r => res(new Response(JSON.stringify(r.body), { status: 200, headers: { 'Content-Type': 'application/json' } })); })
+        : inner(input, init)));
+      return base;
+    };
+    fetchStub();
+    render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} repos={[]} />);
+    await screen.findAllByTestId('commit-link');
+    fireEvent.click(screen.getAllByTestId('commit-link')[0]);
+    expect(await screen.findByTestId('chat-commit-loading')).toBeInTheDocument();
+    fireEvent.click(screen.getAllByTestId('commit-link')[1]);
+    expect(await screen.findByTestId('chat-commit-message')).toHaveTextContent('the second commit');
+    await act(async () => { answerFirst({ body: DETAIL }); await new Promise(r => setTimeout(r, 10)); });
+    expect(screen.getByTestId('chat-commit-message')).toHaveTextContent('the second commit');
+  });
+
+  it('Back from a fact returns to the same place in a long list, without reading the commit again', async () => {
+    const files = Array.from({ length: 300 }, (_, i) => ({ path: `kb/decisions/f${i}.md`, action: 'modified', title: `Fact ${i}` }));
+    const { fx } = mount({
+      [`GET ${REPO}/commits/${FULL}`]: { body: { ...DETAIL, files } },
+      [`GET ${REPO}/commits/${FULL}/facts/kb/decisions/f250.md`]: { body: factAt('kb/decisions/f250.md', 'Fact 250', 'x', FULL) },
+    });
+    await clickChip();
+    const panel = await screen.findByTestId('chat-commit');
+    panel.scrollTop = 4321;
+    fireEvent.scroll(panel);
+    fireEvent.click(rowFor('Fact 250'));
+    await screen.findByTestId('chat-fact');
+    fireEvent.click(screen.getByTestId('chat-panel-back'));
+    const back = await screen.findByTestId('chat-commit');
+    expect(back).not.toBe(panel);
+    expect(back.scrollTop).toBe(4321);
+    expect(fx.calls.filter(c => c.route === `GET ${REPO}/commits/${FULL}`)).toHaveLength(1);
+  });
+
+  it('a failed read is not remembered: opening the commit again asks again', async () => {
+    const { fx } = mount({ [`GET ${REPO}/commits/${FULL}`]: problem(503, 'unavailable', 'not readable now') });
+    await clickChip();
+    await screen.findByTestId('chat-commit-error');
+    fx.set(`GET ${REPO}/commits/${FULL}`, { body: DETAIL });
+    fireEvent.click(screen.getByTestId('chat-panel-close'));
+    await waitFor(() => expect(screen.queryByTestId('chat-side-panel')).toBeNull());
+    fireEvent.click(screen.getByTestId('commit-link'));
+    expect(await screen.findByTestId('chat-commit')).toHaveTextContent('learn(gate): three facts');
   });
 
   it('a reload starts with the panel closed, as for a fact or a tool call', async () => {

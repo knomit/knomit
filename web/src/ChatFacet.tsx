@@ -254,9 +254,9 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onOpenInBrowse, repo
   chat: ChatInfo;
   /** The repos the page lists: a repo chip in an answer names one of them. */
   repos?: RepoRef[];
-  /** Open a fact in Browse (the side panel's "Open in Browse"), at `commit` when
-   *  the panel shows it as it read at a commit. */
-  onOpenInBrowse?: (repo: string, path: string, commit?: string) => void;
+  /** Open a fact in Browse (the side panel's "Open in Browse"), at `at` when the
+   *  panel shows it as it read at a commit. */
+  onOpenInBrowse?: (repo: string, path: string, at?: { commit: string; branch: string }) => void;
   /** Start an empty chat with this chat's model (a notice's "New chat"). */
   onNewChat?: (chat: ChatInfo) => void | Promise<void>;
   /** The tab on screen. */

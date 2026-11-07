@@ -1,13 +1,14 @@
 import { useRef } from 'react';
 import type { Dispatch } from 'react';
-import type { AppState, Action } from './state';
+import type { AppState, Action, AsOf } from './state';
 import { displayLensPath } from './utils';
 
 export type NavRequest =
   | { view: 'library' }
   | { view: 'library'; factPath: string | null }
-  /** Open the fact AND take the tree to where it lives — see resolveNavRequest. */
-  | { view: 'library'; factPath: string; reveal: true };
+  /** Open the fact AND take the tree to where it lives — see resolveNavRequest.
+   *  `asOf` anchors it there (live when absent). */
+  | { view: 'library'; factPath: string; reveal: true; asOf?: AsOf };
 
 /**
  * Pure async function — resolves a NavRequest to an APPLY_NAV dispatch.
@@ -53,10 +54,18 @@ export async function resolveNavRequest(
     // flat list instead of the folder — and a highlight comes from path-scoped
     // stats, so the fact just opened need not match the chip at all. Asking for
     // the tree means asking for the one mode the chips cannot survive.
+    //
+    // THE FREE TEXT GOES TOO, for the same reason: a search runs Relevance
+    // whatever the sort asks for. And it is what makes an anchored reveal safe:
+    // Recent and Relevance select row 0 when the open fact is not on page 1 and
+    // keep asOf, so a fact held out of page 1 (or retracted at HEAD, which is on
+    // no HEAD list at all) would silently become another fact at that commit.
+    // The tree selects nothing by itself.
     const dir = parentDir(displayLensPath(req.factPath));
     dispatch({
-      type: 'APPLY_NAV', view: 'library', factPath: req.factPath, asOf: { mode: 'live' },
+      type: 'APPLY_NAV', view: 'library', factPath: req.factPath, asOf: req.asOf ?? { mode: 'live' },
       filters: [{ category: 'path', value: dir }],
+      freeText: '',
       sort: 'path',
     });
     return;

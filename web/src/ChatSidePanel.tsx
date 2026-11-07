@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, Dispatch, MouseEvent as ReactMouseEvent } from 'react';
 import { ChatCommitView } from './ChatCommitView';
+import type { CommitMemo } from './ChatCommitView';
 import { ChatFactView } from './ChatFactView';
 import { ChatResultPanel } from './ChatResultPanel';
 import { FacetSplitter } from './FacetColumns';
@@ -71,9 +72,9 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
   running: boolean;
   width: number;
   onSplitterDown: (e: ReactMouseEvent) => void;
-  /** Open this fact in Browse, at `commit` when the panel shows it as it read
-   *  at a commit. Absent where the page cannot navigate. */
-  onOpenInBrowse?: (repo: string, path: string, commit?: string) => void;
+  /** Open this fact in Browse, at `at` when the panel shows it as it read at a
+   *  commit. Absent where the page cannot navigate. */
+  onOpenInBrowse?: (repo: string, path: string, at?: { commit: string; branch: string }) => void;
   /** The repo or lens the chat was bound to when a call ran (a result with no
    *  target of its own belongs to it). */
   boundFor?: (callId: string) => string;
@@ -88,6 +89,8 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
   const boundForRef = useRef(boundFor);
   const callForRef = useRef(callFor);
   useEffect(() => { boundForRef.current = boundFor; callForRef.current = callFor; });
+  // What each commit view loaded and where it was scrolled to, so Back from a fact returns to the same place in a long list.
+  const [commitMemo] = useState<CommitMemo>(() => new Map());
   const onCall = useCallback((callId: string, call: ChatCall) => {
     // A materialize names its fact as `file` (a path, or kb://<id>/<path>); other
     // tools use `path`. The target is what the call names, else the binding in
@@ -132,8 +135,8 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
   // Browse has no repo-at-commit view, so a commit offers no way there. A fact
   // read at a commit opens at that commit: the latest version (or none, if it
   // was retracted) is not what the reader was looking at.
-  const browse: { repo: string; path: string; commit?: string } | undefined = entry.kind === 'fact'
-    ? { repo: entry.repo, path: entry.path, ...(entry.commit ? { commit: entry.commit } : {}) }
+  const browse: { repo: string; path: string; at?: { commit: string; branch: string } } | undefined = entry.kind === 'fact'
+    ? { repo: entry.repo, path: entry.path, ...(entry.commit ? { at: { commit: entry.commit, branch: entry.branch } } : {}) }
     : entry.kind === 'result' ? known?.browse : undefined;
   const canBack = panel.index > 0;
   const canForward = panel.index < panel.entries.length - 1;
@@ -153,7 +156,7 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
             ))}
           </div>
           {browse && onOpenInBrowse && (
-            <button type="button" data-testid="chat-panel-browse" onClick={() => { if (browse.commit) onOpenInBrowse(browse.repo, browse.path, browse.commit); else onOpenInBrowse(browse.repo, browse.path); }} style={browseBtn}>
+            <button type="button" data-testid="chat-panel-browse" onClick={() => { if (browse.at) onOpenInBrowse(browse.repo, browse.path, browse.at); else onOpenInBrowse(browse.repo, browse.path); }} style={browseBtn}>
               {PANEL_OPEN_IN_BROWSE}{ICON_EXTERNAL}
             </button>
           )}
@@ -164,7 +167,7 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
           {entry.kind === 'result'
             ? <ChatResultPanel chatId={chatId} callId={entry.callId} row={callFor?.(entry.callId)} onCall={onCall} />
             : entry.kind === 'commit'
-              ? <ChatCommitView repo={entry.repo} branch={entry.branch} commit={entry.commit} onOpenFact={(path, removed) => dispatch({
+              ? <ChatCommitView repo={entry.repo} branch={entry.branch} commit={entry.commit} memo={commitMemo} onOpenFact={(path, removed) => dispatch({
                   type: 'open',
                   entry: { kind: 'fact', repo: entry.repo, branch: entry.branch, path, commit: entry.commit, ...(removed ? { removed: true } : {}) },
                 })} />
