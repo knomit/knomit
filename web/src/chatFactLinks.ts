@@ -9,6 +9,8 @@
 import { createContext, useEffect, useRef, useState } from 'react';
 import { factLinksMore } from './chatCopy';
 import { resolveFactHandles } from './chatApi';
+import { boundAfter, callTarget } from './chatState';
+import type { ChatTurn } from './chatState';
 
 /** One answer of POST /api/v1/facts/resolve. */
 export interface ResolvedFact {
@@ -77,7 +79,8 @@ export function repoChipName(code: string, repos: RepoRef[]): string | null {
   const s = code.trim();
   const store = /^kb:\/\/([^\s/]+)\/?$/.exec(s)?.[1];
   if (store) {
-    const r = repos.find(x => x.name === store || (!!x.id && (x.id === store || x.id.startsWith(store) || store.startsWith(x.id))));
+    // An id at the server's lengths only (Manager.ByRootID): the full id, or its 12-hex prefix.
+    const r = repos.find(x => x.name === store || (!!x.id && (x.id === store || (store.length === 12 && x.id.startsWith(store)))));
     return r ? r.name : null;
   }
   return repos.some(r => r.name === s) ? s : null;
@@ -145,28 +148,104 @@ export const FactLinkContext = createContext<FactLinkEnv>({ facts: NO_FACTS, ope
 
 export const factKey = (repo: string, branch: string, path: string): string => `${repo}\0${branch}\0${path}`;
 
+/** What has been asked, for the page's life: per preference list and handle,
+ *  the fact it resolved to, or null (not a fact, or the call failed). A
+ *  remounted chat, or a later turn citing the same fact, asks nothing again. */
+const cache = new Map<string, ResolvedFact | null>();
+/** The (preference, handle) pairs a call in flight is asking. */
+const inFlight = new Set<string>();
+const cacheKey = (prefer: string, handle: string): string => `${prefer}\u0001${handle}`;
+
+/** For tests: forget every answer. */
+export function resetFactCache(): void { cache.clear(); inFlight.clear(); }
+
 /**
- * useTurnFacts resolves each FINISHED turn's cited handles: one POST
- * /facts/resolve per turn, with every candidate of its answer, and never again
- * for the same candidates (a re-render, a reconnect's snapshot). A turn still
- * streaming (null) is not asked about: its text is still growing. A failed
- * call leaves that turn's code as code.
+ * useTurnFacts resolves the FINISHED turns' cited handles. Each effect run
+ * sends ONE POST /facts/resolve per distinct preference list (one in the usual
+ * chat, which stays bound to one target) with every candidate of every
+ * finished turn not yet answered or being asked; a turn that finishes later
+ * gets one call for its new handles. A turn still streaming (null) is not
+ * asked about: its text is still growing. A failed call is not retried: its
+ * handles are remembered as not facts and stay code. An answer that arrives
+ * after the chat unmounted is kept in the cache and changes no state.
+ *
+ * prefers[i] is turn i's preference list (turnPrefer).
  */
-export function useTurnFacts(answers: (string | null)[]): ReadonlyMap<string, ResolvedFact>[] {
-  const [got, setGot] = useState<Record<number, { key: string; facts: ReadonlyMap<string, ResolvedFact> }>>({});
-  const asked = useRef(new Map<number, string>());
-  const keys = answers.map(a => (a === null ? '' : factCandidates(a).join('\n')));
-  const sig = keys.join('\u0000');
+export function useTurnFacts(answers: (string | null)[], prefers: string[][]): ReadonlyMap<string, ResolvedFact>[] {
+  const [, setVersion] = useState(0);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const turns = answers.map((a, i) => (a === null ? null : { prefer: prefers[i] ?? [], handles: factCandidates(a) }));
+  const sig = JSON.stringify(turns);
   useEffect(() => {
-    sig.split('\u0000').forEach((key, i) => {
-      if (!key || asked.current.get(i) === key) return;
-      asked.current.set(i, key);
-      resolveFactHandles(key.split('\n'))
-        .then(list => setGot(g => ({ ...g, [i]: { key, facts: new Map(list.map(f => [f.handle, f])) } })))
-        .catch(() => { /* the handles stay code */ });
-    });
+    const ask = new Map<string, { prefer: string[]; handles: string[] }>();
+    for (const t of JSON.parse(sig) as ({ prefer: string[]; handles: string[] } | null)[]) {
+      if (!t) continue;
+      const p = t.prefer.join('\n');
+      for (const h of t.handles) {
+        const k = cacheKey(p, h);
+        if (cache.has(k) || inFlight.has(k)) continue;
+        inFlight.add(k);
+        const group = ask.get(p) ?? { prefer: t.prefer, handles: [] };
+        if (!group.handles.includes(h)) group.handles.push(h);
+        ask.set(p, group);
+      }
+    }
+    for (const [p, { prefer, handles }] of ask) {
+      const settle = (list: ResolvedFact[]) => {
+        const by = new Map(list.map(f => [f.handle, f]));
+        for (const h of handles) {
+          inFlight.delete(cacheKey(p, h));
+          cache.set(cacheKey(p, h), by.get(h) ?? null);
+        }
+        if (mounted.current) setVersion(v => v + 1);
+      };
+      resolveFactHandles(handles, prefer).then(settle, () => settle([]));
+    }
   }, [sig]);
-  return keys.map((key, i) => (got[i] && got[i].key === key ? got[i].facts : NO_FACTS));
+  return turns.map(t => {
+    if (!t) return NO_FACTS;
+    const p = t.prefer.join('\n');
+    const m = new Map<string, ResolvedFact>();
+    for (const h of t.handles) {
+      const f = cache.get(cacheKey(p, h));
+      if (f) m.set(h, f);
+    }
+    return m.size ? m : NO_FACTS;
+  });
+}
+
+/** A string argument of a tool call's arguments, or ''. */
+const argStr = (args: unknown, name: string): string => {
+  const v = (args as Record<string, unknown> | null | undefined)?.[name];
+  return typeof v === 'string' ? v : '';
+};
+
+/**
+ * turnPrefer is the repos turn ti worked in, for POST /facts/resolve's
+ * prefer: what each of its calls acted on (a bind's target, a call's repo or
+ * lens argument, else the binding in force) and the store of a kb:// file it
+ * named, latest call first; then the binding in force when the turn began.
+ * Tool RESULTS are not in the transcript (they are fetched lazily), so a
+ * kb:// in a result does not count.
+ */
+export function turnPrefer(turns: ChatTurn[], ti: number): string[] {
+  let bound = '';
+  for (let i = 0; i < ti; i++) for (const p of turns[i].parts) if (p.kind === 'group') bound = boundAfter(p.calls, bound);
+  const before = bound;
+  const own: string[] = [];
+  for (const p of turns[ti]?.parts ?? []) {
+    if (p.kind !== 'group') continue;
+    for (const c of p.calls) {
+      own.push(callTarget(c, bound));
+      const store = /^kb:\/\/([^/\s]+)\//.exec(argStr(c.args, 'file') || argStr(c.args, 'path'))?.[1];
+      if (store) own.push(store);
+      bound = boundAfter([c], bound);
+    }
+  }
+  const out: string[] = [];
+  for (const t of [...own.reverse(), before]) if (t && !out.includes(t)) out.push(t);
+  return out;
 }
 
 /** remarkFactLinks marks the resolved fact handles (data-fact) and the repo

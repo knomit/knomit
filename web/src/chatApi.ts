@@ -193,11 +193,12 @@ export function revokeChatGrant(id: string, grant: ChatGrant): Promise<void> {
  *  it partly on the CPU after the first request. */
 export interface ChatContext { window: number; how?: string; spill: boolean; prompt_tokens?: number }
 
-/** POST /facts/resolve: the facts behind a turn's cited handles, in ONE call.
- *  Handles the caller cannot read, or that name no fact, are left out. */
-export function resolveFactHandles(handles: string[]): Promise<ResolvedFact[]> {
+/** POST /facts/resolve: the facts behind cited handles, in ONE call, looked for
+ *  first in `prefer` (the repos or lenses the turns worked in). Handles the
+ *  caller cannot read, that name no fact, or that are ambiguous are left out. */
+export function resolveFactHandles(handles: string[], prefer: string[] = []): Promise<ResolvedFact[]> {
   return fetchJSON<ResolvedFact[]>(apiUrl('/api/v1/facts/resolve'), {
-    method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ handles }),
+    method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ handles, prefer }),
   }).then(r => (Array.isArray(r) ? r : []));
 }
 

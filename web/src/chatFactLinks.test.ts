@@ -62,5 +62,14 @@ describe('repoChipName', () => {
     expect(repoChipName('kb://000000000000', repos)).toBeNull();
     expect(repoChipName('other-repo', repos)).toBeNull();
     expect(repoChipName('kb://3ec012f5b4d2/kb/a.md', repos)).toBeNull();
+    // An id is only an id at the server's length: 12 hex or the full id, never a shorter prefix.
+    expect(repoChipName('kb://3ec012', repos)).toBeNull();
+    expect(repoChipName('kb://3ec012f5b4d', repos)).toBeNull();
+  });
+  it('takes the full root id as well as its 12-hex prefix', () => {
+    const full = [{ name: 'knomit-kb', id: '3ec012f5b4d2aaaabbbbccccddddeeeeffff0000' }];
+    expect(repoChipName('kb://3ec012f5b4d2', full)).toBe('knomit-kb');
+    expect(repoChipName('kb://3ec012f5b4d2aaaabbbbccccddddeeeeffff0000', full)).toBe('knomit-kb');
+    expect(repoChipName('kb://3ec012f5b4d2aaaa', full)).toBeNull();
   });
 });

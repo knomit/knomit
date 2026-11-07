@@ -8,7 +8,7 @@ import { ContextMeter } from './ChatPill';
 import { TurnNotices, NoticeLine } from './ChatNotice';
 import { SendingLine, ThinkingPlaceholder, StoppedMark } from './ChatWaiting';
 import { chatPlugins, chatLivePlugins, chatComponents } from './chatTableBars';
-import { FactLinkContext, useTurnFacts, remarkFactLinks } from './chatFactLinks';
+import { FactLinkContext, useTurnFacts, remarkFactLinks, turnPrefer } from './chatFactLinks';
 import type { RepoRef, ResolvedFact } from './chatFactLinks';
 import { boundAfter, compactCount, sessionCost } from './chatState';
 import type { ChatState, ChatTurn, ToolCall } from './chatState';
@@ -79,10 +79,12 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   factLinks?: { repos: RepoRef[]; openKey: string | null; onOpen?: (f: ResolvedFact) => void; onBrowse?: (repo: string, path: string) => void };
 }) {
   const [draft, setDraft] = useState('');
-  // Each finished turn's cited facts, resolved once per turn.
-  const turnFacts = useTurnFacts(state.turns.map((t, ti) => (
-    state.running && ti === state.turns.length - 1 ? null : answerOf(blocksOf(t))
-  )));
+  // The finished turns' cited facts: one call for all not yet answered, each
+  // looked for first in the repos its turn worked in.
+  const turnFacts = useTurnFacts(
+    state.turns.map((t, ti) => (state.running && ti === state.turns.length - 1 ? null : answerOf(blocksOf(t)))),
+    state.turns.map((_, ti) => turnPrefer(state.turns, ti)),
+  );
   const repos = factLinks?.repos ?? NO_REPOS;
   const scroller = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLDivElement>(null);

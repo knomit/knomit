@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, fireEvent, cleanup, within } from '@testing-library/react';
 import { ChatFacet } from './ChatFacet';
-import { installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
+import { installFakeEventSource, uninstallFakeEventSource, chatStream } from './testEventSource';
+import { resetFactCache } from './chatFactLinks';
 import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatSnapshot } from './chatApi';
 import { typeStyles, repoHue } from './utils';
@@ -67,23 +68,82 @@ function mount(snap: ChatSnapshot = TWO_TURNS, onOpenInBrowse = vi.fn()) {
 }
 const resolveCalls = (fx: ReturnType<typeof stubFleetFetch>) => fx.calls.filter(c => c.route === RESOLVE);
 
-beforeEach(() => { installFakeEventSource(); });
+beforeEach(() => { installFakeEventSource(); resetFactCache(); });
 afterEach(() => { cleanup(); uninstallFakeEventSource(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
+const settle = () => new Promise(r => setTimeout(r, 30));
+
 describe('chat fact links', () => {
-  it('resolves each finished turn\'s candidates in ONE call per turn, and never again for the same text', async () => {
+  it('resolves every finished turn in ONE call per mount, and never again for the same text', async () => {
     const { fx } = mount();
-    await screen.findAllByTestId('fact-link');
-    await waitFor(() => expect(resolveCalls(fx)).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByTestId('fact-link')).toHaveLength(4));
     expect(resolveCalls(fx).map(c => c.body)).toEqual([
       // deadbeef looks like a short id, so it is asked about; the server omits it.
-      { handles: ['3fc77970', 'deadbeef', 'aaaaaaa1', 'aaaaaaa2', 'aaaaaaa3'] },
-      { handles: ['kb/invariants/security/3fc77970.md'] },
+      { handles: ['3fc77970', 'deadbeef', 'aaaaaaa1', 'aaaaaaa2', 'aaaaaaa3', 'kb/invariants/security/3fc77970.md'], prefer: [] },
     ]);
     // A re-render with the same transcript (a reconnect's snapshot) asks nothing more.
     fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'x' } });
-    await new Promise(r => setTimeout(r, 30));
-    expect(resolveCalls(fx)).toHaveLength(2);
+    await settle();
+    expect(resolveCalls(fx)).toHaveLength(1);
+  });
+
+  it('a remount asks nothing it already resolved: the answers are kept per handle and preference', async () => {
+    const first = mount();
+    await waitFor(() => expect(screen.getAllByTestId('fact-link')).toHaveLength(4));
+    first.unmount();
+    const { fx } = mount();
+    await waitFor(() => expect(screen.getAllByTestId('fact-link')).toHaveLength(4));
+    await settle();
+    expect(resolveCalls(fx)).toHaveLength(0);
+  });
+
+  it('a turn that finishes later gets one call, for its own new handles only', async () => {
+    const live = { ...snapshot([
+      { kind: 'user', text: 'q1' }, { kind: 'assistant', text: 'see `3fc77970`' },
+      { kind: 'user', text: 'q2' }, { kind: 'assistant', text: 'and `aaaaaaa1`, `3fc77970`' },
+    ]), running: true };
+    const { fx } = mount(live);
+    await screen.findByTestId('fact-link');
+    await settle();
+    expect(resolveCalls(fx).map(c => c.body)).toEqual([{ handles: ['3fc77970'], prefer: [] }]);
+    fx.set(`GET ${BASE}`, { body: { ...live, running: false } });
+    act(() => { chatStream('chat-a')!.emit('turn_done', { turn: 2 }); });
+    await waitFor(() => expect(resolveCalls(fx)).toHaveLength(2));
+    expect(resolveCalls(fx)[1].body).toEqual({ handles: ['aaaaaaa1'], prefer: [] });
+    await waitFor(() => expect(screen.getAllByTestId('fact-link')).toHaveLength(3));
+  });
+
+  it('prefers the repos the turn worked in: its calls\' repo or lens, then the binding in force', async () => {
+    const { fx } = mount(snapshot([
+      { kind: 'user', text: 'bind' },
+      { kind: 'tool_call', id: 'tu_1', name: 'knomit_bind', state: 'done', arguments: { lens: 'all' } },
+      { kind: 'assistant', text: 'bound' },
+      { kind: 'user', text: 'q' },
+      { kind: 'tool_call', id: 'tu_2', name: 'knomit_query', state: 'done', arguments: { text: 'x', repo: 'agentic-engineering' } },
+      { kind: 'tool_call', id: 'tu_3', name: 'knomit_materialize', state: 'done', arguments: { file: 'kb://87b70fb1aeb1/kb/a/b.md' } },
+      { kind: 'assistant', text: 'see `3fc77970`' },
+    ]));
+    await screen.findByTestId('fact-link');
+    expect(resolveCalls(fx).map(c => c.body)).toEqual([
+      { handles: ['3fc77970'], prefer: ['87b70fb1aeb1', 'all', 'agentic-engineering'] },
+    ]);
+  });
+
+  it('a failed resolve leaves the code as code and is not retried, on this mount or the next', async () => {
+    const { fx, unmount } = mount();
+    fx.set(RESOLVE, { status: 500, body: { detail: 'boom' } });
+    await waitFor(() => expect(resolveCalls(fx)).toHaveLength(1));
+    await settle();
+    expect(screen.queryByTestId('fact-link')).toBeNull();
+    expect([...screen.getByTestId('chat-turn-0').querySelectorAll('code')].map(c => c.textContent)).toContain('3fc77970');
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'x' } });
+    await settle();
+    expect(resolveCalls(fx)).toHaveLength(1);
+    unmount();
+    const again = mount();
+    await screen.findByTestId('chat-turn-0');
+    await settle();
+    expect(resolveCalls(again.fx)).toHaveLength(0);
   });
 
   it('a resolved fact is a chip with its type\'s TypeIcon and the title; unresolved code stays code', async () => {
