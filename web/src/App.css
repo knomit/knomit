@@ -156,10 +156,6 @@ a { color: inherit; }
   display: flex; align-items: center; gap: 8px;
 }
 .k-fact-card-path > [data-testid=fact-band-path] { flex: 1; }
-.k-fact-card-browse {
-  background: none; border: none; padding: 0; cursor: pointer; color: #8fb8ff; font-family: var(--k-font-body); font-size: 11.5px;
-  white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;
-}
 
 /* The streaming caret: until the turn ends. */
 .k-chat-caret { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: #e8c27a; border-radius: 1px; }

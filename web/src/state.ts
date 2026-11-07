@@ -186,7 +186,7 @@ export type Action =
   // `sort` rides APPLY_NAV for the same reason `filters` does: a reveal changes
   // the path scope, the sort axis and the open fact together, and they must land
   // in ONE entry or Back would undo them one at a time.
-  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; hop?: boolean; fromChat?: string; factPanel?: FactPanel }
+  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; sinceFork?: boolean; hop?: boolean; fromChat?: string; factPanel?: FactPanel }
   | { type: 'CHAT_RETURN_SERVED' }
   | { type: 'FACT_PANEL_SERVED' }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
@@ -390,7 +390,6 @@ function applyAction(s: AppState, a: Action): AppState {
       if (prev.repo !== s.repo) {
         return {
           ...s,
-          chatReturn: prev.fromChat ?? null,
           repo: prev.repo,
           view: 'library',
           factPath: null,
@@ -724,6 +723,7 @@ function applyAction(s: AppState, a: Action): AppState {
         filters: a.filters !== undefined ? a.filters : s.filters,
         freeText: a.freeText !== undefined ? a.freeText : s.freeText,
         librarySort: a.sort ?? s.librarySort,
+        sinceFork: a.sinceFork ?? s.sinceFork,
         navStack: pushNav(s, a.fromChat),
         factPanelRequest: a.factPanel && a.factPath ? { ...a.factPanel, path: a.factPath } : null,
         rightPanelFocused: false,
@@ -768,6 +768,14 @@ export function reducer(s: AppState, a: Action): AppState {
   return next;
 }
 
+// FactReading is what the fact view (FactView) reads: which fact, from where, at
+// which commit, and whether it can be written. Browse's whole AppState is one; the
+// chat's side panel builds one for the fact it shows. Every selector below takes
+// this rather than AppState, so both go through the same rules.
+export type FactReading = Pick<AppState,
+  'context' | 'lens' | 'lensWriteId' | 'repo' | 'branch' | 'factPath' | 'factSource' | 'asOf' | 'headCommit'
+  | 'serverReadOnly' | 'repoReadOnly' | 'branchWritable' | 'factPanelRequest'>;
+
 // openFactSourceResolved says whether factSource is the mount of the fact
 // state.factPath names — i.e. whether pairing the two addresses a real fact.
 // Outside a lens there is no per-fact mount, so it is always true.
@@ -790,7 +798,7 @@ export function reducer(s: AppState, a: Action): AppState {
 // repo's NAME is never taken for it. Only when the repo listing carried no id
 // (an older server) does the name stand in. A hop within one mount is resolved
 // at once.
-export function openFactSourceResolved(s: AppState): boolean {
+export function openFactSourceResolved(s: FactReading): boolean {
   if (s.context.kind !== 'lens') return true;
   const src = s.factSource;
   if (!s.factPath || !src) return false;
@@ -800,7 +808,7 @@ export function openFactSourceResolved(s: AppState): boolean {
   return s.lensWriteId ? src.id === s.lensWriteId : src.repo === s.lens.write.name;
 }
 
-export function selectAnchorCommit(s: AppState): string | null {
+export function selectAnchorCommit(s: FactReading): string | null {
   switch (s.asOf.mode) {
     case 'live':     return null;
     case 'history': return s.asOf.commit;
@@ -808,12 +816,12 @@ export function selectAnchorCommit(s: AppState): string | null {
   }
 }
 
-export function isLive(s: AppState): boolean {
+export function isLive(s: FactReading): boolean {
   return s.asOf.mode === 'live';
 }
 
 // isLensContext is true when the app is browsing a lens (rather than a repo).
-export function isLensContext(s: AppState): boolean {
+export function isLensContext(s: FactReading): boolean {
   return s.context.kind === 'lens';
 }
 
@@ -837,7 +845,7 @@ export function lensResolutionPending(s: AppState): boolean {
 // it (via api.getAgentBranch) before issuing a write. A closed fact (factPath
 // null) is treated as "no fact open" so a stale factSource can never leak past
 // a fact close — the fact-open path re-sets factSource for the next lens fact.
-export function openFactSource(s: AppState): { repo: string; branch: string } {
+export function openFactSource(s: FactReading): { repo: string; branch: string } {
   if (s.context.kind === 'lens') {
     if (s.factPath && s.factSource) {
       return { repo: s.factSource.repo, branch: s.factSource.branch };
@@ -857,7 +865,7 @@ export function openFactSource(s: AppState): { repo: string; branch: string } {
 // context: {state.repo, state.branch, <bare path>} — byte-identical to the old
 // inline pairing.
 export function factHistoryAnchor(
-  s: AppState,
+  s: FactReading,
   path: string | null = s.factPath,
 ): { repo: string; branch: string; path: string } {
   const { repo, branch } = openFactSource(s);
@@ -872,7 +880,7 @@ export function factHistoryAnchor(
 // open fact's mount head isn't tracked in state and state.headCommit is the
 // WRITE repo's head (which doesn't exist in a read mount → an empty edge set in
 // the default live view). Repo context is byte-identical (always state.headCommit).
-export function edgeAnchorCommit(s: AppState): string {
+export function edgeAnchorCommit(s: FactReading): string {
   return selectAnchorCommit(s) ?? (isLensContext(s) ? '' : s.headCommit);
 }
 
@@ -886,7 +894,7 @@ export function remoteErrorText(s: AppState): string {
   return s.remoteSyncError || s.remotePushError;
 }
 
-export function isReadOnly(s: AppState): boolean {
+export function isReadOnly(s: FactReading): boolean {
   return s.serverReadOnly || s.repoReadOnly || !s.branchWritable || !isLive(s);
 }
 
@@ -898,7 +906,7 @@ export const BRANCH_TITLE = 'Read-only — facts are not authored on this branch
 // A subscription is read-only while the anchor is perfectly live, so the
 // temporal wording would be actively wrong there — and it is the one reason the
 // reader cannot fix by scrubbing back to live.
-export function readOnlyTitle(s: AppState): string {
+export function readOnlyTitle(s: FactReading): string {
   if (s.repoReadOnly) return SUBSCRIPTION_TITLE;
   // Ordered most-specific-first, like the subscription case above and for the
   // same reason: a branch that cannot be authored is read-only while the

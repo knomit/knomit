@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import type { Dispatch } from 'react';
-import type { AppState, Action, AsOf, FactPanel } from './state';
+import type { AppState, Action, AsOf, FactPanel, FilterChip } from './state';
 import { displayLensPath } from './utils';
 
 export type NavRequest =
@@ -8,8 +8,9 @@ export type NavRequest =
   | { view: 'library'; factPath: string | null }
   /** Open the fact AND take the tree to where it lives — see resolveNavRequest.
    *  `asOf` anchors it there (live when absent); `fromChat` makes Back return to
-   *  that chat; `factPanel` opens that panel of the fact on landing. */
-  | { view: 'library'; factPath: string; reveal: true; asOf?: AsOf; fromChat?: string; factPanel?: FactPanel };
+   *  that chat; `factPanel` opens that panel of the fact on landing; `filter` is a
+   *  chip the fact's own tag asked for, added in the same move. */
+  | { view: 'library'; factPath: string; reveal: true; asOf?: AsOf; fromChat?: string; factPanel?: FactPanel; filter?: FilterChip };
 
 /**
  * Pure async function — resolves a NavRequest to an APPLY_NAV dispatch.
@@ -62,12 +63,17 @@ export async function resolveNavRequest(
     // keep asOf, so a fact held out of page 1 (or retracted at HEAD, which is on
     // no HEAD list at all) would silently become another fact at that commit.
     // The tree selects nothing by itself.
+    //
+    // SINCE-FORK GOES TOO: Library counts it as a content filter, so it demotes
+    // Path to Recent exactly as a chip does, and row 0 would then replace the fact.
+    // Without it, the three things that can demote the tree are all gone.
     const dir = parentDir(displayLensPath(req.factPath));
     dispatch({
       type: 'APPLY_NAV', view: 'library', factPath: req.factPath, asOf: req.asOf ?? { mode: 'live' },
-      filters: [{ category: 'path', value: dir }],
+      filters: [{ category: 'path', value: dir }, ...(req.filter ? [req.filter] : [])],
       freeText: '',
       sort: 'path',
+      sinceFork: false,
       ...(req.fromChat ? { fromChat: req.fromChat } : {}),
       ...(req.factPanel ? { factPanel: req.factPanel } : {}),
     });

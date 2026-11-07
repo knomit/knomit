@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { CSSProperties, Dispatch, MouseEvent as ReactMouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties, Dispatch, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import { api } from './api';
 import { ChatCommitView } from './ChatCommitView';
 import type { CommitMemo } from './ChatCommitView';
-import { ChatFactView } from './ChatFactView';
+import { FactView } from './FactView';
+import { useFactEdges } from './useFactEdges';
+import type { Action, FactReading } from './state';
 import { ChatResultPanel } from './ChatResultPanel';
 import { FacetSplitter } from './FacetColumns';
 import type { ChatCall } from './chatApi';
+import type { RepoRef } from './chatFactLinks';
 import { bindTarget, isBind, toolCallLabel, toolCallOf } from './chatState';
 import type { ToolCall } from './chatState';
 import { crumbOf, shownEntry } from './chatPanelState';
@@ -38,6 +42,67 @@ function typingIn(el: Element | null): boolean {
 }
 
 /**
+ * A fact in the panel is Browse's fact view, the one component (FactView). All
+ * this does is say what it reads (that fact on that branch, at the commit if there
+ * is one) and where its controls go. A control that navigates lands in Browse, and
+ * Browse's Back returns to the chat. The panel's only differences are the × in the
+ * band and no retract button.
+ */
+function PanelFact({ repo, branch, path, commit, close, onBrowse, repos, repoNames, serverReadOnly }: {
+  repo: string;
+  branch: string;
+  path: string;
+  commit?: string;
+  close: ReactNode;
+  onBrowse?: (req: BrowseFactRequest) => void;
+  repos?: RepoRef[];
+  repoNames?: Record<string, string>;
+  serverReadOnly: boolean;
+}) {
+  const [branchWritable, setBranchWritable] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    api.status(repo, branch).then(s => { if (!cancelled) setBranchWritable(!!s.writable); }).catch(() => { /* stays read-only */ });
+    return () => { cancelled = true; };
+  }, [repo, branch]);
+  const repoReadOnly = repos?.find(r => r.name === repo)?.mode === 'subscribe';
+  // headCommit stays empty: a live read with no head asks for the branch's tip.
+  const reading = useMemo<FactReading>(() => ({
+    context: { kind: 'repo', repo }, lens: null, lensWriteId: null, repo, branch, factPath: path, factSource: null,
+    asOf: commit ? { mode: 'history', commit } : { mode: 'live' }, headCommit: '',
+    serverReadOnly, repoReadOnly, branchWritable, factPanelRequest: null,
+  }), [repo, branch, path, commit, serverReadOnly, repoReadOnly, branchWritable]);
+  const edges = useFactEdges(reading);
+  const send = (req: Omit<BrowseFactRequest, 'repo' | 'branch' | 'path'>) => {
+    onBrowse?.({ repo, branch, path, ...(commit ? { commit } : {}), ...req });
+  };
+  const hop = (to: string, pinned: string) => onBrowse?.({ repo, branch, path: to, ...(pinned ? { commit: pinned } : {}) });
+  // Of what the view dispatches only a filter chip means anything outside Browse's
+  // state: it goes with the reader. The rest is Browse's bookkeeping for its open fact.
+  const dispatch = (a: Action) => { if (a.type === 'ADD_FILTER') send({ filter: a.chip }); };
+  return (
+    <FactView
+      reading={reading}
+      dispatch={dispatch}
+      // The version opens Browse's history of this fact. Browse's walker opens it at
+      // the newest version; a fact read at a commit stays at that commit.
+      onScrub={newest => send({ commit: commit ?? newest })}
+      onHopRef={hop}
+      onHopEdge={hop}
+      onOpenPanel={panel => send({ panel })}
+      repoNames={repoNames}
+      incoming={edges.incoming}
+      outgoing={edges.outgoing}
+      edgesError={edges.error}
+      refCommits={edges.refCommits}
+      bandAction={close}
+      hideRetract
+      materializeInUrl={false}
+    />
+  );
+}
+
+/**
  * ChatSidePanel is the 470px panel on the right of a chat: a fact, a commit or
  * a tool result, and a footer. A commit or a tool result has a 40px header
  * (breadcrumb, close). A fact has its band instead, which holds the close. It is
@@ -54,7 +119,7 @@ function typingIn(el: Element | null): boolean {
  * else already took (defaultPrevented) is left alone, as is a chat that is not on
  * screen.
  */
-export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplitterDown, onBrowse, boundFor, callFor }: {
+export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplitterDown, onBrowse, repos, repoNames, serverReadOnly = false, boundFor, callFor }: {
   chatId: string;
   panel: PanelState;
   dispatch: Dispatch<PanelAction>;
@@ -64,6 +129,10 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
   onSplitterDown: (e: ReactMouseEvent) => void;
   /** Send the reader to Browse on a fact. Absent where the page cannot navigate. */
   onBrowse?: (req: BrowseFactRequest) => void;
+  /** What the fact view reads from the page, as Browse does. */
+  repos?: RepoRef[];
+  repoNames?: Record<string, string>;
+  serverReadOnly?: boolean;
   /** The repo or lens the chat was bound to when a call ran (a result with no
    *  target of its own belongs to it). */
   boundFor?: (callId: string) => string;
@@ -78,7 +147,7 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
   const boundForRef = useRef(boundFor);
   const callForRef = useRef(callFor);
   useEffect(() => { boundForRef.current = boundFor; callForRef.current = callFor; });
-  // What each commit view loaded and where it was scrolled to, so Back from a fact returns to the same place in a long list.
+  // What each commit view loaded and where it was scrolled to, so its chip in the answer returns to the same place in a long list.
   const [commitMemo] = useState<CommitMemo>(() => new Map());
   const onCall = useCallback((callId: string, call: ChatCall) => {
     // A materialize names its fact as `file` (a path, or kb://<id>/<path>); other
@@ -136,12 +205,12 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
           {entry.kind === 'result'
             ? <ChatResultPanel chatId={chatId} callId={entry.callId} row={callFor?.(entry.callId)} onCall={onCall} />
             : entry.kind === 'commit'
-              ? <ChatCommitView repo={entry.repo} branch={entry.branch} commit={entry.commit} memo={commitMemo} onOpenFact={(path, removed) => dispatch({
+              ? <ChatCommitView key={`${entry.repo}\0${entry.branch}\0${entry.commit}`} repo={entry.repo} branch={entry.branch} commit={entry.commit} memo={commitMemo} onOpenFact={path => dispatch({
                   type: 'open',
-                  entry: { kind: 'fact', repo: entry.repo, branch: entry.branch, path, commit: entry.commit, ...(removed ? { removed: true } : {}) },
+                  entry: { kind: 'fact', repo: entry.repo, branch: entry.branch, path, commit: entry.commit },
                 })} />
-              : <ChatFactView key={`${entry.repo}\0${entry.branch}\0${entry.path}\0${entry.commit ?? ''}`} repo={entry.repo} branch={entry.branch} path={entry.path}
-                  commit={entry.commit} removed={entry.removed} closeControl={close} onBrowse={onBrowse} />}
+              : <PanelFact key={`${entry.repo}\0${entry.branch}\0${entry.path}\0${entry.commit ?? ''}`} repo={entry.repo} branch={entry.branch} path={entry.path}
+                  commit={entry.commit} close={close} onBrowse={onBrowse} repos={repos} repoNames={repoNames} serverReadOnly={serverReadOnly} />}
         </div>
         <div data-testid="chat-panel-footer" style={footer}>
           <span style={keycap}>{PANEL_KEY_CLOSE.slice(0, PANEL_KEY_CLOSE.indexOf(' '))}</span>

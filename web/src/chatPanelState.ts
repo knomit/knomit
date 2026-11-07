@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import type { FactPanel } from './state';
+import type { FactPanel, FilterChip } from './state';
 
 // The chat's side panel: what it shows and how wide it is.
 //
@@ -11,9 +11,7 @@ import type { FactPanel } from './state';
 
 export type PanelEntry =
   | { kind: 'result'; callId: string }
-  /** `removed`: the commit retracted the fact, so a plain read at it is 404 and
-   *  the view reads the last version before it (?fallback=before). */
-  | { kind: 'fact'; repo: string; branch: string; path: string; commit?: string; removed?: boolean }
+  | { kind: 'fact'; repo: string; branch: string; path: string; commit?: string }
   | { kind: 'commit'; repo: string; branch: string; commit: string };
 
 export interface PanelState {
@@ -38,13 +36,15 @@ export function panelReducer(s: PanelState, a: PanelAction): PanelState {
 export const shownEntry = (s: PanelState): PanelEntry | null => s.entry;
 
 /** A fact the panel sends to Browse: that fact, at `commit` when the panel read
- *  it at one, on the branch it was read from, with `panel` opened on landing. */
+ *  it at one, on the branch it was read from, with `panel` opened on landing and
+ *  `filter` added to the list. */
 export interface BrowseFactRequest {
   repo: string;
   path: string;
   branch?: string;
   commit?: string;
   panel?: FactPanel;
+  filter?: FilterChip;
 }
 
 // ── width ──

@@ -77,7 +77,7 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   /** The answers' fact links: the repos a repo chip may name, the fact open in
    *  the side panel, and what a link does. */
   factLinks?: {
-    repos: RepoRef[]; openKey: string | null; onOpen?: (f: ResolvedFact) => void; onBrowse?: (repo: string, path: string) => void;
+    repos: RepoRef[]; openKey: string | null; onOpen?: (f: ResolvedFact) => void; onBrowse?: (f: ResolvedFact) => void;
     onCommit?: (repo: string, branch: string, commit: string) => void;
   };
 }) {

@@ -228,21 +228,19 @@ export const contextNumCtx = (n: string): string => `${n} (num_ctx)`;
 export const PROVIDER_CLOUD = 'cloud';
 
 // ── APPROVED 2026-11-06 ──
-// Side panel (chat UX v2, PR 3). The first six groups are the design's copy
-// table ("Side panel", "Fact links") verbatim; the last three labels are GAPS:
-// the design gives the back, forward and close buttons no accessible name, and
-// these are the shortest words that name them. Approved by the user with the rest.
+// Side panel (chat UX v2, PR 3). The design's copy table ("Side panel", "Fact
+// links") verbatim; the close label is a GAP: the design gives the close button
+// no accessible name, and this is the shortest word that names it. Approved by
+// the user with the rest.
 
-/** Header button, and the fact link's hover card. Design copy table, "Fact links" row. */
-export const PANEL_OPEN_IN_BROWSE = 'Open in Browse';
 /** A table cell citing several facts: the first link, then "+N" (the rest). Design copy table, "Fact links" row. */
 export const factLinksMore = (n: number): string => `+${n}`;
 /** The tool result's two tabs. Design copy table, "Side panel" row. */
 export const PANEL_TAB_RESULT = 'Result';
 export const PANEL_TAB_ARGUMENTS = 'Arguments';
-/** The footer: "Esc close · ⌘[ back · N of M opened". */
+/** The footer. */
 export const PANEL_KEY_CLOSE = 'Esc close';
-// GAP (not in the design): accessible names for the header's icon buttons.
+// GAP (not in the design): the close button's accessible name.
 export const PANEL_CLOSE_LABEL = 'Close';
 
 // ── APPROVED (2026-11-06) ──

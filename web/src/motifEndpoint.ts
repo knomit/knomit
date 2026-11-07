@@ -1,6 +1,6 @@
 import { api } from './api';
 import type { MotifsQuery, MotifsPage, MotifCluster } from './api';
-import type { AppState } from './state';
+import type { FactReading } from './state';
 import { isLensContext } from './state';
 
 /**
@@ -22,7 +22,7 @@ export type MotifEndpoint =
   | { kind: 'lens'; lens: string };
 
 /** The endpoint the app's current context reads its vocabulary from. */
-export function motifEndpointOf(s: AppState): MotifEndpoint {
+export function motifEndpointOf(s: FactReading): MotifEndpoint {
   if (isLensContext(s) && s.context.kind === 'lens') {
     return { kind: 'lens', lens: s.context.name };
   }

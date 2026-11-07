@@ -6,7 +6,6 @@ import { resetFactCache } from './chatFactLinks';
 import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatSnapshot } from './chatApi';
 import { typeStyles, repoHue } from './utils';
-import { PANEL_OPEN_IN_BROWSE } from './chatCopy';
 import { TypeIcon } from './icons';
 import { CommitHash } from './TimelineNav';
 
@@ -286,7 +285,7 @@ describe('chat fact links', () => {
     expect(screen.queryByTestId('chat-side-panel')).toBeNull();
 
     fireEvent.click(chip, { metaKey: true });
-    expect(onBrowseFact).toHaveBeenCalledWith('chat-a', { repo: 'agentic-engineering', path: POLICY.path });
+    expect(onBrowseFact).toHaveBeenCalledWith('chat-a', { repo: POLICY.repo, branch: POLICY.branch, path: POLICY.path });
     expect(screen.queryByTestId('chat-side-panel')).toBeNull();
 
     fireEvent.click(chip);
@@ -301,8 +300,8 @@ describe('chat fact links', () => {
     expect(chip).not.toHaveAttribute('data-open');
   });
 
-  it('hovering about 300ms shows the card: type, repo, confidence, title, excerpt, path and Open in Browse', async () => {
-    const { onBrowseFact } = mount();
+  it('hovering about 300ms shows the card: type, repo, confidence, title, excerpt and path, and no way to Browse', async () => {
+    mount();
     const turn1 = await screen.findByTestId('chat-turn-1');
     const chip = await within(turn1).findByTestId('fact-link');
     vi.useFakeTimers();
@@ -325,8 +324,7 @@ describe('chat fact links', () => {
     expect(within(card).getByTestId('fact-card-excerpt')).toHaveTextContent(POLICY.excerpt);
     // The path is Browse's band path row.
     expect(within(card).getByTestId('fact-band-path')).toHaveTextContent(POLICY.path);
-    fireEvent.click(within(card).getByText(PANEL_OPEN_IN_BROWSE));
-    expect(onBrowseFact).toHaveBeenCalledWith('chat-a', { repo: 'agentic-engineering', path: POLICY.path });
+    expect(within(card).queryByRole('button')).toBeNull(); // Cmd-click on the link goes to Browse
     vi.useRealTimers();
   });
 

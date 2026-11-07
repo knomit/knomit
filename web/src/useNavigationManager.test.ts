@@ -96,6 +96,7 @@ describe('resolveNavRequest', () => {
       filters: [{ category: 'path', value: 'kb/technology/ai/security' }],
       freeText: '',
       sort: 'path',
+      sinceFork: false,
     });
   });
 

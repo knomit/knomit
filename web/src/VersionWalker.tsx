@@ -13,10 +13,6 @@ interface Props {
   factPath: string;
   currentCommit: string;
   onScrub: (commit: string) => void;
-  /** currentCommit is the version on screen, not the branch tip: a commit the
-   *  list does not hold has no version to name, so nothing is drawn rather than
-   *  the newest version's number. */
-  exact?: boolean;
 }
 
 // A single always-available control that opens the fact's history. Clicking it
@@ -25,7 +21,7 @@ interface Props {
 // prev/next stepping — the timeline is the picker. Rendered for single-version
 // facts too, so their history (and the other facts in the same commit) is
 // reachable.
-export function VersionWalker({ repo, branch, factPath, currentCommit, onScrub, exact = false }: Props) {
+export function VersionWalker({ repo, branch, factPath, currentCommit, onScrub }: Props) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -54,7 +50,6 @@ export function VersionWalker({ repo, branch, factPath, currentCommit, onScrub, 
   if (loading) return null;
   // Nothing to anchor at for a fact with no version commits.
   if (n === 0) return null;
-  if (exact && found < 0) return null;
 
   // Position label: newest (idx=0) → "v{n}"; newest has the highest version.
   const version = n - idx;

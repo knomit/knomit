@@ -447,20 +447,16 @@ describe('the side panel: target, width clamp, errors, keys', () => {
     expect(localStorage.getItem(PANEL_WIDTH_KEY)).toBe('320');
   });
 
-  it('a fact that cannot be read shows the server\'s sentence in the blocked notice style, not the request URL', async () => {
+  it('a fact that cannot be read shows Browse\'s error, with the × still there', async () => {
     stubFleetFetch({
       ...routes(),
       [`GET ${FACT_BASE}/kb/gone.md`]: problem(404, 'not_found', 'no such fact'),
     });
     render(<Harness />);
     act(() => api.open({ kind: 'fact', repo: 'r1', branch: 'main', path: 'kb/gone.md' }));
-    const err = await screen.findByTestId('chat-fact-error');
-    expect(err.textContent).toBe('no such fact');
-    expect(err.getAttribute('data-tone')).toBe('blocked');
-    expect(err.textContent).not.toContain('/api/v1');
-    expect(err.getAttribute('title')).toBeNull();
-    expect(screen.getByRole('alert')).toContainElement(err);
-    expect(screen.queryByTestId('chat-fact')).toBeNull();
+    expect(await screen.findByText(/no such fact/)).toBeInTheDocument();
+    expect(screen.getByTestId('chat-panel-close')).toBeInTheDocument();
+    expect(screen.queryByTestId('fact-view')).toBeNull();
   });
 
   it('Esc while a turn runs and focus is inside the side panel is Stop too, and the panel stays', async () => {

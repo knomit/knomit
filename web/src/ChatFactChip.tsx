@@ -5,7 +5,6 @@ import { RepoDot } from './settingsParts';
 import { defaultTypeStyle, typeStyles } from './utils';
 import { FactLinkContext, commitKey, factKey } from './chatFactLinks';
 import type { ResolvedFact } from './chatFactLinks';
-import { PANEL_OPEN_IN_BROWSE } from './chatCopy';
 import { createPortal } from 'react-dom';
 import { FactMetaLine } from './FactMetaLine';
 import { FactBandPath } from './FactBand';
@@ -20,12 +19,6 @@ import type { Fact } from './api';
 const FACT_CARD_DELAY_MS = 300;
 /** How long the card waits for the pointer to reach it after leaving the link. */
 const FACT_CARD_LEAVE_MS = 150;
-
-const ICON_EXTERNAL = (
-  <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
-  </svg>
-);
 
 /** A fact link: the fact type's TypeIcon on its colour, then the title. */
 export function FactLink({ handle }: { handle: string }) {
@@ -55,7 +48,7 @@ export function FactLink({ handle }: { handle: string }) {
     e.preventDefault();
     clearTimeout(timer.current);
     setCard(null);
-    if (e.metaKey || e.ctrlKey) env.onBrowse?.(f.repo, f.path);
+    if (e.metaKey || e.ctrlKey) env.onBrowse?.(f);
     else env.onOpen?.(f);
   };
 
@@ -69,17 +62,17 @@ export function FactLink({ handle }: { handle: string }) {
         </span>
         <span className="k-fact-link-title">{f.title}</span>
       </button>
-      {card && <FactCard f={f} at={card} onEnter={stay} onLeave={hide} onBrowse={env.onBrowse} />}
+      {card && <FactCard f={f} at={card} onEnter={stay} onLeave={hide} />}
     </>
   );
 }
 
 /** The hover card: type badge, repo chip, confidence, the full title, a
- *  two-line excerpt, the path and Open in Browse. Fixed to the viewport, so a
+ *  two-line excerpt and the path. Cmd-click on the link goes to Browse. Fixed to the viewport, so a
  *  table's scroll box does not clip it. */
-function FactCard({ f, at, onEnter, onLeave, onBrowse }: {
+function FactCard({ f, at, onEnter, onLeave }: {
   f: ResolvedFact; at: { left: number; top: number };
-  onEnter: () => void; onLeave: () => void; onBrowse?: (repo: string, path: string) => void;
+  onEnter: () => void; onLeave: () => void;
 }) {
   const left = Math.max(8, Math.min(at.left, (typeof window !== 'undefined' ? window.innerWidth : 0) - CARD_W - 8));
   // The meta line and the path row are Browse's own (FactMetaLine, FactBand's
@@ -93,11 +86,6 @@ function FactCard({ f, at, onEnter, onLeave, onBrowse }: {
       {f.excerpt && <div data-testid="fact-card-excerpt" className="k-fact-card-excerpt">{f.excerpt}</div>}
       <div className="k-fact-card-path">
         <FactBandPath path={f.path} />
-        {onBrowse && (
-          <button type="button" className="k-fact-card-browse" onClick={() => onBrowse(f.repo, f.path)}>
-            {PANEL_OPEN_IN_BROWSE} {ICON_EXTERNAL}
-          </button>
-        )}
       </div>
     </div>,
     document.body,

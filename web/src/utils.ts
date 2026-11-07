@@ -11,12 +11,6 @@ export function relativeTime(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString();
 }
 
-/** Two commit refs match if either is a prefix of the other, so a full 40-char
- *  hash from one endpoint selects an abbreviated hash from another. */
-export function sameCommit(a: string | null, b: string | null): boolean {
-  return !!a && !!b && (a.startsWith(b) || b.startsWith(a));
-}
-
 /** Format a unix epoch (seconds) as a relative time label. */
 export function relativeTimeEpoch(epoch: number): string {
   if (!epoch) return '';

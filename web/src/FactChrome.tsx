@@ -15,11 +15,9 @@ import { MotifOverflowCell, OVERFLOW } from './MotifRow';
 import type { OrderedMotifs } from './MotifRow';
 import { MotifPanel } from './MotifPanel';
 
-// A fact's chrome, shared by Browse (RightPanel) and the chat's side panel
-// (ChatFactView): the band's edges group, its actions, and the page that keeps
-// the band still while the body scrolls and lets the title flow up into it.
-// What differs between the two is only what a control DOES, which the caller
-// passes in; a second copy of any of this is how the two would come to disagree.
+// A fact's chrome, drawn by FactView: the band's edges group, its actions, and the
+// page that keeps the band still while the body scrolls and lets the title flow up
+// into it.
 
 /** Everything the header's connections menu and its panel need. */
 export interface ConnectionsSlot {
@@ -163,7 +161,7 @@ export function FactEdgesGroup({ connections, motifs, motifSlot }: {
 
 /** Row 3's right group: the date, the version, the retraction badge, materialize
  *  and retract (a caller that offers none leaves it out); `children` come last. */
-export function FactActions({ fact, histAnchor, onScrub, onRetract, readOnly = false, anchorCommit, readOnlyTitle = READ_ONLY_TITLE, onMaterialize, exactVersion = false, children }: {
+export function FactActions({ fact, histAnchor, onScrub, onRetract, readOnly = false, anchorCommit, readOnlyTitle = READ_ONLY_TITLE, onMaterialize, children }: {
   fact: Fact;
   /** The fact's history anchor: VersionWalker reads its versions from here. */
   histAnchor: { repo: string; branch: string; path: string };
@@ -173,8 +171,6 @@ export function FactActions({ fact, histAnchor, onScrub, onRetract, readOnly = f
   anchorCommit?: string | null;
   readOnlyTitle?: string;
   onMaterialize?: () => void;
-  /** See VersionWalker. */
-  exactVersion?: boolean;
   children?: ReactNode;
 }) {
   const retractDisabled = readOnly;
@@ -239,7 +235,6 @@ export function FactActions({ fact, histAnchor, onScrub, onRetract, readOnly = f
                 factPath={histAnchor.path}
                 currentCommit={fact.commit_hash}
                 onScrub={onScrub ?? (() => {})}
-                exact={exactVersion}
               />
             )}
             {retractedAt && (

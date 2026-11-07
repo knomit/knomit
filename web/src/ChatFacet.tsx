@@ -255,10 +255,13 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
  * App keeps one mounted per live chat, so a chat's stream and transcript
  * survive the reader looking at a repository.
  */
-export function ChatFacet({ chat, facet, onGone, onNewChat, onBrowseFact, repos }: {
+export function ChatFacet({ chat, facet, onGone, onNewChat, onBrowseFact, repos, repoNames, serverReadOnly = false }: {
   chat: ChatInfo;
   /** The repos the page lists: a repo chip in an answer names one of them. */
   repos?: RepoRef[];
+  /** What the fact view reads from the page, as Browse does (see FactView). */
+  repoNames?: Record<string, string>;
+  serverReadOnly?: boolean;
   /** Send the reader to Browse on a fact, from this chat. */
   onBrowseFact?: (chatId: string, req: BrowseFactRequest) => void;
   /** Start an empty chat with this chat's model (a notice's "New chat"). */
@@ -318,7 +321,7 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onBrowseFact, repos 
             <ChatPanel state={state} selectedId={selectedId} actionError={newChatError || actionError} notSent={notSent} landed={landed} modelName={chat.name || chat.model}
               context={{ used: state.ctxTokens, window: ctxWindow }}
               onSend={send} onStop={stop} onSelect={onSelect} onAnswer={answer}
-              factLinks={{ repos: repos ?? NO_REPOS, openKey: openFactKey, onOpen: onOpenFact, onBrowse: onBrowseFact ? (repo, path) => onBrowseFact(chat.id, { repo, path }) : undefined, onCommit: onOpenCommit }}
+              factLinks={{ repos: repos ?? NO_REPOS, openKey: openFactKey, onOpen: onOpenFact, onBrowse: onBrowseFact ? f => onBrowseFact(chat.id, { repo: f.repo, branch: f.branch, path: f.path }) : undefined, onCommit: onOpenCommit }}
               onNewChat={onNewChat ? () => {
                 setNewChatError('');
                 Promise.resolve(onNewChat(chat)).catch(() => setNewChatError(NEW_CHAT_ERROR));
@@ -329,6 +332,7 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onBrowseFact, repos 
           {openEntry && (
             <ChatSidePanel chatId={chat.id} panel={panel} dispatch={dispatchPanel} running={state.running}
               width={panelWidth} onSplitterDown={onSplitterDown} onBrowse={onBrowseFact ? req => onBrowseFact(chat.id, req) : undefined}
+              repos={repos} repoNames={repoNames} serverReadOnly={serverReadOnly}
               boundFor={callId => boundBeforeCall(state.turns, callId)} callFor={callId => findCall(state.turns, callId)} />
           )}
         </div>

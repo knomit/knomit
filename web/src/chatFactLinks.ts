@@ -34,7 +34,7 @@ export interface ResolvedFact {
 }
 
 /** The repos the page knows: a kb://<store> chip names one by id or name. */
-export interface RepoRef { name: string; id?: string }
+export interface RepoRef { name: string; id?: string; mode?: string }
 
 const SHORT_ID = /^[0-9a-f]{8}$/;
 const COMMIT_HASH = /^[0-9a-f]{7,40}$/;
@@ -154,8 +154,8 @@ export interface FactLinkEnv {
   openKey: string | null;
   /** Click: open the fact in the side panel. */
   onOpen?: (f: ResolvedFact) => void;
-  /** Cmd-click, and the card's Open in Browse. */
-  onBrowse?: (repo: string, path: string) => void;
+  /** Cmd-click: send the reader to Browse on the fact. */
+  onBrowse?: (f: ResolvedFact) => void;
   /** A commit link: open the commit in the side panel. The branch is the
    *  resolver's (the repo's read branch), never a lens: a commit resolves only
    *  when the turn worked in one repo, and it answers with that repo. */
