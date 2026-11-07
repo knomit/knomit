@@ -78,10 +78,10 @@ describe('a tool call row and its panel header take their words from the tool', 
     }
   });
 
-  it('the loader: its title and the loaded tools by title as the server words them (an untitled tool by its name)', async () => {
-    const { row, head } = await rowAndHead({ id: 'l', name: 'load_tools', title: 'Load tools', keyArg: 'Query, Explain, acme_untitled', state: 'done', isError: false, loaded: ['knomit_query', 'knomit_explain'] });
-    expect(words(row)).toBe('Load tools · Query, Explain, acme_untitled');
-    expect(words(head)).toBe('Load tools · Query, Explain, acme_untitled');
+  it('the loader: its title and the loaded tools by title as the server words them (the raw-name fallback is covered by the Go unit test)', async () => {
+    const { row, head } = await rowAndHead({ id: 'l', name: 'load_tools', title: 'Load tools', keyArg: 'Query, Explain', state: 'done', isError: false, loaded: ['knomit_query', 'knomit_explain'] });
+    expect(words(row)).toBe('Load tools · Query, Explain');
+    expect(words(head)).toBe('Load tools · Query, Explain');
   });
 
   it('a running call reads the same as a finished one (no "Searching")', () => {

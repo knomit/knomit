@@ -115,6 +115,9 @@ func TestChat_LoaderCallCarriesTitleAndWhatItLoaded(t *testing.T) {
 	snap := snapshotCalls(t, h, "uid:501", id)
 	require.Equal(t, "Load tools", snap["tu_load"]["title"])
 	require.Equal(t, "Explain", snap["tu_load"]["key_arg"])
+	rec := callResult(t, h, "uid:501", id, "tu_load")
+	require.Equal(t, "Load tools", rec.Title)
+	require.Equal(t, "Explain", rec.KeyArg, "the stored call record words the row as the events do")
 }
 
 // The loader's main argument words each loaded tool by its title, in load
