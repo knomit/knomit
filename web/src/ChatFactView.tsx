@@ -1,24 +1,26 @@
-import { useEffect, useState } from 'react';
-import type { CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { api } from './api';
-import type { Fact } from './api';
-import { FactBand } from './FactBand';
+import type { Fact, RefGroup } from './api';
 import { FactBody } from './FactBody';
-import { CHAT_RESULT_LOADING, factRetractedAt } from './chatCopy';
+import { FactActions, FactEdgesGroup, FactPage } from './FactChrome';
+import { CHAT_RESULT_LOADING } from './chatCopy';
+import type { BrowseFactRequest } from './chatPanelState';
 import { NoticeLine } from './ChatNotice';
-import { CommitHash } from './TimelineNav';
-import { EDGE_ACCENT, EDGE_GLYPH, EDGE_LABEL, relativeTime, sameCommit } from './utils';
-import type { EdgeDir } from './utils';
+import { MaterializeView } from './MaterializeView';
+import { parseMaterializeParams } from './materializeOptions';
+import { orderMotifs } from './MotifRow';
+import { useMotifClusters } from './useMotifClusters';
 
 const noDispatch = () => {};
+const nothing = () => {};
 
 interface Loaded {
   key: string;
   fact?: Fact;
-  incoming?: number;
-  outgoing?: number;
-  /** The fact's version commits, newest first. */
-  versions?: string[];
+  incoming?: RefGroup[];
+  outgoing?: RefGroup[];
+  edgesError?: string;
   error?: string;
 }
 
@@ -28,24 +30,37 @@ export function PanelLoadError({ error, testId }: { error: string; testId: strin
   return <div role="alert" style={{ padding: '0 18px' }}><NoticeLine tone="blocked" testId={testId} lead={sentence} /></div>;
 }
 
+const NO_REFS: RefGroup[] = [];
+
 /**
- * ChatFactView shows one fact in the chat's side panel the way Browse shows it:
- * the same band (FactMetaLine's values, the path, cited by / cites, the version)
- * and the same body. It is read-only: the band's controls that act on Browse's
- * state (filters, panels, history, retract) are not offered here, and "Open in
- * Browse" in the panel header is the way to them.
+ * ChatFactView shows one fact in the chat's side panel with Browse's own chrome
+ * (FactChrome: the band, its cells and actions, the title that flows up into the
+ * band as the body scrolls) and body. It has no filters or history of its own, so
+ * what opens something in Browse here sends the reader there instead: the version,
+ * cited by, cites and a motif each land in Browse on this fact, with `onBrowse`.
+ * Materialize is the one thing it does in place, as Browse does. It offers no
+ * retract, which destroys rather than reads.
+ *
+ * With `commit` everything on screen is that version's, and each of those landings
+ * is at that commit. `removed` says the commit retracted the fact: a plain read
+ * there is 404 by design, so it reads the last version before it (?fallback=before)
+ * and the band's badge says so, as Browse's does.
  *
  * It fetches the fact itself (api.fact), so whoever opens it only names
- * {repo, branch, path}. The edge counts and the version come from separate
- * reads that may fail on their own: the fact is shown without them.
- *
- * With `commit` everything on screen is that version's: the text, the counts,
- * the date and the vN (its place in the history, not the history's length),
- * and the band names the commit. `removed` says the commit retracted the fact:
- * a plain read there is 404 by design, so it reads the last version before it
- * (?fallback=before) and says it was retracted.
+ * {repo, branch, path}. The edges come from a separate read that may fail on its
+ * own: the cells then show the failure, as they do in Browse.
  */
-export function ChatFactView({ repo, branch, path, commit, removed = false }: { repo: string; branch: string; path: string; commit?: string; removed?: boolean }) {
+export function ChatFactView({ repo, branch, path, commit, removed = false, closeControl, onBrowse }: {
+  repo: string;
+  branch: string;
+  path: string;
+  commit?: string;
+  removed?: boolean;
+  /** The panel's ×: this view has no header, so it sits in the band. */
+  closeControl: ReactNode;
+  /** Send the reader to Browse on this fact. Absent where the page cannot navigate. */
+  onBrowse?: (req: BrowseFactRequest) => void;
+}) {
   const key = `${repo}\0${branch}\0${path}\0${commit ?? ''}`;
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   useEffect(() => {
@@ -55,54 +70,70 @@ export function ChatFactView({ repo, branch, path, commit, removed = false }: { 
       .then(fact => { if (!cancelled) setLoaded(l => ({ ...(l?.key === key ? l : {}), key, fact })); })
       .catch(e => { if (!cancelled) setLoaded({ key, error: e instanceof Error ? e.message : String(e) }); });
     api.explain(repo, branch, path, commit, opts)
-      .then(r => { if (!cancelled) setLoaded(l => ({ ...(l?.key === key ? l : { key }), incoming: r.incoming.length, outgoing: r.outgoing.length })); })
-      .catch(() => { /* the counts are left out */ });
-    api.factCommits(repo, branch, path)
-      .then(r => { if (!cancelled) setLoaded(l => ({ ...(l?.key === key ? l : { key }), versions: (r.entries || []).map(e => e.commit) })); })
-      .catch(() => { /* the version is left out */ });
+      .then(r => { if (!cancelled) setLoaded(l => ({ ...(l?.key === key ? l : { key }), incoming: r.incoming, outgoing: r.outgoing })); })
+      .catch(e => { if (!cancelled) setLoaded(l => ({ ...(l?.key === key ? l : { key }), edgesError: String(e) })); });
     return () => { cancelled = true; };
   }, [repo, branch, path, commit, removed, key]);
 
   // An answer for another fact than the one asked for is the previous one's.
   const shown = loaded?.key === key ? loaded : null;
+  const endpoint = useMemo(() => ({ kind: 'repo' as const, repo, branch }), [repo, branch]);
+  const resolvedMotifs = useMotifClusters(endpoint, shown?.fact?.motifs);
+  const motifs = useMemo(() => orderMotifs(resolvedMotifs), [resolvedMotifs]);
+  const menuRef = useRef<HTMLSpanElement>(null);
+  const [materialize, setMaterialize] = useState(false);
+  const [matOptions, setMatOptions] = useState(() => parseMaterializeParams('').options);
+
   if (!shown?.fact && !shown?.error) {
-    return <div data-testid="chat-fact-loading" style={{ color: '#777', fontSize: 13, padding: '14px 18px' }}>{CHAT_RESULT_LOADING}</div>;
+    return <><div style={placeholderBar}>{closeControl}</div><div data-testid="chat-fact-loading" style={{ color: '#777', fontSize: 13, padding: '14px 18px' }}>{CHAT_RESULT_LOADING}</div></>;
   }
   if (shown.error) {
-    return <PanelLoadError error={shown.error} testId="chat-fact-error" />;
+    return <><div style={placeholderBar}>{closeControl}</div><PanelLoadError error={shown.error} testId="chat-fact-error" /></>;
   }
   const fact = shown.fact!;
-  const cell = (dir: EdgeDir, n: number | undefined) => n === undefined ? null : (
-    <span key={dir} data-testid={`chat-fact-${dir === 'in' ? 'cited-by' : 'cites'}`} style={edge(n > 0 ? EDGE_ACCENT[dir] : '#444')}>
-      <span style={{ fontSize: 10 }}>{EDGE_GLYPH[dir]}</span> {EDGE_LABEL[dir]} <b>{n}</b>
-    </span>
-  );
-  const edges = <>{cell('in', shown.incoming)}{cell('out', shown.outgoing)}</>;
-  // The commit this text is from: the one asked for, or, past a retraction, the
-  // last version before it (what the server read instead).
-  const readAt = commit && (removed ? fact.commit_hash ?? commit : commit);
-  const history = shown.versions ?? [];
-  const at = readAt ? history.findIndex(c => sameCommit(c, readAt)) : 0;
-  const version = at >= 0 ? history.length - at : 0;
-  const actions = (
-    <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#555' }}>
-      {readAt && <span data-testid="chat-fact-commit" style={{ display: 'inline-flex' }}><CommitHash commit={readAt} /></span>}
-      {fact.commit_date && <span data-testid="chat-fact-date">{relativeTime(fact.commit_date)}</span>}
-      {version ? <span data-testid="chat-fact-version" style={{ color: '#7c9' }}>v{version}</span> : null}
-    </span>
-  );
+  if (materialize) {
+    return (
+      <MaterializeView
+        target={{ repo, branch, path, commit }}
+        title={fact.title || fact.path}
+        options={matOptions}
+        onOptionsChange={setMatOptions}
+        onBack={() => setMaterialize(false)}
+      />
+    );
+  }
+  const send = (req: Omit<BrowseFactRequest, 'repo' | 'branch' | 'path'>) => {
+    onBrowse?.({ repo, branch, path, ...(commit ? { commit } : {}), ...req });
+  };
   return (
-    <div data-testid="chat-fact" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <FactBand fact={fact} dispatch={noDispatch} pinned={false} edges={edges} actions={actions} filterable={false} />
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 18px 20px', boxSizing: 'border-box' }}>
-        {removed && commit && <div style={{ marginBottom: 12 }}><NoticeLine tone="info" testId="chat-fact-retracted" lead={factRetractedAt(commit.slice(0, 7))} /></div>}
-        <div data-testid="chat-fact-title" style={{ fontFamily: 'var(--k-font-display)', fontSize: 17, fontWeight: 600, color: '#eee', marginBottom: 14 }}>
-          {fact.title || fact.path}
-        </div>
+    <div data-testid="chat-fact" style={{ height: '100%', minHeight: 0 }}>
+      <FactPage fact={fact} dispatch={noDispatch} filterable={false}
+        edges={
+          <FactEdgesGroup
+            connections={{
+              panelId: 'chat-connections', open: null,
+              incoming: shown.incoming ?? NO_REFS, outgoing: shown.outgoing ?? NO_REFS, error: shown.edgesError ?? null,
+              onToggle: dir => send({ panel: { connections: dir } }),
+              onClose: nothing, onHop: nothing, menuRef, onMouseEnter: nothing, onMouseLeave: nothing,
+            }}
+            motifs={motifs}
+            motifSlot={{ open: null, onToggle: motif => send({ panel: { motif } }), onClose: nothing, onPivot: nothing, panelId: '' }}
+          />
+        }
+        actions={
+          <FactActions fact={fact} histAnchor={{ repo, branch, path }} anchorCommit={commit ?? null}
+            // The version opens Browse's history of this fact. Browse's walker opens it
+            // at the newest version; a fact read at a commit stays at that commit.
+            onScrub={newest => send({ commit: commit ?? newest })}
+            onMaterialize={() => setMaterialize(true)} exactVersion={!!commit}>
+            {closeControl}
+          </FactActions>
+        }>
         <FactBody fact={fact} dispatch={noDispatch} filterable={false} />
-      </div>
+      </FactPage>
     </div>
   );
 }
 
-const edge = (color: string): CSSProperties => ({ color, fontFamily: 'var(--k-font-mono)', fontSize: 11, whiteSpace: 'nowrap' });
+// Only while there is no band to hold the ×.
+const placeholderBar: CSSProperties = { display: 'flex', justifyContent: 'flex-end', padding: '7px 8px', flexShrink: 0 };

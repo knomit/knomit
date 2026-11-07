@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from './api';
 import type { CommitDetail, CommitFile } from './api';
-import { CHAT_RESULT_LOADING } from './chatCopy';
+import { CHAT_RESULT_LOADING, COMMIT_FACTS_AFFECTED } from './chatCopy';
 import { PanelLoadError } from './ChatFactView';
 import { CommitAuthorLine, CommitFileRow, CommitFilesLabel, CommitHash } from './TimelineNav';
 import { relativeTime } from './utils';
@@ -21,12 +21,12 @@ export type CommitMemo = Map<string, { detail: CommitDetail; scrollTop: number }
  * ChatCommitView shows one commit in the chat's side panel: its hash and time,
  * its message and author, and the facts it affected, with the timeline's own
  * parts (TimelineNav). Clicking a fact opens it in the same panel as it read at
- * this commit, and the panel's Back returns here. A fact this commit retracted
+ * this commit; the commit's chip in the answer returns here. A fact this commit retracted
  * has no version at the commit, so its row says so (struck through) and opens
  * the last version before it.
  *
- * The panel unmounts this view while a fact is on screen, so `memo` holds what
- * Back needs to return to the same place in a long list without a second read.
+ * The panel unmounts this view while a fact is on screen, so `memo` holds what it
+ * needs to return to the same place in a long list without a second read.
  */
 export function ChatCommitView({ repo, branch, commit, memo, onOpenFact }: {
   repo: string;
@@ -76,7 +76,7 @@ export function ChatCommitView({ repo, branch, commit, memo, onOpenFact }: {
       <CommitAuthorLine author={detail.author} />
       {facts.length > 0 && (
         <div style={{ marginTop: 14 }}>
-          <CommitFilesLabel count={facts.length} />
+          <CommitFilesLabel label={COMMIT_FACTS_AFFECTED} count={facts.length} />
           {facts.map(f => (
             <CommitFileRow key={f.path} file={f} onOpen={() => onOpenFact(f.path, f.action === 'deleted')} />
           ))}

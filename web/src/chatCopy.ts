@@ -57,8 +57,8 @@ export function chatSpillWarning(window: number): string {
 
 /** The result panel, while a tool result is being fetched. */
 export const CHAT_RESULT_LOADING = 'Loading…';
-/** A fact read past its retraction, in the side panel: the commit that retracted it. */
-export const factRetractedAt = (commit: string): string => `retracted at ${commit}`;
+/** The label above a commit's fact rows in the side panel. */
+export const COMMIT_FACTS_AFFECTED = 'Facts affected';
 
 /** The button on a Settings grant row that takes the grant back. */
 export const CHAT_REVOKE_GRANT = 'Revoke';
@@ -242,12 +242,7 @@ export const PANEL_TAB_RESULT = 'Result';
 export const PANEL_TAB_ARGUMENTS = 'Arguments';
 /** The footer: "Esc close · ⌘[ back · N of M opened". */
 export const PANEL_KEY_CLOSE = 'Esc close';
-export const PANEL_KEY_BACK = '⌘[ back';
-export const panelOpened = (n: number, m: number): string => `${n} of ${m} opened`;
-export const panelFooter = (n: number, m: number): string => [PANEL_KEY_CLOSE, PANEL_KEY_BACK, panelOpened(n, m)].join(' · ');
 // GAP (not in the design): accessible names for the header's icon buttons.
-export const PANEL_BACK_LABEL = 'Back';
-export const PANEL_FORWARD_LABEL = 'Forward';
 export const PANEL_CLOSE_LABEL = 'Close';
 
 // ── APPROVED (2026-11-06) ──

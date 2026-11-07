@@ -1,18 +1,13 @@
 import { useCallback, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
+import type { FactPanel } from './state';
 
-// The chat's side panel: what it shows, the history of what it has shown, and
-// how wide it is.
+// The chat's side panel: what it shows and how wide it is.
 //
 // WHAT IT SHOWS is one of three things, so the fact links, the commit links and
 // the timeline's steps open the same panel: a tool call's result, a fact, or a
 // commit. A fact or commit entry is complete (the panel fetches it), so a link
-// only has to call open().
-//
-// HISTORY works like a browser's: open() drops whatever was ahead of the
-// current entry and pushes; back and forward move along. Closing the panel
-// keeps the history (it is "what has been opened in this chat"), so reopening
-// a step does not erase the way back.
+// only has to open it. There is no history here: the reader picks from the chat.
 
 export type PanelEntry =
   | { kind: 'result'; callId: string }
@@ -22,45 +17,35 @@ export type PanelEntry =
   | { kind: 'commit'; repo: string; branch: string; commit: string };
 
 export interface PanelState {
-  entries: PanelEntry[];
-  /** The entry on screen (or last on screen, while closed). -1 with no entries. */
-  index: number;
-  open: boolean;
+  /** The entry on screen, or null while the panel is closed. */
+  entry: PanelEntry | null;
 }
 
-export const initialPanelState: PanelState = { entries: [], index: -1, open: false };
+export const initialPanelState: PanelState = { entry: null };
 
 export type PanelAction =
   | { type: 'open'; entry: PanelEntry }
-  | { type: 'back' }
-  | { type: 'forward' }
   | { type: 'close' };
-
-export const sameEntry = (a: PanelEntry | undefined, b: PanelEntry | undefined): boolean => {
-  if (!a || !b || a.kind !== b.kind) return false;
-  if (a.kind === 'result' && b.kind === 'result') return a.callId === b.callId;
-  if (a.kind === 'fact' && b.kind === 'fact') return a.repo === b.repo && a.branch === b.branch && a.path === b.path && a.commit === b.commit;
-  if (a.kind === 'commit' && b.kind === 'commit') return a.repo === b.repo && a.branch === b.branch && a.commit === b.commit;
-  return false;
-};
 
 export function panelReducer(s: PanelState, a: PanelAction): PanelState {
   switch (a.type) {
-    case 'open': {
-      // Opening what is already showing changes nothing; opening it again after
-      // a close just reopens it.
-      if (sameEntry(s.entries[s.index], a.entry)) return s.open ? s : { ...s, open: true };
-      const entries = [...s.entries.slice(0, s.index + 1), a.entry];
-      return { entries, index: entries.length - 1, open: true };
-    }
-    case 'back': return s.index > 0 ? { ...s, index: s.index - 1 } : s;
-    case 'forward': return s.index < s.entries.length - 1 ? { ...s, index: s.index + 1 } : s;
-    case 'close': return s.open ? { ...s, open: false } : s;
+    case 'open': return { entry: a.entry };
+    case 'close': return s.entry ? { entry: null } : s;
   }
 }
 
 /** The entry on screen, or null while the panel is closed. */
-export const shownEntry = (s: PanelState): PanelEntry | null => (s.open ? s.entries[s.index] ?? null : null);
+export const shownEntry = (s: PanelState): PanelEntry | null => s.entry;
+
+/** A fact the panel sends to Browse: that fact, at `commit` when the panel read
+ *  it at one, on the branch it was read from, with `panel` opened on landing. */
+export interface BrowseFactRequest {
+  repo: string;
+  path: string;
+  branch?: string;
+  commit?: string;
+  panel?: FactPanel;
+}
 
 // ── width ──
 

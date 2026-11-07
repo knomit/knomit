@@ -9,25 +9,14 @@ import type { ChatCall } from './chatApi';
 import { bindTarget, isBind, toolCallLabel, toolCallOf } from './chatState';
 import type { ToolCall } from './chatState';
 import { crumbOf, shownEntry } from './chatPanelState';
-import type { PanelAction, PanelState } from './chatPanelState';
-import {
-  PANEL_BACK_LABEL, PANEL_CLOSE_LABEL, PANEL_FORWARD_LABEL, PANEL_KEY_BACK, PANEL_KEY_CLOSE, PANEL_OPEN_IN_BROWSE, panelOpened,
-} from './chatCopy';
+import type { BrowseFactRequest, PanelAction, PanelState } from './chatPanelState';
+import { PANEL_CLOSE_LABEL, PANEL_KEY_CLOSE } from './chatCopy';
 
-// The mockup's icons (mockup.html, `I`): 13px strokes for the header, 11px for the external-link mark.
+// The mockup's icon (mockup.html, `I`): a 13px stroke.
 const svg = (size: number, children: React.ReactNode) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>
 );
-const ICON_BACK = svg(13, <polyline points="15 18 9 12 15 6" />);
-const ICON_FORWARD = svg(13, <polyline points="9 18 15 12 9 6" />);
 const ICON_CLOSE = svg(13, <><line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" /></>);
-const ICON_EXTERNAL = svg(11, <><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></>);
-
-/** The footer's "Esc close" / "⌘[ back": the key drawn as a keycap, then its word. */
-const keyHint = (hint: string) => {
-  const i = hint.indexOf(' ');
-  return <><span style={keycap}>{hint.slice(0, i)}</span><span>{hint.slice(i)}<span style={dot}> · </span></span></>;
-};
 
 /** A string argument of a tool call, or ''. */
 const arg = (call: ChatCall, ...names: string[]): string => {
@@ -50,21 +39,22 @@ function typingIn(el: Element | null): boolean {
 
 /**
  * ChatSidePanel is the 470px panel on the right of a chat: a fact, a commit or
- * a tool result, a 40px header (back, forward, breadcrumb, Open in Browse, close) and
- * a footer. It is mounted only while open, so it costs nothing before a step is
- * clicked; the chat column beside it narrows to make room.
+ * a tool result, and a footer. A commit or a tool result has a 40px header
+ * (breadcrumb, close). A fact has its band instead, which holds the close. It is
+ * mounted only while open, so it costs nothing before a step is clicked; the chat
+ * column beside it narrows to make room.
  *
- * KEYS (precedence).
- *   Esc while a turn is RUNNING stops the turn (ChatPanel) and never closes the
- *   panel: Stop is the one that must not be missed, so the panel yields to it
- *   wherever the focus is. Esc with no turn running closes the panel, unless
- *   the focus is in the composer (or any field), where Esc is not ours. A key
- *   something else already took (defaultPrevented) is left alone, as is a chat
- *   that is not on screen.
- *   Cmd+[ (Ctrl+[ too) goes back, from anywhere, including the composer; the
- *   browser's own history shortcut is suppressed.
+ * There is no history here: the reader picks from the chat. From a fact opened out
+ * of a commit, the way back to the commit is its chip in the answer.
+ *
+ * ESC while a turn is RUNNING stops the turn (ChatPanel) and never closes the
+ * panel: Stop is the one that must not be missed, so the panel yields to it
+ * wherever the focus is. Esc with no turn running closes the panel, unless the
+ * focus is in the composer (or any field), where Esc is not ours. A key something
+ * else already took (defaultPrevented) is left alone, as is a chat that is not on
+ * screen.
  */
-export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplitterDown, onOpenInBrowse, boundFor, callFor }: {
+export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplitterDown, onBrowse, boundFor, callFor }: {
   chatId: string;
   panel: PanelState;
   dispatch: Dispatch<PanelAction>;
@@ -72,9 +62,8 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
   running: boolean;
   width: number;
   onSplitterDown: (e: ReactMouseEvent) => void;
-  /** Open this fact in Browse, at `at` when the panel shows it as it read at a
-   *  commit. Absent where the page cannot navigate. */
-  onOpenInBrowse?: (repo: string, path: string, at?: { commit: string; branch: string }) => void;
+  /** Send the reader to Browse on a fact. Absent where the page cannot navigate. */
+  onBrowse?: (req: BrowseFactRequest) => void;
   /** The repo or lens the chat was bound to when a call ran (a result with no
    *  target of its own belongs to it). */
   boundFor?: (callId: string) => string;
@@ -84,8 +73,8 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
 }) {
   const root = useRef<HTMLDivElement>(null);
   const entry = shownEntry(panel);
-  // What a loaded result says about itself: its breadcrumb and where Browse would open it.
-  const [calls, setCalls] = useState<Record<string, { crumb: string[]; browse?: { repo: string; path: string } }>>({});
+  // What a loaded result says about itself: its breadcrumb.
+  const [calls, setCalls] = useState<Record<string, { crumb: string[] }>>({});
   const boundForRef = useRef(boundFor);
   const callForRef = useRef(callFor);
   useEffect(() => { boundForRef.current = boundFor; callForRef.current = callFor; });
@@ -105,8 +94,7 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
     // labelled as its row is (toolCallLabel).
     const label = toolCallLabel(callForRef.current?.(callId) ?? toolCallOf(callId, call));
     const crumb = path ? crumbOf(repo || label, path) : [repo, label].filter(Boolean);
-    const browse = call.name === 'knomit_materialize' && !call.is_error && repo && path ? { repo, path: file } : undefined;
-    setCalls(c => ({ ...c, [callId]: { crumb, ...(browse ? { browse } : {}) } }));
+    setCalls(c => ({ ...c, [callId]: { crumb } }));
   }, []);
 
   const runningRef = useRef(running);
@@ -115,54 +103,35 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
     const onKey = (e: KeyboardEvent) => {
       const el = root.current;
       if (!el || !isShown(el)) return;
-      if (e.key === 'Escape') {
-        if (e.defaultPrevented || runningRef.current) return;
-        if (typingIn(document.activeElement)) return;
-        dispatch({ type: 'close' });
-      } else if (e.key === '[' && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
-        e.preventDefault();
-        dispatch({ type: 'back' });
-      }
+      if (e.key !== 'Escape' || e.defaultPrevented || runningRef.current) return;
+      if (typingIn(document.activeElement)) return;
+      dispatch({ type: 'close' });
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [dispatch]);
 
   if (!entry) return null;
-  const known = entry.kind === 'result' ? calls[entry.callId] : undefined;
-  const crumb = entry.kind === 'fact' ? crumbOf(entry.repo, entry.path)
-    : entry.kind === 'commit' ? [entry.repo, entry.commit.slice(0, 7)] : known?.crumb ?? [];
-  // Browse has no repo-at-commit view, so a commit offers no way there. A fact
-  // read at a commit opens at that commit: the latest version (or none, if it
-  // was retracted) is not what the reader was looking at.
-  const browse: { repo: string; path: string; at?: { commit: string; branch: string } } | undefined = entry.kind === 'fact'
-    ? { repo: entry.repo, path: entry.path, ...(entry.commit ? { at: { commit: entry.commit, branch: entry.branch } } : {}) }
-    : entry.kind === 'result' ? known?.browse : undefined;
-  const canBack = panel.index > 0;
-  const canForward = panel.index < panel.entries.length - 1;
+  const close = (
+    <button type="button" data-testid="chat-panel-close" aria-label={PANEL_CLOSE_LABEL} title={PANEL_CLOSE_LABEL}
+      onClick={() => dispatch({ type: 'close' })} style={iconBtn}>{ICON_CLOSE}</button>
+  );
+  const crumb = entry.kind === 'commit' ? [entry.repo, entry.commit.slice(0, 7)] : entry.kind === 'result' ? calls[entry.callId]?.crumb ?? [] : [];
 
   return (
     <>
       <FacetSplitter onMouseDown={onSplitterDown} testId="chat-panel-splitter" />
       <div ref={root} data-testid="chat-side-panel" className="k-chat-result" style={{ ['--k-panel-w' as string]: `${width}px` }}>
-        <div data-testid="chat-panel-header" style={header}>
-          <button type="button" data-testid="chat-panel-back" aria-label={PANEL_BACK_LABEL} title={PANEL_BACK_LABEL}
-            disabled={!canBack} onClick={() => dispatch({ type: 'back' })} style={iconBtn(canBack)}>{ICON_BACK}</button>
-          <button type="button" data-testid="chat-panel-forward" aria-label={PANEL_FORWARD_LABEL} title={PANEL_FORWARD_LABEL}
-            disabled={!canForward} onClick={() => dispatch({ type: 'forward' })} style={iconBtn(canForward)}>{ICON_FORWARD}</button>
-          <div data-testid="chat-panel-crumb" style={crumbBox}>
-            {crumb.map((c, i) => (
-              <span key={i} style={{ whiteSpace: 'nowrap' }}>{i > 0 && ' / '}{c}</span>
-            ))}
+        {entry.kind !== 'fact' && (
+          <div data-testid="chat-panel-header" style={header}>
+            <div data-testid="chat-panel-crumb" style={crumbBox}>
+              {crumb.map((c, i) => (
+                <span key={i} style={{ whiteSpace: 'nowrap' }}>{i > 0 && ' / '}{c}</span>
+              ))}
+            </div>
+            {close}
           </div>
-          {browse && onOpenInBrowse && (
-            <button type="button" data-testid="chat-panel-browse" onClick={() => { if (browse.at) onOpenInBrowse(browse.repo, browse.path, browse.at); else onOpenInBrowse(browse.repo, browse.path); }} style={browseBtn}>
-              {PANEL_OPEN_IN_BROWSE}{ICON_EXTERNAL}
-            </button>
-          )}
-          <button type="button" data-testid="chat-panel-close" aria-label={PANEL_CLOSE_LABEL} title={PANEL_CLOSE_LABEL}
-            onClick={() => dispatch({ type: 'close' })} style={iconBtn(true)}>{ICON_CLOSE}</button>
-        </div>
+        )}
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
           {entry.kind === 'result'
             ? <ChatResultPanel chatId={chatId} callId={entry.callId} row={callFor?.(entry.callId)} onCall={onCall} />
@@ -171,34 +140,31 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
                   type: 'open',
                   entry: { kind: 'fact', repo: entry.repo, branch: entry.branch, path, commit: entry.commit, ...(removed ? { removed: true } : {}) },
                 })} />
-              : <ChatFactView repo={entry.repo} branch={entry.branch} path={entry.path} commit={entry.commit} removed={entry.removed} />}
+              : <ChatFactView key={`${entry.repo}\0${entry.branch}\0${entry.path}\0${entry.commit ?? ''}`} repo={entry.repo} branch={entry.branch} path={entry.path}
+                  commit={entry.commit} removed={entry.removed} closeControl={close} onBrowse={onBrowse} />}
         </div>
         <div data-testid="chat-panel-footer" style={footer}>
-          {keyHint(PANEL_KEY_CLOSE)}{keyHint(PANEL_KEY_BACK)}
-          <span style={{ marginLeft: 'auto' }}>{panelOpened(panel.index + 1, panel.entries.length)}</span>
+          <span style={keycap}>{PANEL_KEY_CLOSE.slice(0, PANEL_KEY_CLOSE.indexOf(' '))}</span>
+          <span>{PANEL_KEY_CLOSE.slice(PANEL_KEY_CLOSE.indexOf(' '))}</span>
         </div>
       </div>
     </>
   );
 }
 
-// Sizes and colours are the mockup's .sbar / .ib / .bc / .obtn / .kbdh (mockup.html, side panel).
+// Sizes and colours are the mockup's .sbar / .ib / .bc / .kbdh (mockup.html, side panel).
 const header: CSSProperties = {
   height: 40, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, padding: '0 8px',
   borderBottom: '1px solid #1e1e1e', boxSizing: 'border-box',
 };
-const iconBtn = (on: boolean): CSSProperties => ({
+const iconBtn: CSSProperties = {
   background: 'none', border: 'none', padding: 0, width: 26, height: 26, borderRadius: 5, flexShrink: 0,
   display: 'flex', alignItems: 'center', justifyContent: 'center',
-  color: on ? '#888' : '#3a3a3a', cursor: on ? 'pointer' : 'default',
-});
+  color: '#888', cursor: 'pointer',
+};
 const crumbBox: CSSProperties = {
   flex: 1, minWidth: 0, marginLeft: 4, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
   fontSize: 11.5, color: '#777',
-};
-const browseBtn: CSSProperties = {
-  flexShrink: 0, background: 'none', border: '1px solid #333', borderRadius: 5, padding: '3px 9px',
-  fontSize: 11.5, color: '#ccc', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap',
 };
 const footer: CSSProperties = {
   flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', boxSizing: 'border-box',
@@ -207,6 +173,3 @@ const footer: CSSProperties = {
 const keycap: CSSProperties = {
   fontFamily: 'var(--k-font-mono)', fontSize: 9.5, color: '#555', border: '1px solid #2a2a2a', borderRadius: 3, padding: '0 4px',
 };
-// The " · " separators stay in the text (it reads the same to a screen reader) but are zero-width and INSIDE the word's own
-// flex item, so they add no flex gap: the footer's items are exactly the mockup's (keycap, word, keycap, word, count).
-const dot: CSSProperties = { display: 'inline-block', width: 0, overflow: 'hidden', whiteSpace: 'pre' };

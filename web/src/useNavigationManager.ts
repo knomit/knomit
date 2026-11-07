@@ -1,14 +1,15 @@
 import { useRef } from 'react';
 import type { Dispatch } from 'react';
-import type { AppState, Action, AsOf } from './state';
+import type { AppState, Action, AsOf, FactPanel } from './state';
 import { displayLensPath } from './utils';
 
 export type NavRequest =
   | { view: 'library' }
   | { view: 'library'; factPath: string | null }
   /** Open the fact AND take the tree to where it lives — see resolveNavRequest.
-   *  `asOf` anchors it there (live when absent). */
-  | { view: 'library'; factPath: string; reveal: true; asOf?: AsOf };
+   *  `asOf` anchors it there (live when absent); `fromChat` makes Back return to
+   *  that chat; `factPanel` opens that panel of the fact on landing. */
+  | { view: 'library'; factPath: string; reveal: true; asOf?: AsOf; fromChat?: string; factPanel?: FactPanel };
 
 /**
  * Pure async function — resolves a NavRequest to an APPLY_NAV dispatch.
@@ -67,6 +68,8 @@ export async function resolveNavRequest(
       filters: [{ category: 'path', value: dir }],
       freeText: '',
       sort: 'path',
+      ...(req.fromChat ? { fromChat: req.fromChat } : {}),
+      ...(req.factPanel ? { factPanel: req.factPanel } : {}),
     });
     return;
   }

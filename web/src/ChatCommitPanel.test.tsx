@@ -48,15 +48,15 @@ const twoChips = (): ChatSnapshot => ({
   ],
 });
 
-function mount(routes: Parameters<typeof stubFleetFetch>[0] = {}, onOpenInBrowse = vi.fn()) {
+function mount(routes: Parameters<typeof stubFleetFetch>[0] = {}, onBrowseFact = vi.fn()) {
   const fx = stubFleetFetch({
     [`GET ${BASE}`]: { body: snapshot() },
     'POST /api/v1/facts/resolve': { body: [{ handle: 'abc1234', id: '', title: '', type: '', repo: 'agentic-engineering', branch: 'agent/test', path: '', excerpt: '', confidence: 0, commit: FULL }] },
     [`GET ${REPO}/commits/${FULL}`]: { body: DETAIL },
     ...routes,
   });
-  const utils = render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} onOpenInBrowse={onOpenInBrowse} repos={[]} />);
-  return { fx, onOpenInBrowse, ...utils };
+  const utils = render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} onBrowseFact={onBrowseFact} repos={[]} />);
+  return { fx, onBrowseFact, ...utils };
 }
 
 const clickChip = async () => fireEvent.click(await screen.findByTestId('commit-link'));
@@ -82,15 +82,15 @@ describe('a commit chip opens the commit in the side panel', () => {
     // Panel chrome: the existing crumb; Browse has no repo-at-commit view, so no way there.
     expect(screen.getByTestId('chat-panel-crumb')).toHaveTextContent('agentic-engineering / abc1234');
     expect(screen.queryByTestId('chat-panel-browse')).toBeNull();
-    expect(screen.getByTestId('chat-panel-footer')).toHaveTextContent('1 of 1');
+    expect(screen.queryByTestId('chat-panel-back')).toBeNull();
     expect(screen.getByTestId('chat-facet')).toBeInTheDocument();
     // The chip stays highlighted while its commit is on screen.
     expect(screen.getByTestId('commit-link')).toHaveAttribute('data-open', 'true');
-    expect(within(panel).getByTestId('commit-files-label')).toHaveTextContent('Files affected · 3');
+    expect(within(panel).getByTestId('commit-files-label')).toHaveTextContent('Facts affected · 3');
     expect(within(panel).getAllByTestId('timeline-file-row').map(r => r.getAttribute('data-action'))).toEqual(['added', 'modified', 'deleted']);
   });
 
-  it('a fact row opens the fact as it read at the commit, in the same panel, and Back returns to the commit', async () => {
+  it('a fact row opens the fact as it read at the commit, in the same panel, and its chip returns to the commit', async () => {
     const { fx } = mount({
       [`GET ${REPO}/commits/${FULL}/facts/${CHANGED}`]: { body: factAt(CHANGED, 'The changed fact', 'THE OLD TEXT', FULL) },
       [`GET ${REPO}/facts/${CHANGED}`]: { body: factAt(CHANGED, 'The changed fact', 'THE NEW TEXT', NEWER) },
@@ -108,29 +108,51 @@ describe('a commit chip opens the commit in the side panel', () => {
     expect(fact).toHaveTextContent('THE OLD TEXT');
     expect(fact).not.toHaveTextContent('THE NEW TEXT');
     expect(fx.calls.some(c => c.route === `GET ${REPO}/facts/${CHANGED}`)).toBe(false);
-    // The band says which version: this commit, the second of three, not v3.
-    expect(within(fact).getByTestId('chat-fact-commit')).toHaveTextContent('abc1234');
-    expect(await within(fact).findByTestId('chat-fact-version')).toHaveTextContent('v2');
+    // The band says which version: the second of three, not v3, on an anchored date.
+    expect(await within(fact).findByTestId('version-walker')).toHaveTextContent('v2');
     // The edge counts are this commit's too.
-    expect(await within(fact).findByTestId('chat-fact-cited-by')).toHaveTextContent('cited by 2');
-    expect(within(fact).getByTestId('chat-fact-cites')).toHaveTextContent('cites 1');
-    expect(screen.getByTestId('chat-panel-footer')).toHaveTextContent('2 of 2');
-    expect(screen.queryByTestId('chat-fact-retracted')).toBeNull();
-    // The panel's existing Back.
-    fireEvent.click(screen.getByTestId('chat-panel-back'));
+    await waitFor(() => expect(within(fact).getByTestId('connections-in')).toHaveTextContent('2'));
+    expect(within(fact).getByTestId('connections-out')).toHaveTextContent('1');
+    expect(screen.queryByTestId('retracted-version-badge')).toBeNull();
+    // No back control: the commit's chip returns.
+    expect(screen.queryByTestId('chat-panel-back')).toBeNull();
+    fireEvent.click(screen.getByTestId('commit-link'));
     expect(await screen.findByTestId('chat-commit')).toBeInTheDocument();
     expect(screen.queryByTestId('chat-fact')).toBeNull();
   });
 
-  it('Open in Browse from a fact read at a commit names that commit; a fact link\'s does not', async () => {
-    const { onOpenInBrowse } = mount({
+  it('from a fact read at a commit, the version, cited by and cites all land at that commit, on its branch', async () => {
+    const { onBrowseFact } = mount({
       [`GET ${REPO}/commits/${FULL}/facts/${CHANGED}`]: { body: factAt(CHANGED, 'The changed fact', 'x', FULL) },
+      [`GET ${REPO}/commits/${FULL}/facts/${CHANGED}/incoming`]: { body: { _embedded: { refs: [{ path: 'a.md', title: 'A', commit: 'c1' }] } } },
+      [`GET ${REPO}/commits/${FULL}/facts/${CHANGED}/outgoing`]: { body: { _embedded: { refs: [{ path: 'c.md', title: 'C', commit: 'c3' }] } } },
+      [`GET ${REPO}/facts/${CHANGED}/commits`]: { body: { _embedded: { commits: [{ commit: NEWER }, { commit: FULL }] } } },
     });
     await clickChip();
     await screen.findByTestId('chat-commit');
     fireEvent.click(rowFor('The changed fact'));
-    fireEvent.click(await screen.findByTestId('chat-panel-browse'));
-    expect(onOpenInBrowse).toHaveBeenCalledWith('agentic-engineering', CHANGED, { commit: FULL, branch: 'agent/test' });
+    await screen.findByTestId('chat-fact');
+    const base = { repo: 'agentic-engineering', branch: 'agent/test', path: CHANGED, commit: FULL };
+    fireEvent.click(await screen.findByTestId('version-walker'));
+    expect(onBrowseFact).toHaveBeenLastCalledWith('chat-a', base); // that commit, not the newest
+    await waitFor(() => expect(screen.getByTestId('connections-in')).toHaveTextContent('1'));
+    fireEvent.click(screen.getByTestId('connections-in'));
+    expect(onBrowseFact).toHaveBeenLastCalledWith('chat-a', { ...base, panel: { connections: 'in' } });
+    fireEvent.click(screen.getByTestId('connections-out'));
+    expect(onBrowseFact).toHaveBeenLastCalledWith('chat-a', { ...base, panel: { connections: 'out' } });
+  });
+
+  it('a commit the fact\'s history does not hold draws no version, rather than the newest one\'s number', async () => {
+    mount({
+      [`GET ${REPO}/commits/${FULL}/facts/${CHANGED}`]: { body: factAt(CHANGED, 'The changed fact', 'x', FULL) },
+      [`GET ${REPO}/facts/${CHANGED}/commits`]: { body: { _embedded: { commits: [{ commit: NEWER }, { commit: OLDER }] } } },
+    });
+    await clickChip();
+    await screen.findByTestId('chat-commit');
+    fireEvent.click(rowFor('The changed fact'));
+    await screen.findByTestId('chat-fact');
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(screen.queryByTestId('version-walker')).toBeNull();
   });
 
   it('a fact the commit retracted opens its last version with ?fallback=before and says it was retracted, not a dead panel', async () => {
@@ -150,10 +172,10 @@ describe('a commit chip opens the commit in the side panel', () => {
     expect(fact).toHaveTextContent('WHAT IT SAID');
     expect(urls()).toContain(`${REPO}/commits/${FULL}/facts/${GONE}?fallback=before`);
     expect(urls().filter(u => u.includes(`/commits/${FULL}/facts/${GONE}/`) && /incoming|outgoing/.test(u)).every(u => u.endsWith('?fallback=before'))).toBe(true);
-    expect(within(fact).getByTestId('chat-fact-retracted')).toHaveTextContent('retracted at abc1234');
-    // The band names the version on screen, the one before the retraction.
-    expect(within(fact).getByTestId('chat-fact-commit')).toHaveTextContent('1234567');
-    expect(await within(fact).findByTestId('chat-fact-version')).toHaveTextContent('v1');
+    // Browse's own badge names the commit that retracted it.
+    expect(within(fact).getByTestId('retracted-version-badge')).toHaveTextContent('retracted at abc1234');
+    // The version is the one on screen, the one before the retraction.
+    expect(await within(fact).findByTestId('version-walker')).toHaveTextContent('v1');
   });
 
   it('a commit with no facts shows only the commit: no label and no rows, whatever else the server listed', async () => {
@@ -178,7 +200,7 @@ describe('a commit chip opens the commit in the side panel', () => {
     const panel = await screen.findByTestId('chat-commit');
     expect(panel.style.overflowY).toBe('auto');
     expect(panel.style.minHeight).toBe('0px');
-    expect(screen.getByTestId('commit-files-label')).toHaveTextContent('Files affected · 500');
+    expect(screen.getByTestId('commit-files-label')).toHaveTextContent('Facts affected · 500');
     expect(rows()).toHaveLength(500);
     const title = rows()[0].querySelectorAll('span')[2] as HTMLElement;
     expect(title.style.whiteSpace).toBe('nowrap');
@@ -196,17 +218,18 @@ describe('a commit chip opens the commit in the side panel', () => {
     expect(screen.queryByTestId('chat-commit')).toBeNull();
   });
 
-  it('a fact read at the commit that fails shows the error line, and Back still returns to the commit', async () => {
+  it('a fact read at the commit that fails shows the error line with a visible close, and its chip returns to the commit', async () => {
     mount({ [`GET ${REPO}/commits/${FULL}/facts/${CHANGED}`]: problem(404, 'not_found', 'no fact at that path') });
     await clickChip();
     await screen.findByTestId('chat-commit');
     fireEvent.click(rowFor('The changed fact'));
     expect(await screen.findByTestId('chat-fact-error')).toHaveTextContent('no fact at that path');
-    fireEvent.click(screen.getByTestId('chat-panel-back'));
+    expect(screen.getByTestId('chat-panel-close')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('commit-link'));
     expect(await screen.findByTestId('chat-commit')).toBeInTheDocument();
   });
 
-  // sameEntry must tell commits apart: otherwise the second chip is a no-op.
+  // The panel must tell commits apart: otherwise the second chip shows the first.
   it('a second chip in the same repo opens its own commit', async () => {
     const second = '9999999' + 'a'.repeat(33);
     mount({
@@ -222,7 +245,6 @@ describe('a commit chip opens the commit in the side panel', () => {
     expect(await screen.findByTestId('chat-commit-message')).toHaveTextContent('learn(gate): three facts');
     fireEvent.click(screen.getAllByTestId('commit-link')[1]);
     await waitFor(() => expect(screen.getByTestId('chat-commit-message')).toHaveTextContent('the second commit'));
-    expect(screen.getByTestId('chat-panel-footer')).toHaveTextContent('2 of 2');
     expect(screen.getByTestId('chat-panel-crumb')).toHaveTextContent('agentic-engineering / 9999999');
   });
 
@@ -283,7 +305,7 @@ describe('a commit chip opens the commit in the side panel', () => {
     expect(screen.queryByTestId('chat-commit-loading')).toBeNull();
   });
 
-  it('Back from a fact returns to the same place in a long list, without reading the commit again', async () => {
+  it('the chip returns from a fact to the same place in a long list, without reading the commit again', async () => {
     const files = Array.from({ length: 300 }, (_, i) => ({ path: `kb/decisions/f${i}.md`, action: 'modified', title: `Fact ${i}` }));
     const { fx } = mount({
       [`GET ${REPO}/commits/${FULL}`]: { body: { ...DETAIL, files } },
@@ -295,7 +317,7 @@ describe('a commit chip opens the commit in the side panel', () => {
     fireEvent.scroll(panel);
     fireEvent.click(rowFor('Fact 250'));
     await screen.findByTestId('chat-fact');
-    fireEvent.click(screen.getByTestId('chat-panel-back'));
+    fireEvent.click(screen.getByTestId('commit-link'));
     const back = await screen.findByTestId('chat-commit');
     expect(back).not.toBe(panel);
     expect(back.scrollTop).toBe(4321);
@@ -323,7 +345,7 @@ describe('a commit chip opens the commit in the side panel', () => {
     expect(screen.queryByTestId('chat-side-panel')).toBeNull();
   });
 
-  it('Esc closes it and the chip reopens it without growing the history', async () => {
+  it('Esc closes it and the chip reopens it', async () => {
     mount();
     await clickChip();
     await screen.findByTestId('chat-commit');
@@ -332,6 +354,5 @@ describe('a commit chip opens the commit in the side panel', () => {
     expect(screen.getByTestId('commit-link')).not.toHaveAttribute('data-open');
     fireEvent.click(screen.getByTestId('commit-link'));
     await screen.findByTestId('chat-commit');
-    expect(screen.getByTestId('chat-panel-footer')).toHaveTextContent('1 of 1');
   });
 });

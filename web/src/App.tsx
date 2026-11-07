@@ -2,7 +2,8 @@ import { useReducer, useEffect, useLayoutEffect, useState, useRef, useCallback, 
 import { flushSync } from 'react-dom';
 import type { Dispatch } from 'react';
 import { reducer, init, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
-import type { Action, BrowseContext } from './state';
+import type { Action, BrowseContext, FactPanel } from './state';
+import type { BrowseFactRequest } from './chatPanelState';
 import { api, branchEventsUrl, fetchVersion, repoAvailable, brokenLensMember, subscribeRepoEvents } from './api';
 import type { RepoInfo, Lens, Status, RepoEvent, RepoDetails, ArchivedRepo } from './api';
 import { pageview, track } from './telemetry';
@@ -1461,17 +1462,21 @@ export default function App() {
     addChat(chat);
     dispatchView({ type: 'SELECT_PINNED', target: { kind: 'chat', id: chat.id }, available: facetsFor({ kind: 'chat', id: chat.id }, repos, lenses, creates) });
   }), [addChat, dispatchView, repos, lenses, creates]);
-  // The chat side panel's "Open in Browse": switch to the repository, then
-  // open the fact once its branch has landed (a context switch clears it).
-  // A fact the panel shows as it read at a commit opens at that commit, on the
-  // branch it was read from: another branch of the repo has a different history
-  // for the timeline to show.
-  const pendingBrowse = useRef<{ ctx: BrowseContext; path: string; commit?: string; branch?: string } | null>(null);
+  // A chat sends the reader to Browse on a fact: switch to the repository, then
+  // open the fact once its branch has landed (a context switch clears it). A fact
+  // read at a commit opens at that commit, on the branch it was read from: another
+  // branch of the repo has a different history for the timeline to show. Back
+  // returns to the chat (fromChat).
+  const pendingBrowse = useRef<{ ctx: BrowseContext; path: string; commit?: string; branch?: string; panel?: FactPanel; fromChat: string } | null>(null);
   const landPendingBrowse = useCallback(() => {
     const p = pendingBrowse.current;
     if (!p) return;
     pendingBrowse.current = null;
-    navigate({ view: 'library', factPath: p.path, reveal: true, ...(p.commit ? { asOf: { mode: 'history', commit: p.commit } } : {}) });
+    navigate({
+      view: 'library', factPath: p.path, reveal: true, fromChat: p.fromChat,
+      ...(p.commit ? { asOf: { mode: 'history', commit: p.commit } } : {}),
+      ...(p.panel ? { factPanel: p.panel } : {}),
+    });
   }, [navigate]);
   const openPendingBrowse = useCallback(() => {
     const p = pendingBrowse.current;
@@ -1503,14 +1508,18 @@ export default function App() {
     }
     landPendingBrowse();
   }, [dispatch, landPendingBrowse]);
-  // `target` is a repo or a lens (a chat binds to either). A lens addresses a
-  // fact as kb://<store>/<path>, a repo by the bare path.
-  const onOpenInBrowse = useCallback((target: string, file: string, commit?: { commit: string; branch: string }) => {
-    const ctx: BrowseContext = lenses.some(l => l.name === target) ? { kind: 'lens', name: target } : { kind: 'repo', repo: target };
-    pendingBrowse.current = { ctx, path: ctx.kind === 'lens' ? file : file.replace(/^kb:\/\/[^/]+\//, ''), ...commit };
+  // `repo` is a repo or a lens (a chat binds to either). A lens addresses a fact
+  // as kb://<store>/<path>, a repo by the bare path.
+  const onBrowseFact = useCallback((chatId: string, { repo, path, branch, commit, panel }: BrowseFactRequest) => {
+    const ctx: BrowseContext = lenses.some(l => l.name === repo) ? { kind: 'lens', name: repo } : { kind: 'repo', repo };
+    pendingBrowse.current = {
+      ctx, path: ctx.kind === 'lens' ? path : path.replace(/^kb:\/\/[^/]+\//, ''), fromChat: chatId,
+      ...(branch ? { branch } : {}), ...(commit ? { commit } : {}), ...(panel ? { panel } : {}),
+    };
     onSelectTarget(ctx);
+    dispatchView({ type: 'SET_FACET', facet: 'browse' });
     openPendingBrowse();
-  }, [lenses, onSelectTarget, openPendingBrowse]);
+  }, [lenses, onSelectTarget, openPendingBrowse, dispatchView]);
   // A LAYOUT effect, and that is load-bearing. On the commit where a new repo's
   // branch lands, the Library's list read starts under the OLD sort and filters.
   // The landing must re-render before that read can answer, or its answer selects
@@ -1518,6 +1527,17 @@ export default function App() {
   // from here renders in this same task and drops that read as stale; from a
   // passive effect it would be a later render, however short the gap.
   useLayoutEffect(() => { openPendingBrowse(); }, [state.context, state.branch, openPendingBrowse]);
+  // Back popped the entry that came from a chat: show that chat, as it was (it
+  // stays mounted). A chat that has since ended is gone from the list: the reader
+  // stays in Browse, on what Back restored.
+  useLayoutEffect(() => {
+    const id = state.chatReturn;
+    if (!id) return;
+    dispatch({ type: 'CHAT_RETURN_SERVED' });
+    if (!chats.some(c => c.id === id)) return;
+    const target = { kind: 'chat', id } as const;
+    dispatchView({ type: 'SELECT_PINNED', target, available: facetsFor(target, repos, lenses, creates) });
+  }, [state.chatReturn, chats, dispatch, dispatchView, repos, lenses, creates]);
   // The fleet row: the fleet target, pinned over the context with its own
   // tabs (Members, Activity, Settings).
   const onPickFleet = useCallback(() => {
@@ -1999,7 +2019,7 @@ export default function App() {
               <div key={c.id} data-testid={`chat-body-${c.id}`}
                 style={draftBody(!serverOpen && displayed.kind === 'chat' && displayed.id === c.id)}>
                 <ErrorBoundary variant="inline" label="The chat hit an error">
-                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} onOpenInBrowse={onOpenInBrowse} repos={repos} />
+                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} onBrowseFact={onBrowseFact} repos={repos} />
                 </ErrorBoundary>
               </div>
             ))}

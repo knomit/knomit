@@ -49,10 +49,10 @@ export function CommitAuthorLine({ author }: { author?: CommitAuthor }) {
 
 /** The label above a commit's file rows: the timeline's detail card and the
  *  chat's commit view. */
-export function CommitFilesLabel({ count }: { count: number }) {
+export function CommitFilesLabel({ label, count }: { label: string; count: number }) {
   return (
     <div data-testid="commit-files-label" style={{ fontSize: 9, color: '#555', fontFamily: 'var(--k-font-mono)', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 6 }}>
-      Files affected · {count}
+      {label} · {count}
     </div>
   );
 }
@@ -377,7 +377,7 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
                       {detail.message}
                     </div>
                   )}
-                  <CommitFilesLabel count={detail.files.length} />
+                  <CommitFilesLabel label="Files affected" count={detail.files.length} />
                   {detail.files.map(f => (
                     <CommitFileRow
                       key={f.path}

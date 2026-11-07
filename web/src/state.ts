@@ -1,3 +1,4 @@
+import type { EdgeDir } from './utils';
 import type { ExperimentInfo, Lens, LensSource } from './api';
 import { displayLensPath } from './utils';
 
@@ -37,7 +38,14 @@ export type AsOf =
   | { mode: 'history'; commit: string }
   | { mode: 'diff'; from: string; to: string };
 
+/** A panel of the open fact a landing asks to open: cited by or cites, or a motif. */
+export interface FactPanel { connections?: EdgeDir; motif?: string }
+
 interface NavEntry {
+  // Set when this departure was to Browse from a chat: going back to this entry
+  // goes back to that chat (chatReturn). It stands in for everything older on
+  // the trail, because Back from here is the chat and not what Browse held.
+  fromChat?: string;
   repo: string;
   branch: string;
   view: View;
@@ -60,6 +68,12 @@ interface NavEntry {
 }
 
 export interface AppState {
+  // NAV_BACK popped an entry that came from this chat. App shows the chat (the
+  // view state is not ours, see facets.ts) if it is still there, and clears this.
+  chatReturn: string | null;
+  // A landing's request to open a panel of the fact at `path`. RightPanel serves
+  // it once and clears it.
+  factPanelRequest: (FactPanel & { path: string }) | null;
   repo: string;
   // context is the browse surface (repo | lens). In a repo context, repo/branch
   // are authoritative for both reads and writes. In a lens context, reads come
@@ -172,7 +186,9 @@ export type Action =
   // `sort` rides APPLY_NAV for the same reason `filters` does: a reveal changes
   // the path scope, the sort axis and the open fact together, and they must land
   // in ONE entry or Back would undo them one at a time.
-  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; hop?: boolean }
+  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; hop?: boolean; fromChat?: string; factPanel?: FactPanel }
+  | { type: 'CHAT_RETURN_SERVED' }
+  | { type: 'FACT_PANEL_SERVED' }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
   // A reload puts back the list the URL carried (listUrl.ts), once its context
@@ -202,6 +218,8 @@ export const init: AppState = {
   lens: null,
   lensWriteId: null,
   lensSources: null,
+  chatReturn: null,
+  factPanelRequest: null,
   factSource: null,
   view: 'library',
   factPath: null,
@@ -234,8 +252,9 @@ export const init: AppState = {
   factTitles: {},
 };
 
-function pushNav(s: AppState): NavEntry[] {
+function pushNav(s: AppState, fromChat?: string): NavEntry[] {
   const entry: NavEntry = {
+    ...(fromChat ? { fromChat } : {}),
     repo: s.repo,
     branch: s.branch,
     view: s.view,
@@ -371,6 +390,7 @@ function applyAction(s: AppState, a: Action): AppState {
       if (prev.repo !== s.repo) {
         return {
           ...s,
+          chatReturn: prev.fromChat ?? null,
           repo: prev.repo,
           view: 'library',
           factPath: null,
@@ -386,6 +406,7 @@ function applyAction(s: AppState, a: Action): AppState {
       }
       return {
         ...s,
+        chatReturn: prev.fromChat ?? null,
         view: prev.view,
         factPath: prev.factPath,
         asOf: prev.asOf,
@@ -703,10 +724,15 @@ function applyAction(s: AppState, a: Action): AppState {
         filters: a.filters !== undefined ? a.filters : s.filters,
         freeText: a.freeText !== undefined ? a.freeText : s.freeText,
         librarySort: a.sort ?? s.librarySort,
-        navStack: pushNav(s),
+        navStack: pushNav(s, a.fromChat),
+        factPanelRequest: a.factPanel && a.factPath ? { ...a.factPanel, path: a.factPath } : null,
         rightPanelFocused: false,
       };
     }
+    case 'CHAT_RETURN_SERVED':
+      return s.chatReturn ? { ...s, chatReturn: null } : s;
+    case 'FACT_PANEL_SERVED':
+      return s.factPanelRequest ? { ...s, factPanelRequest: null } : s;
     case 'AMEND_NAV': {
       // In-place update — no navStack push. Used by auto-select behaviors so that
       // a single user action (e.g. view-button click) creates exactly one navStack entry.
@@ -909,6 +935,8 @@ export function selectTrail(s: AppState): TrailCrumb[] {
   const prefix: TrailCrumb[] = [];
   for (let i = s.navStack.length - 1; i >= 0; i--) {
     const e = s.navStack[i];
+    // Back from here is the chat, so what Browse held before it is not a crumb.
+    if (e.fromChat) break;
     if (e.factPath == null) continue;
     prefix.unshift({ factPath: e.factPath, asOf: e.asOf, pops: s.navStack.length - i });
     if (e.asOf.mode === 'live') break;

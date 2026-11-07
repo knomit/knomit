@@ -58,15 +58,15 @@ const resolved = (body: unknown) => {
   return { body: handles.filter(h => known[h]).map(h => known[h]) };
 };
 
-function mount(snap: ChatSnapshot = TWO_TURNS, onOpenInBrowse = vi.fn()) {
+function mount(snap: ChatSnapshot = TWO_TURNS, onBrowseFact = vi.fn()) {
   const fx = stubFleetFetch({
     [`GET ${BASE}`]: { body: snap },
     [RESOLVE]: resolved,
     [`GET ${FACT_BASE}/${POLICY.path}`]: { body: { path: POLICY.path, title: POLICY.title, type: 'policy', kind: 'pragmatic', body: 'Review them like code.', domain: [], confidence: 0.92, sources: 4, entities: [], refs: [] } },
   });
   const repos = [{ name: 'agentic-engineering', id: '87b70fb1aeb1' }];
-  const utils = render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} onOpenInBrowse={onOpenInBrowse} repos={repos} />);
-  return { fx, onOpenInBrowse, ...utils };
+  const utils = render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} onBrowseFact={onBrowseFact} repos={repos} />);
+  return { fx, onBrowseFact, ...utils };
 }
 const resolveCalls = (fx: ReturnType<typeof stubFleetFetch>) => fx.calls.filter(c => c.route === RESOLVE);
 
@@ -248,18 +248,18 @@ describe('chat fact links', () => {
   });
 
   it('click opens the fact in the side panel and the chip stays highlighted; Cmd-click goes to Browse', async () => {
-    const { onOpenInBrowse } = mount();
+    const { onBrowseFact } = mount();
     const turn1 = await screen.findByTestId('chat-turn-1');
     const chip = await within(turn1).findByTestId('fact-link');
     expect(screen.queryByTestId('chat-side-panel')).toBeNull();
 
     fireEvent.click(chip, { metaKey: true });
-    expect(onOpenInBrowse).toHaveBeenCalledWith('agentic-engineering', POLICY.path);
+    expect(onBrowseFact).toHaveBeenCalledWith('chat-a', { repo: 'agentic-engineering', path: POLICY.path });
     expect(screen.queryByTestId('chat-side-panel')).toBeNull();
 
     fireEvent.click(chip);
     const panel = await screen.findByTestId('chat-side-panel');
-    expect(await within(panel).findByTestId('chat-fact-title')).toHaveTextContent(POLICY.title);
+    expect(await within(panel).findByTestId('fact-title')).toHaveTextContent(POLICY.title);
     expect(chip).toHaveAttribute('data-open', 'true');
     // The same fact cited in the other turn is highlighted as well: it is what is open.
     const other = within(screen.getByTestId('chat-turn-0')).getAllByTestId('fact-link')[0];
@@ -270,7 +270,7 @@ describe('chat fact links', () => {
   });
 
   it('hovering about 300ms shows the card: type, repo, confidence, title, excerpt, path and Open in Browse', async () => {
-    const { onOpenInBrowse } = mount();
+    const { onBrowseFact } = mount();
     const turn1 = await screen.findByTestId('chat-turn-1');
     const chip = await within(turn1).findByTestId('fact-link');
     vi.useFakeTimers();
@@ -294,7 +294,7 @@ describe('chat fact links', () => {
     // The path is Browse's band path row.
     expect(within(card).getByTestId('fact-band-path')).toHaveTextContent(POLICY.path);
     fireEvent.click(within(card).getByText(PANEL_OPEN_IN_BROWSE));
-    expect(onOpenInBrowse).toHaveBeenCalledWith('agentic-engineering', POLICY.path);
+    expect(onBrowseFact).toHaveBeenCalledWith('chat-a', { repo: 'agentic-engineering', path: POLICY.path });
     vi.useRealTimers();
   });
 
