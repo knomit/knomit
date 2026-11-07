@@ -39,6 +39,7 @@ const resolveMaxBody = 256 << 10
 
 type resolveRequest struct {
 	Handles []string `json:"handles"`
+	Prefer  []string `json:"prefer"`
 }
 
 // resolvedFact is one answer: the handle as it was asked, and what the chat's
@@ -94,30 +95,17 @@ func parseHandle(h, root string, mgr *repos.Manager) (wantedHandle, bool) {
 	if !strings.Contains(s, "/") || strings.ContainsAny(s, " \t\n\\") || strings.Contains(s, "..") {
 		return w, false
 	}
-	s = strings.TrimPrefix(s, "/")
-	if !strings.HasPrefix(s, root+"/") {
-		s = root + "/" + s
-	}
-	if !strings.HasSuffix(s, ".md") {
-		s += ".md"
-	}
-	if knomitfact.IsPrivatePath(s) {
+	// The store's own spelling: root prefix, .md, lowercase after the root.
+	s = knomitfact.NormalizePath(root, strings.TrimPrefix(s, "/"))
+	if !strings.HasPrefix(s, root+"/") || knomitfact.IsPrivatePath(s) {
 		return w, false
 	}
 	w.path = s
 	return w, true
 }
 
-// handleFactsResolve serves POST /facts/resolve {handles} → [resolvedFact]:
-// the chat's fact links, resolved in one call per turn.
-//
-// A handle that names no repo is looked for in every repo the caller may read
-// (auth.ReachesRepo, the same reach a repo route is judged by), in name order,
-// at each repo's read branch; the first match answers. A handle in a repo the
-// caller cannot read, or that matches nothing, is OMITTED: the client leaves
-// it as code. The fleet repository is never searched (no generic route serves
-// it). Results follow the order of the handles asked, once per distinct
-// handle.
+// handleFactsResolve serves POST /facts/resolve {handles, prefer?} →
+// [resolvedFact]: the chat's fact links, resolved in one call.
 func handleFactsResolve(mgr *repos.Manager, root string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req resolveRequest
@@ -129,69 +117,7 @@ func handleFactsResolve(mgr *repos.Manager, root string) http.HandlerFunc {
 				"at most 100 handles per request", r.URL.Path)
 			return
 		}
-		ctx := r.Context()
-		var wanted []wantedHandle
-		seen := map[string]bool{}
-		for _, h := range req.Handles {
-			if seen[h] {
-				continue
-			}
-			seen[h] = true
-			if wh, ok := parseHandle(h, root, mgr); ok {
-				wanted = append(wanted, wh)
-			}
-		}
-
-		var names []string
-		mgr.ForEach(func(name string, ri *repos.RepoInstance) {
-			if ri != nil && !ri.IsFleet() && auth.ReachesRepo(ctx, name) {
-				names = append(names, name)
-			}
-		})
-		sort.Strings(names)
-
-		// found[repo][path] is a fact the repo holds; byID[repo][id] its path.
-		found := map[string]map[string]resolvedFact{}
-		byID := map[string]map[string]string{}
-		for _, name := range names {
-			ri := mgr.Get(name)
-			if ri == nil {
-				continue
-			}
-			var ids, paths []string
-			for _, wh := range wanted {
-				switch {
-				case wh.repo != nil && wh.repo != ri:
-				case wh.id != "":
-					ids = append(ids, wh.id)
-				default:
-					paths = append(paths, wh.path)
-				}
-			}
-			if len(ids) == 0 && len(paths) == 0 {
-				continue
-			}
-			facts, idPaths := lookupRepo(ctx, ri, ids, paths)
-			found[name], byID[name] = facts, idPaths
-		}
-
-		out := []resolvedFact{}
-		for _, wh := range wanted {
-			for _, name := range names {
-				if wh.repo != nil && wh.repo.Name() != name {
-					continue
-				}
-				path := wh.path
-				if wh.id != "" {
-					path = byID[name][wh.id]
-				}
-				if f, ok := found[name][path]; ok && path != "" {
-					f.Handle = wh.handle
-					out = append(out, f)
-					break
-				}
-			}
-		}
+		out := resolveHandles(r.Context(), mgr, root, req.Handles, req.Prefer)
 		body, err := json.Marshal(out)
 		if err != nil {
 			hal.WriteProblem(w, http.StatusInternalServerError, "Resolve failed", err.Error(), r.URL.Path)
@@ -203,67 +129,239 @@ func handleFactsResolve(mgr *repos.Manager, root string) http.HandlerFunc {
 	}
 }
 
-// lookupRepo finds which of ids (short ids) and paths exist on ri's read branch
-// and reads each one found. A repo whose store cannot be read answers nothing:
-// its handles stay unresolved rather than failing the whole turn's links.
-func lookupRepo(ctx context.Context, ri *repos.RepoInstance, ids, paths []string) (map[string]resolvedFact, map[string]string) {
+// The resolver's two reads, swappable so a test can count them: the index
+// lookup that says whether a repo holds a handle, and the git read of a fact
+// that will be returned.
+var (
+	lookupIndex  = recentFacts
+	readResolved = readFact
+)
+
+// hit is where a handle was found.
+type hit struct {
+	ri    *repos.RepoInstance
+	entry index.RecentFactEntry
+}
+
+// resolveHandles answers handles for the caller in ctx.
+//
+// Which repos: only those the caller may read (auth.ReachesRepo, the reach a
+// repo route is judged by), never the fleet repository, each at its read
+// branch. A kb:// handle names its repo and is looked for only there.
+//
+// Order and collisions: prefer (repo names, 12-hex or full repo ids, or lens
+// names, which stand for their members, write repo first) lists the repos the
+// turn worked in. They are searched first, in that order, and the first that
+// holds a handle answers it; a handle answered is not looked for again. Any
+// handle still open is then looked for in every other reachable repo: found in
+// exactly one it resolves, found in two or more it is AMBIGUOUS and omitted
+// (the client leaves it as code) rather than picked by name. prefer never
+// widens the reach.
+//
+// Cost: the index answers whether a repo holds a handle; only the facts that
+// are returned are read from git. A done ctx stops the search: what is not
+// yet resolved is omitted.
+func resolveHandles(ctx context.Context, mgr *repos.Manager, root string, handles, prefer []string) []resolvedFact {
+	var wanted []wantedHandle
+	seen := map[string]bool{}
+	for _, h := range handles {
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		if wh, ok := parseHandle(h, root, mgr); ok {
+			wanted = append(wanted, wh)
+		}
+	}
+
+	reach := map[string]*repos.RepoInstance{}
+	var names []string
+	mgr.ForEach(func(name string, ri *repos.RepoInstance) {
+		if ri != nil && !ri.IsFleet() && auth.ReachesRepo(ctx, name) {
+			reach[name] = ri
+			names = append(names, name)
+		}
+	})
+	sort.Strings(names)
+	preferred := preferredRepos(mgr, prefer, reach)
+	isPreferred := map[string]bool{}
+	for _, ri := range preferred {
+		isPreferred[ri.Name()] = true
+	}
+
+	won := map[int]hit{}       // wanted index → the answer
+	found := map[int][]hit{}   // wanted index → matches outside prefer
+	open := func(i int) bool { // still to look for
+		_, done := won[i]
+		return !done && len(found[i]) < 2
+	}
+	search := func(ri *repos.RepoInstance, collect bool) {
+		var ids, paths []string
+		var which []int
+		for i, wh := range wanted {
+			if !open(i) || (wh.repo != nil && wh.repo != ri) {
+				continue
+			}
+			which = append(which, i)
+			if wh.id != "" {
+				ids = append(ids, wh.id)
+			} else {
+				paths = append(paths, wh.path)
+			}
+		}
+		if len(which) == 0 || ctx.Err() != nil {
+			return
+		}
+		byPath, byID := lookupRepo(ctx, ri, ids, paths)
+		for _, i := range which {
+			wh := wanted[i]
+			e, ok := byPath[wh.path]
+			if wh.id != "" {
+				e, ok = byID[wh.id]
+			}
+			switch {
+			case !ok:
+			case !collect || wh.repo != nil:
+				won[i] = hit{ri, e}
+			default:
+				found[i] = append(found[i], hit{ri, e})
+			}
+		}
+	}
+	for _, ri := range preferred {
+		search(ri, false)
+	}
+	for _, name := range names {
+		if !isPreferred[name] {
+			search(reach[name], true)
+		}
+	}
+	for i, hs := range found {
+		if _, done := won[i]; !done && len(hs) == 1 {
+			won[i] = hs[0]
+		}
+	}
+
+	out := []resolvedFact{}
+	read := map[string]resolvedFact{}
+	for i, wh := range wanted {
+		h, ok := won[i]
+		if !ok || ctx.Err() != nil {
+			continue
+		}
+		key := h.ri.Name() + "\x00" + h.entry.Path
+		f, done := read[key]
+		if !done {
+			if f, ok = readHit(ctx, h); !ok {
+				continue
+			}
+			read[key] = f
+		}
+		f.Handle = wh.handle
+		out = append(out, f)
+	}
+	return out
+}
+
+// preferredRepos turns prefer into reachable repo instances, in order, once
+// each: a repo name, a repo id (12 hex or full, as kb:// carries it), or a
+// lens name standing for its write repo then its reads. Anything else, and
+// anything the caller cannot reach, is dropped.
+func preferredRepos(mgr *repos.Manager, prefer []string, reach map[string]*repos.RepoInstance) []*repos.RepoInstance {
+	var out []*repos.RepoInstance
+	seen := map[string]bool{}
+	add := func(ri *repos.RepoInstance) {
+		if ri == nil || seen[ri.Name()] || reach[ri.Name()] != ri {
+			return
+		}
+		seen[ri.Name()] = true
+		out = append(out, ri)
+	}
+	for _, p := range prefer {
+		if ri := mgr.Get(p); ri != nil {
+			add(ri)
+			continue
+		}
+		if ri, ok := mgr.ByRootID(p); ok {
+			add(ri)
+			continue
+		}
+		reg := mgr.LensRegistry()
+		if reg == nil {
+			continue
+		}
+		l, ok, err := reg.Get(p)
+		if err != nil || !ok {
+			continue
+		}
+		add(mgr.GetByUID(l.WriteUID))
+		for _, rd := range l.Reads {
+			add(mgr.GetByUID(rd.RepoUID))
+		}
+	}
+	return out
+}
+
+// lookupRepo asks ri's index (no git read) which of ids (short ids) and paths
+// it holds on its read branch. An id two files share answers with the first
+// path in order. A repo whose index cannot be read holds nothing.
+func lookupRepo(ctx context.Context, ri *repos.RepoInstance, ids, paths []string) (map[string]index.RecentFactEntry, map[string]index.RecentFactEntry) {
 	branch := ri.ReadBranch()
-	facts := map[string]resolvedFact{}
-	idPaths := map[string]string{}
-	var hits []index.RecentFactEntry
+	byPath := map[string]index.RecentFactEntry{}
+	byID := map[string]index.RecentFactEntry{}
 	for _, opts := range []index.SearchOptions{{PathsIn: paths}, {IDsIn: ids}} {
 		if len(opts.PathsIn) == 0 && len(opts.IDsIn) == 0 {
 			continue
 		}
 		// A literal LIMIT: SearchOptions{}'s zero Limit would be LIMIT 0.
 		opts.Limit = 4 * maxResolveHandles
-		entries, _, err := recentFacts(ctx, ri, branch, opts)
+		entries, _, err := lookupIndex(ctx, ri, branch, opts)
 		if err != nil {
 			log.Warn().Err(err).Str("repo", ri.Name()).Msg("facts resolve: lookup failed")
 			continue
 		}
-		// Path order, so an id two files share resolves the same way every time.
 		sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
 		for _, e := range entries {
 			if knomitfact.IsPrivatePath(e.Path) {
 				continue
 			}
-			id := strings.TrimSuffix(e.Path[strings.LastIndex(e.Path, "/")+1:], ".md")
-			if _, dup := idPaths[id]; !dup && len(opts.IDsIn) > 0 {
-				idPaths[id] = e.Path
+			if len(opts.IDsIn) > 0 {
+				id := strings.TrimSuffix(e.Path[strings.LastIndex(e.Path, "/")+1:], ".md")
+				if _, dup := byID[id]; !dup {
+					byID[id] = e
+				}
+			} else {
+				byPath[e.Path] = e
 			}
-			hits = append(hits, e)
 		}
 	}
-	for _, e := range hits {
-		p := e.Path
-		if _, done := facts[p]; done {
-			continue
-		}
-		rf := resolvedFact{
-			ID:     strings.TrimSuffix(p[strings.LastIndex(p, "/")+1:], ".md"),
-			Title:  e.Title,
-			Type:   e.Type,
-			Repo:   ri.Name(),
-			Branch: branch,
-			Path:   p,
-		}
-		// The body (excerpt) and confidence need the fact itself. A fact the
-		// index lists but that does not parse still links, by its index
-		// title and type, without them.
-		f, _, err := readFact(ctx, ri, hal.Anchor{Branch: branch}, p, false)
-		switch {
-		case err == nil:
-			rf.Title, rf.Type = f.Title, string(f.Type)
-			rf.Excerpt, rf.Confidence = excerptOf(f.Body, f.Title), f.Confidence
-		case errors.Is(err, errFactNotFound):
-			continue
-		default:
-			log.Warn().Err(err).Str("repo", ri.Name()).Str("path", p).Msg("facts resolve: read failed")
-		}
-		facts[p] = rf
+	return byPath, byID
+}
+
+// readHit reads the fact a handle resolved to, for its confidence and excerpt.
+// A fact the index lists but that does not parse still links, by its index
+// title and type; one gone since the lookup is not returned.
+func readHit(ctx context.Context, h hit) (resolvedFact, bool) {
+	ri, p, branch := h.ri, h.entry.Path, h.ri.ReadBranch()
+	rf := resolvedFact{
+		ID:     strings.TrimSuffix(p[strings.LastIndex(p, "/")+1:], ".md"),
+		Title:  h.entry.Title,
+		Type:   h.entry.Type,
+		Repo:   ri.Name(),
+		Branch: branch,
+		Path:   p,
 	}
-	return facts, idPaths
+	f, _, err := readResolved(ctx, ri, hal.Anchor{Branch: branch}, p, false)
+	switch {
+	case err == nil:
+		rf.Title, rf.Type = f.Title, string(f.Type)
+		rf.Excerpt, rf.Confidence = excerptOf(f.Body, f.Title), f.Confidence
+	case errors.Is(err, errFactNotFound):
+		return rf, false
+	default:
+		log.Warn().Err(err).Str("repo", ri.Name()).Str("path", p).Msg("facts resolve: read failed")
+	}
+	return rf, true
 }
 
 // excerptOf is the start of a fact's body as one line of prose: the title

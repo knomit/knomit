@@ -137,14 +137,20 @@ paths:
       description: |
         Looks up the fact handles a chat answer cites, in one call: an 8-hex
         short id (the fact's file name), a fact path with or without the `kb/`
-        root and the `.md` extension, or `kb://<repo id or name>/<path>`. A
-        handle that names no repo is looked for in every repo the caller may
-        read, in name order, at each repo's read branch; the first match
-        answers. A handle that matches nothing, names a repo the caller cannot
-        read, or is a private (dot) path is OMITTED from the answer, never an
-        error. Results follow the order of the handles, once per distinct
-        handle. It only reads: the read-only gate and the write gate both let
-        it through.
+        root and the `.md` extension (lowercased after the root, as the store
+        spells paths), or `kb://<repo id or name>/<path>`. Only repos the
+        caller may read are searched, each at its read branch; the fleet
+        repository never is. A kb:// handle is looked for only in its repo.
+        Any other handle is looked for first in the `prefer` repos, in that
+        order, and the first that holds it answers; otherwise in every other
+        repo, where a handle found in exactly one repo resolves and a handle
+        found in two or more is ambiguous and OMITTED (never picked by name).
+        `prefer` never widens what the caller may read. A handle that matches
+        nothing, names a repo the caller cannot read, or is a private (dot)
+        path is OMITTED from the answer, never an error. Results follow the
+        order of the handles, once per distinct handle. Only the facts
+        returned are read. It only reads: the read-only gate and the write
+        gate both let it through.
       operationId: resolveFacts
       requestBody:
         required: true
@@ -157,6 +163,14 @@ paths:
                 handles:
                   type: array
                   maxItems: 100
+                  items: { type: string }
+                prefer:
+                  type: array
+                  description: |
+                    The repos to look in first, in order: repo names, repo
+                    ids (12 hex or full, as kb:// carries them) or lens names
+                    (a lens stands for its write repo, then its reads). Names
+                    the caller cannot read, or that name nothing, are ignored.
                   items: { type: string }
       responses:
         "200":
