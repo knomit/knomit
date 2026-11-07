@@ -1396,8 +1396,8 @@ describe('a chat target', () => {
     const TEST_ID: Record<Control, string> = { version: 'version-walker', in: 'connections-in', out: 'connections-out' };
     const statusOf = (b: string) => ({ head: 'abc1234', branch: b, embeddings_enabled: false, ontology_root: 'kb', index_state: 'ready', index_done: 0, index_total: 0, index_percent: 100 });
 
-    async function toTheChatsFact({ start, mode, ms, action = 'modified', branch = 'machine/test' }: {
-      start: string; mode: 'recent' | 'search' | 'path'; ms: number; action?: string; branch?: string;
+    async function toTheChatsFact({ start, mode, ms, action = 'modified', branch = 'machine/test', motifs }: {
+      start: string; mode: 'recent' | 'search' | 'path'; ms: number; action?: string; branch?: string; motifs?: string[];
     }) {
       window.history.replaceState(null, '', '/'); // the URL holds the last test's list and context, and beats localStorage
       resetFactCache(); // the resolver's answers are kept per handle for the page's life
@@ -1410,7 +1410,7 @@ describe('a chat target', () => {
       m.explain.mockResolvedValue({ incoming: [{ path: 'kb/in.md', title: 'In', versions: [{ commit: 'c1' }] }], outgoing: [{ path: 'kb/out.md', title: 'Out', versions: [{ commit: 'c2' }] }] });
       m.factCommits.mockResolvedValue({ entries: [{ commit: 'newest1', date: '', message: 'newest' }, { commit: FULL, date: '', message: 'at it' }] });
       m.commitDetail.mockResolvedValue({ commit: FULL, date: '2026-11-01T10:00:00Z', message: 'learn: one', author: { name: 'Ada', email: 'a@example.com' }, files: [{ path: PATH, action, title: 'One' }] });
-      m.fact.mockImplementation(async (_r: string, _b: string, path: string, c?: string) => ({ path, title: path, type: 'observation', body: 'BODY OF ' + path, domain: [], confidence: 0.9, sources: 1, entities: [], refs: [], commit_hash: c ?? 'newest1' }));
+      m.fact.mockImplementation(async (_r: string, _b: string, path: string, c?: string) => ({ path, title: path, type: 'observation', body: 'BODY OF ' + path, domain: [], confidence: 0.9, sources: 1, entities: [], refs: [], commit_hash: c ?? 'newest1', ...(path === PATH && motifs ? { motifs } : {}) }));
       const { fx } = chatRoutes([CHAT_A]);
       fx.set('GET /api/v1/chats/chat-a', { body: { ...CHAT_A, running: false, pending_approvals: [], grants: [], items: [
         { kind: 'user', text: 'q' },
@@ -1461,6 +1461,15 @@ describe('a chat target', () => {
       }
     };
 
+    // Back returns to the chat, whichever way the reader asks.
+    const expectBackInTheChat = async () => {
+      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
+      expect(screen.getByTestId('rail-chat-chat-a')).toHaveAttribute('aria-current', 'true');
+      // As it was: the same chat, its panel still on the fact.
+      expect(screen.getByTestId('chat-fact')).toBeVisible();
+      expect(screen.getByTestId('chat-fact')).toHaveTextContent('BODY OF ' + PATH);
+    };
+
     for (const control of ['version', 'in', 'out'] as const) {
       for (const start of ['core-kb', 'ops-kb']) for (const mode of ['recent', 'search'] as const) for (const ms of [30, 0]) {
         it(`${control}: from ${start === 'core-kb' ? 'the same repo' : 'another repo'}, Browse in ${mode}, the list answering ${ms ? 'late' : 'in the same microtask'}`, async () => {
@@ -1477,6 +1486,30 @@ describe('a chat target', () => {
         });
       }
     }
+
+    for (const start of ['core-kb', 'ops-kb']) for (const mode of ['recent', 'search'] as const) {
+      it(`a motif in the band lands on that fact, at that commit, with its panel: from ${start}, in ${mode}`, async () => {
+        const m = await toTheChatsFact({ start, mode, ms: 30, motifs: ['a-shape'] });
+        m.fact.mockClear();
+        fireEvent.click(await within(screen.getByTestId('chat-fact')).findByTestId('motif-cell'));
+        await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+        await act(async () => { await new Promise(r => setTimeout(r, 180)); });
+        expect(reads(m).at(-1)).toBe(`${PATH}@abc1234`);
+        expect(within(screen.getByTestId('browse-facet')).getByTestId('motif-panel')).toBeInTheDocument();
+      });
+    }
+
+    it('a panel opens once: leaving Browse and coming back to the same fact does not open it again', async () => {
+      const m = await toTheChatsFact({ start: 'core-kb', mode: 'path', ms: 0 });
+      const browse = await click(m, 'in', 0);
+      expect(browse.getByTestId('connections-in').getAttribute('aria-expanded')).toBe('true');
+      fireEvent.click(screen.getByTestId('rail-chat-chat-a')); // not back: the fact stays open in Browse
+      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
+      fireEvent.click(screen.getByTestId('rail-repo-core-kb'));
+      await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+      const again = within(screen.getByTestId('browse-facet'));
+      expect((await again.findByTestId('connections-in')).getAttribute('aria-expanded')).toBe('false');
+    });
 
     // Browse on another branch of the same repo: the commit was read from the
     // resolver's branch, and that is the history the timeline has to show.
@@ -1509,14 +1542,6 @@ describe('a chat target', () => {
       expectLandedOnTheFact(m, 'version', await click(m, 'version', 30));
     });
 
-    // Back returns to the chat, whichever way the reader asks.
-    const expectBackInTheChat = async () => {
-      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
-      expect(screen.getByTestId('rail-chat-chat-a')).toHaveAttribute('aria-current', 'true');
-      // As it was: the same chat, its panel still on the fact.
-      expect(screen.getByTestId('chat-fact')).toBeVisible();
-      expect(screen.getByTestId('chat-fact')).toHaveTextContent('BODY OF ' + PATH);
-    };
     it('the timeline\'s back returns to the chat, with the side panel as it was', async () => {
       const m = await toTheChatsFact({ start: 'core-kb', mode: 'path', ms: 0 });
       const browse = await click(m, 'version', 0);

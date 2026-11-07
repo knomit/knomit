@@ -113,6 +113,8 @@ it('a files-affected row the commit deleted is disabled: the timeline has nothin
   fireEvent.click(gone);
   expect(onOpenFileAt).not.toHaveBeenCalled();
   expect(screen.getByText('Sib').closest('button')).toBeEnabled();
+  // The timeline keeps its own label; the chat's commit view says "Facts affected".
+  expect(screen.getByTestId('commit-files-label')).toHaveTextContent('Files affected · 2');
 });
 
 it('header exposes a return-to-live control wired to onReturnToLive', async () => {
