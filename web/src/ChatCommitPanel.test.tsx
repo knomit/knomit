@@ -357,7 +357,9 @@ describe('a commit chip opens the commit in the side panel', () => {
 
     it('with a turn running it is Stop, and Focus stays', async () => {
       const fx = await inFocus(true);
-      fireEvent.keyDown(document.body, { key: 'Escape' });
+      // Spent, so the panel's listener leaves it alone: a real browser has already
+      // rendered running:false by then. SABOTAGE: ChatPanel does not preventDefault.
+      expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(false);
       await waitFor(() => expect(cancels(fx)).toHaveLength(1));
       expect(document.documentElement.dataset.matFocus).toBe('1');
       expect(screen.getByTestId('chat-side-panel')).toBeInTheDocument();

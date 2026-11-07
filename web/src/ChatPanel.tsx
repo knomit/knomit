@@ -115,10 +115,11 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   }, [landed]);
 
   // Stop. A send still in flight is withdrawn, and its text comes back.
-  const stop = () => {
-    if (!state.running) return;
+  const stop = (): boolean => {
+    if (!state.running) return false;
     if (sending && lastTurn) setDraft(d => (d.trim() ? `${lastTurn.user}\n${d}` : lastTurn.user));
     onStop();
+    return true;
   };
   const stopRef = useRef(stop);
   useEffect(() => { stopRef.current = stop; });
@@ -134,7 +135,10 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
       // The chat is its column and the side panel beside it (data-chat-scope).
       const scope = el.closest('[data-chat-scope]') ?? el;
       if (active && active !== document.body && !scope.contains(active)) return;
-      stopRef.current();
+      // The key is spent, and it has to say so. A browser runs microtasks between
+      // listeners, so React has already rendered `running: false` when the side
+      // panel's listener runs next: it cannot tell this Esc was Stop, and would close.
+      if (stopRef.current()) e.preventDefault();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
