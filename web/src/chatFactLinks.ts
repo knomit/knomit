@@ -23,6 +23,10 @@ export interface ResolvedFact {
   path: string;
   excerpt: string;
   confidence: number;
+  /** What Browse's meta line shows besides (absent from an older server). */
+  kind?: string;
+  origin?: string;
+  sources?: number;
 }
 
 /** The repos the page knows: a kb://<store> chip names one by id or name. */

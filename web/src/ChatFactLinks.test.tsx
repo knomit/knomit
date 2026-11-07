@@ -18,6 +18,7 @@ const POLICY = {
   handle: '3fc77970', id: '3fc77970', title: 'Agent config files are executable; treat them as code', type: 'policy',
   repo: 'agentic-engineering', branch: 'agent/test', path: 'kb/invariants/security/3fc77970.md',
   excerpt: 'Files an agent loads on start change what it can do.', confidence: 0.92,
+  kind: 'pragmatic', origin: 'authored', sources: 4,
 };
 const OBS = (id: string, title: string) => ({
   handle: id, id, title, type: 'observation', repo: 'agentic-engineering', branch: 'agent/test',
@@ -220,13 +221,20 @@ describe('chat fact links', () => {
     expect(screen.queryByTestId('fact-card')).toBeNull();
     act(() => { vi.advanceTimersByTime(120); });
     const card = screen.getByTestId('fact-card');
-    expect(within(card).getByTestId('fact-card-type')).toHaveTextContent('policy');
-    expect(within(card).getByTestId('repo-link')).toHaveTextContent('agentic-engineering');
-    // The confidence is the number only: its "confidence" label is unapproved copy.
-    expect(within(card).getByTestId('fact-card-confidence')).toHaveTextContent('0.92');
+    // The meta is Browse's own FactMetaLine (the user's rule: reuse), with
+    // Browse's words: the kind flag, the type, origin, "conf", sources, the
+    // repo drawn as Browse draws a mount.
+    const meta = within(card).getByTestId('fact-meta');
+    expect(within(meta).getByTestId('fact-kind-badge')).toHaveTextContent('pragmatic');
+    expect(within(meta).getByTestId('fact-type-badge')).toHaveTextContent('policy');
+    expect(within(meta).getByTestId('fact-origin-badge')).toHaveTextContent('authored');
+    expect(within(meta).getByTestId('fact-confidence')).toHaveTextContent('conf 0.92');
+    expect(meta).toHaveTextContent('4 sources');
+    expect(within(meta).getByTestId('source-badge')).toHaveAttribute('data-repo', 'agentic-engineering');
     expect(within(card).getByTestId('fact-card-title')).toHaveTextContent(POLICY.title);
     expect(within(card).getByTestId('fact-card-excerpt')).toHaveTextContent(POLICY.excerpt);
-    expect(within(card).getByTestId('fact-card-path')).toHaveTextContent(POLICY.path);
+    // The path is Browse's band path row.
+    expect(within(card).getByTestId('fact-band-path')).toHaveTextContent(POLICY.path);
     fireEvent.click(within(card).getByText(PANEL_OPEN_IN_BROWSE));
     expect(onOpenInBrowse).toHaveBeenCalledWith('agentic-engineering', POLICY.path);
     vi.useRealTimers();

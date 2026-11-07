@@ -6,6 +6,10 @@ import { defaultTypeStyle, typeStyles } from './utils';
 import { FactLinkContext, factKey } from './chatFactLinks';
 import type { ResolvedFact } from './chatFactLinks';
 import { PANEL_OPEN_IN_BROWSE } from './chatCopy';
+import { createPortal } from 'react-dom';
+import { FactMetaLine } from './FactMetaLine';
+import { FactBandPath } from './FactBand';
+import type { Fact } from './api';
 
 // The fact links of a chat answer (design §3): the chip, its hover card, the
 // repo chip, and the per-turn resolution behind them. The answer's markdown
@@ -76,30 +80,36 @@ function FactCard({ f, at, onEnter, onLeave, onBrowse }: {
   f: ResolvedFact; at: { left: number; top: number };
   onEnter: () => void; onLeave: () => void; onBrowse?: (repo: string, path: string) => void;
 }) {
-  const ts = typeStyles[f.type] ?? defaultTypeStyle;
   const left = Math.max(8, Math.min(at.left, (typeof window !== 'undefined' ? window.innerWidth : 0) - CARD_W - 8));
-  return (
-    <span role="tooltip" data-testid="fact-card" className="k-fact-card" style={{ left, top: at.top }} onMouseEnter={onEnter} onMouseLeave={onLeave}>
-      <span className="k-fact-card-meta">
-        <span data-testid="fact-card-type" className="k-fact-card-type" style={{ color: ts.color, background: ts.bg }}>
-          <TypeIcon type={f.type} color={ts.color} size={10} />{ts.label === 'unknown' ? f.type : ts.label}
-        </span>
-        <RepoLink name={f.repo} />
-        {f.confidence > 0 && <span data-testid="fact-card-confidence">· {f.confidence.toFixed(2)}</span>}
-      </span>
-      <span data-testid="fact-card-title" className="k-fact-card-title">{f.title}</span>
-      {f.excerpt && <span data-testid="fact-card-excerpt" className="k-fact-card-excerpt">{f.excerpt}</span>}
-      <span className="k-fact-card-path">
-        <span data-testid="fact-card-path">{f.path}</span>
+  // The meta line and the path row are Browse's own (FactMetaLine, FactBand's
+  // path row), so the card says what Browse says, in Browse's words; the repo
+  // is drawn as Browse draws a lens mount. It is portalled to the body: the
+  // link sits inside a paragraph, which may not hold the meta line's <div>.
+  return createPortal(
+    <div role="tooltip" data-testid="fact-card" className="k-fact-card" style={{ left, top: at.top }} onMouseEnter={onEnter} onMouseLeave={onLeave}>
+      <FactMetaLine fact={asFact(f)} dispatch={noDispatch} lensMeta={{ repo: f.repo, branch: f.branch }} filterable={false} />
+      <div data-testid="fact-card-title" className="k-fact-card-title">{f.title}</div>
+      {f.excerpt && <div data-testid="fact-card-excerpt" className="k-fact-card-excerpt">{f.excerpt}</div>}
+      <div className="k-fact-card-path">
+        <FactBandPath path={f.path} />
         {onBrowse && (
           <button type="button" className="k-fact-card-browse" onClick={() => onBrowse(f.repo, f.path)}>
             {PANEL_OPEN_IN_BROWSE} {ICON_EXTERNAL}
           </button>
         )}
-      </span>
-    </span>
+      </div>
+    </div>,
+    document.body,
   );
 }
+
+const noDispatch = () => {};
+
+/** The resolver's answer as the Fact the Browse components read. */
+const asFact = (f: ResolvedFact): Fact => ({
+  path: f.path, title: f.title, type: f.type, kind: f.kind || undefined, origin: f.origin || undefined,
+  confidence: f.confidence, sources: f.sources ?? 0, body: '', domain: [], entities: [], refs: [],
+});
 
 const CARD_W = 340;
 

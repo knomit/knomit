@@ -34,6 +34,18 @@ import { displayLensPath } from './utils';
 // pinned swaps row 2's contents rather than adding to them. Nothing else
 // changes when pinning, which is the property that made a value vanishing
 // mid-scroll read as a glitch.
+/** The band's path row: one mono line, cut with an ellipsis. In a lens the
+ *  path is shown without its kb://<store>/ qualifier (displayLensPath). The
+ *  chat's fact-link hover card draws its path with this too. */
+export function FactBandPath({ path, lens = false }: { path: string; lens?: boolean }) {
+  return (
+    <div data-testid="fact-band-path" style={{
+      fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#555',
+      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+    }}>{lens ? displayLensPath(path) : path}</div>
+  );
+}
+
 export function FactBand({ fact, dispatch, lensMeta, pinned, actions, edges, filterable = true }: {
   fact: Fact;
   dispatch: Dispatch<Action>;
@@ -71,10 +83,7 @@ export function FactBand({ fact, dispatch, lensMeta, pinned, actions, edges, fil
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
         }}>{fact.title || fact.path}</div>
       ) : (
-        <div data-testid="fact-band-path" style={{
-          fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#555',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
-        }}>{lensMeta ? displayLensPath(fact.path) : fact.path}</div>
+        <FactBandPath path={fact.path} lens={!!lensMeta} />
       )}
 
       {/* Row 3. The left group holds only panel-openers; the version, the date

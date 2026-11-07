@@ -6325,7 +6325,7 @@ components:
 
     ResolvedFact:
       type: object
-      required: [handle, id, title, type, repo, branch, path, excerpt, confidence]
+      required: [handle, id, title, type, repo, branch, path, excerpt, confidence, kind, origin, sources]
       properties:
         handle: { type: string, description: "The handle as it was asked." }
         id: { type: string, description: "The fact's short id: its file name without .md." }
@@ -6336,6 +6336,9 @@ components:
         path: { type: string, description: "The full fact path, e.g. kb/invariants/web/gate/3fc77970.md." }
         excerpt: { type: string, description: "The start of the body as one line, at most 300 characters. Empty when the fact could not be parsed." }
         confidence: { type: number, description: "0 when the fact could not be parsed." }
+        kind: { type: string, description: "epistemic or pragmatic; empty when the fact could not be parsed or names none." }
+        origin: { type: string, description: "authored, distilled or discovered (the resolved origin); empty when the fact could not be parsed." }
+        sources: { type: integer, description: "0 when the fact could not be parsed." }
 
     Version:
       type: object

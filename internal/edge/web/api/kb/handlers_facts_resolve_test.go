@@ -25,7 +25,7 @@ func writeResolveFact(t *testing.T, svc *store.Service, path, typ, title, body s
 		kind = "kind: pragmatic\n"
 	}
 	_, err := svc.Facts().WriteFact(context.Background(), "agent/test", path,
-		"---\n"+kind+"type: "+typ+"\nconfidence: "+confidence+"\n---\n# "+title+"\n\n"+body+"\n",
+		"---\n"+kind+"type: "+typ+"\nconfidence: "+confidence+"\nsources: 3\n---\n# "+title+"\n\n"+body+"\n",
 		"add "+path, "")
 	require.NoError(t, err)
 }
@@ -95,6 +95,10 @@ func TestFactsResolve_EveryHandleShape(t *testing.T) {
 		require.Equal(t, "agent/test", r.Branch)
 		require.Equal(t, path, r.Path)
 		require.InDelta(t, 0.92, r.Confidence, 1e-9)
+		// What Browse's FactMetaLine draws besides: kind, origin, sources.
+		require.Equal(t, "pragmatic", r.Kind)
+		require.Equal(t, "authored", r.Origin)
+		require.Equal(t, 3, r.Sources)
 		require.True(t, strings.HasPrefix(r.Excerpt, "Files an agent loads on start"), "excerpt %q", r.Excerpt)
 		require.NotContains(t, r.Excerpt, "# Agent config", "the title heading is not part of the excerpt")
 	}

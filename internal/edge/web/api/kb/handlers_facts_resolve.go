@@ -54,6 +54,11 @@ type resolvedFact struct {
 	Path       string  `json:"path"`
 	Excerpt    string  `json:"excerpt"`
 	Confidence float64 `json:"confidence"`
+	// What Browse's meta line (FactMetaLine) shows besides, so the chat's
+	// hover card draws it with the same component: kind, origin, sources.
+	Kind    string `json:"kind"`
+	Origin  string `json:"origin"`
+	Sources int    `json:"sources"`
 }
 
 var shortFactID = regexp.MustCompile(`^[0-9a-f]{8}$`)
@@ -356,6 +361,7 @@ func readHit(ctx context.Context, h hit) (resolvedFact, bool) {
 	case err == nil:
 		rf.Title, rf.Type = f.Title, string(f.Type)
 		rf.Excerpt, rf.Confidence = excerptOf(f.Body, f.Title), f.Confidence
+		rf.Kind, rf.Origin, rf.Sources = string(f.Kind), string(f.ResolvedOrigin()), f.Sources
 	case errors.Is(err, errFactNotFound):
 		return rf, false
 	default:
