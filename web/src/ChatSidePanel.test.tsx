@@ -93,10 +93,28 @@ describe('ChatSidePanel', () => {
     await waitFor(() => expect(screen.getByTestId('version-walker').textContent).toBe(''));
     expect(screen.getByTestId('version-walker')).toHaveAccessibleName('Open history');
     expect(screen.getByTestId('fact-body').querySelector('strong')).toHaveTextContent('SSE');
-    // The band is the chrome: there is no row above it, and the × sits in its actions.
+    // The band is the chrome: there is no row above it, and the × sits in the
+    // panel's top-right corner, not in the band's actions beside history.
     expect(screen.queryByTestId('chat-panel-header')).toBeNull();
-    expect(within(screen.getByTestId('fact-band-actions')).getByTestId('chat-panel-close')).toBeInTheDocument();
+    expect(within(screen.getByTestId('fact-corner-action')).getByTestId('chat-panel-close')).toBeInTheDocument();
+    expect(within(screen.getByTestId('fact-band-actions')).queryByTestId('chat-panel-close')).toBeNull();
     expect(screen.queryByTestId('retract-btn')).toBeNull();
+  });
+
+  // SABOTAGE: drop the window keydown listener, or the corner × -> red.
+  it('a fact\'s corner × closes the panel, and so does Esc', async () => {
+    stubFleetFetch(routes());
+    const { unmount } = render(<Harness />);
+    act(() => api.open(F1));
+    await screen.findByTestId('fact-title');
+    fireEvent.click(within(screen.getByTestId('fact-corner-action')).getByTestId('chat-panel-close'));
+    expect(screen.queryByTestId('chat-side-panel')).toBeNull();
+    act(() => api.open(F1));
+    await screen.findByTestId('fact-title');
+    expect(screen.getByTestId('chat-side-panel')).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.queryByTestId('chat-side-panel')).toBeNull();
+    unmount();
   });
 
   it('a tool result has Result and Arguments tabs, not two stacked blocks', async () => {

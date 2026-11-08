@@ -18,7 +18,7 @@ import materializeCss from './materialize.css?raw';
 // the same fact in both, through what each really mounts, and compare what is on
 // screen: the only differences allowed are the × and the retract button.
 // SABOTAGE: render anything else for a fact in the panel; drop hideRetract; drop
-// bandAction; send onOpenPanel from Browse.
+// cornerAction; send onOpenPanel from Browse.
 
 vi.mock('./FactView', async importOriginal => {
   const actual = await importOriginal<typeof import('./FactView')>();
@@ -141,10 +141,18 @@ describe('a fact in Browse and in the chat panel', () => {
     cleanup();
     const p = await settled(inPanel());
     expect(within(p).queryByTestId('retract-btn')).toBeNull();
-    const close = within(p).getByTestId('chat-panel-close');
-    // In the band's action group, beside materialize.
-    expect(within(p).getByTestId('fact-band')).toContainElement(close);
-    expect(close.parentElement).toContainElement(within(p).getByTestId('materialize-btn'));
+    // In the panel's top-right corner, OUT of the band and its action row, where it
+    // read as a neighbour of retract (chat review, 2026-11-08).
+    // SABOTAGE: pass the × back into renderFact's action group -> red.
+    const corner = within(p.parentElement!).getByTestId('fact-corner-action');
+    const close = within(corner).getByTestId('chat-panel-close');
+    expect(within(p).getByTestId('fact-band')).not.toContainElement(close);
+    expect(within(p).getByTestId('fact-band-actions')).not.toContainElement(close);
+    expect(corner.style.position).toBe('absolute');
+    expect(corner.style.top).toBe('4px');
+    expect(corner.style.right).toBe('2px');
+    expect((corner.parentElement as HTMLElement).style.position).toBe('relative');
+    expect(corner.parentElement).toContainElement(p);
   });
 
   it('every control is there in the panel: version, cited by, cites, motif, materialize, tags, refs', async () => {
