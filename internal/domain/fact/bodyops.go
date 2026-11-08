@@ -74,10 +74,10 @@ func applyBodyOp(body string, op BodyOp) (string, error) {
 	switch op.Op {
 	case OpStrReplace:
 		if op.Text != "" {
-			return "", errors.New("str_replace does not take text")
+			return "", errors.New(`str_replace takes old_str and new_str, not text: old_str is the exact text to find (it must occur once in the body) and new_str replaces it, as {"op": "str_replace", "old_str": "...", "new_str": "..."}. text belongs to append, which adds a paragraph at the end: {"op": "append", "text": "..."}`)
 		}
 		if op.OldStr == "" {
-			return "", errors.New("str_replace needs a non-empty old_str")
+			return "", errors.New("str_replace needs a non-empty old_str: the exact text to replace, copied from the body, occurring exactly once")
 		}
 		if op.NewStr == nil {
 			return "", errors.New(`str_replace needs new_str (send "" to delete old_str)`)
@@ -94,7 +94,7 @@ func applyBodyOp(body string, op BodyOp) (string, error) {
 		}
 	case OpAppend:
 		if op.OldStr != "" || op.NewStr != nil {
-			return "", errors.New("append takes only text, not old_str or new_str")
+			return "", errors.New(`append takes only text, the paragraph to add at the end of the body: {"op": "append", "text": "..."}. old_str and new_str belong to str_replace, which replaces text in place: {"op": "str_replace", "old_str": "...", "new_str": "..."}`)
 		}
 		if op.Text == "" {
 			return "", errors.New("append needs a non-empty text")
