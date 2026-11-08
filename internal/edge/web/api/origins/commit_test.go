@@ -69,7 +69,7 @@ func newCommitFixture(t *testing.T, keyPath string, hook func(repos.StageID, str
 	if err := remoteSvc.InitRepo(context.Background(), map[string]string{"seed.md": "seed"}, "machine/test"); err != nil {
 		t.Fatalf("init remote git: %v", err)
 	}
-	// handleCommit closes remoteSvc; don't double-close it here.
+	// The clone stays open on the session: a swap closes it only while the machine runs, and the session finalizer closes it.
 
 	f.sess.mu.Lock()
 	f.sess.State = stateApplied

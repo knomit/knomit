@@ -62,6 +62,39 @@ var (
 	ErrSubscriptionOrigin = errors.New("a subscription requires its origin")
 )
 
+// refusedError marks an error that Send answered BEFORE the machine changed
+// anything: a snapshot or standing refusal, ErrIndexing, a guard's verdict, or
+// a failed origin classification. The event had no effect, so the caller may
+// treat the repo exactly as it was and retry.
+type refusedError struct{ err error }
+
+func (e *refusedError) Error() string { return e.err.Error() }
+func (e *refusedError) Unwrap() error { return e.err }
+
+// Refused marks err as a refusal that changed nothing (see IsRefused). It
+// keeps err's text and identity (errors.Is, errors.As see through it). A nil
+// err stays nil, and an error that is already marked is returned as it is.
+func Refused(err error) error {
+	if err == nil || IsRefused(err) {
+		return err
+	}
+	return &refusedError{err: err}
+}
+
+// IsRefused reports whether err is a Send refusal that changed nothing: the
+// machine's own checks (closed, unavailable, not open, indexing, standing
+// refusals), a guard's verdict, or an origin that could not be classified.
+// The marker is applied only where the event has not yet been queued or
+// applied, so it holds even when the cause is a context error (a guard or
+// classification that timed out). A BARE context error is not marked: Send
+// returns those unwrapped when it merely stopped waiting, and the event may
+// already have been applied. A failure after the guard (a failed install) is
+// never marked either.
+func IsRefused(err error) bool {
+	var r *refusedError
+	return errors.As(err, &r)
+}
+
 // errNotOpenPopulating is ErrNotOpen for a repo still being created.
 var errNotOpenPopulating = fmt.Errorf("%w: repo is populating", ErrNotOpen)
 
