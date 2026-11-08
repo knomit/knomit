@@ -1582,9 +1582,10 @@ export default function App() {
   }, [state.branchRecheck, state.repo, state.branch]); // eslint-disable-line react-hooks/exhaustive-deps
   // Back to an entry left in another repo or lens (navReturn). First: is that
   // context still there? Gone, the reader stays where they are (NAV_RETURN_GONE);
-  // there, Browse switches to it. Unless the entry returns to a chat that is
-  // still open (the chat is shown, and Browse switches behind it), the rail
-  // follows the context, as a pick of it would.
+  // there, Browse switches to it. The view is not touched: Back only fires with
+  // Browse on screen and nothing pinned, so the context IS the displayed target and
+  // its facets follow it at render (shownFacet); and a return to a chat still open
+  // has just pinned the chat over it (chatReturn), which a rail dispatch would undo.
   useLayoutEffect(() => {
     const r = state.navReturn;
     if (!r || r.entered) return;
@@ -1592,11 +1593,8 @@ export default function App() {
     const exists = ctx.kind === 'repo'
       ? repos.some(x => x.name === ctx.repo && repoAvailable(x) && !x.fleet)
       : lenses.some(l => l.name === ctx.name && brokenLensMember(l, repos) === null);
-    if (!exists) { dispatch({ type: 'NAV_RETURN_GONE' }); return; }
-    const toChat = !!r.entry.fromChat && chats.some(c => c.id === r.entry.fromChat);
-    if (!toChat && !viewRef.current.locked) dispatchView({ type: 'SELECT_CONTEXT_TARGET', available: facetsFor(ctx, repos, lenses, creates) });
-    dispatch({ type: 'NAV_RETURN_ENTER' });
-  }, [state.navReturn, repos, lenses, creates, chats, dispatch, dispatchView]);
+    dispatch({ type: exists ? 'NAV_RETURN_ENTER' : 'NAV_RETURN_GONE' });
+  }, [state.navReturn, repos, lenses, dispatch]);
   // Then, once the context has a branch (and a lens its doc): the entry's branch
   // is read again, since the entry is only what the app knew when the reader left,
   // and the entry lands on it in the same flushed render as its status, for the

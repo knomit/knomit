@@ -2195,10 +2195,11 @@ describe('a chat target', () => {
       expect(window.location.search).toContain('l_q=needle');
     });
 
-    // The chat it came from has ended: Back is Browse's, so the rail follows the repo
-    // returned to as a pick of it would, facets and all (a repo now being created opens
-    // on Settings, its only facet).
-    // SABOTAGE: the rail is not moved when the entry came from a chat (toChat = !!fromChat).
+    // The chat it came from has ended: Back is Browse's, so Browse goes to the repo
+    // returned to, facets and all (a repo now being created shows Settings, its only
+    // facet). The facets follow the context at render; the return never touches the
+    // view (a rail dispatch there would unpin a chat still open: the test above).
+    // SABOTAGE: the return is not entered when its entry came from a chat.
     it('a landing in another repo whose chat has since ended: Back takes Browse to the repo left, as a pick of it would', async () => {
       const m = await toTheChipsFact({ start: 'ops-kb', mode: 'path', ms: 0 });
       fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
