@@ -18,7 +18,8 @@ import (
 //   - Auto: after the chat's FIRST COMPLETED turn, the chat's own model is asked
 //     once, with no tools, no thinking and a tight output budget, for a 3-6 word
 //     title (titlePrompt). A usable answer replaces the first-message name; a
-//     failed call or an unusable answer leaves that name. There is no retry: the
+//     failed call or an unusable answer leaves that name. An answer cut off at
+//     the budget counts only when its first line was finished (firstLineEnded). There is no retry: the
 //     attempt is made once per chat (titleTried).
 //   - User: PATCH /chats/{id} {"title"} renames the chat and marks it
 //     user-titled, and from then on auto-title never touches it, including an
@@ -152,6 +153,12 @@ func (c *chat) autoTitle(turn int, snap llm.Snapshot) {
 	if resp != nil {
 		c.addSideUsage(turn, resp.Usage)
 	}
+	// A small model often names the chat on its first line and then keeps
+	// going until the budget cuts it off (lfm3 repeats the title in variants).
+	// A first line the model ENDED (a newline follows it) is a whole answer.
+	if stop != nil && stop.Reason == llm.StopMaxTokens && firstLineEnded(resp) {
+		err = nil
+	}
 	if err != nil {
 		log.Warn().Err(err).Str("chat", c.id).Msg("chat: the title request failed; keeping the first-message title")
 		return
@@ -254,6 +261,27 @@ func cleanTitle(resp *llm.Response) string {
 		return ""
 	}
 	return t
+}
+
+// firstLineEnded reports whether the response's text has a non-empty line that
+// a newline closes: on a cut-off response, that line was finished.
+func firstLineEnded(resp *llm.Response) bool {
+	if resp == nil {
+		return false
+	}
+	var text strings.Builder
+	for _, b := range resp.Blocks {
+		if b.Kind == llm.BlockText {
+			text.WriteString(b.Text)
+		}
+	}
+	lines := strings.Split(text.String(), "\n")
+	for _, l := range lines[:len(lines)-1] {
+		if strings.TrimSpace(l) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // cutRunes keeps the first n runes of s.

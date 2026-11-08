@@ -217,10 +217,11 @@ func TestChat_ARenameDuringTheTitleRequestWins(t *testing.T) {
 // not used. SABOTAGE: set the title on error, or retry -> red.
 func TestChat_AutoTitleFailureKeepsTheFirstMessageName(t *testing.T) {
 	for name, st := range map[string]step{
-		"provider error": {err: errors.New("provider exploded")},
-		"cut off":        {err: &llm.StopError{Reason: llm.StopMaxTokens, Response: &llm.Response{Blocks: []llm.Block{{Kind: llm.BlockText, Text: "A title that never"}}, Usage: titleUsage}}},
-		"not a title":    textStep(strings.Repeat("word ", 30), titleUsage),
-		"no text":        textStep("   \n ", titleUsage),
+		"provider error":   {err: errors.New("provider exploded")},
+		"cut off":          {err: &llm.StopError{Reason: llm.StopMaxTokens, Response: &llm.Response{Blocks: []llm.Block{{Kind: llm.BlockText, Text: "A title that never"}}, Usage: titleUsage}}},
+		"cut off mid-line": {err: &llm.StopError{Reason: llm.StopMaxTokens, Response: &llm.Response{Blocks: []llm.Block{{Kind: llm.BlockText, Text: "Latest cyberai facts and their sour"}}, Usage: titleUsage}}},
+		"not a title":      textStep(strings.Repeat("word ", 30), titleUsage),
+		"no text":          textStep("   \n ", titleUsage),
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t)
@@ -256,6 +257,23 @@ func TestChat_AutoTitleFailureKeepsTheFirstMessageName(t *testing.T) {
 			require.InDelta(t, paid, *r.CostUSD, 1e-12)
 		})
 	}
+}
+
+// A small model names the chat on its first line and keeps going until the
+// budget cuts it off (lfm3, seen live): a first line the model ended is the title.
+// SABOTAGE: drop the firstLineEnded rescue in autoTitle -> red.
+func TestChat_AutoTitleCutOffAfterAWholeFirstLineIsUsed(t *testing.T) {
+	h := newHarness(t)
+	withAutoTitle(h)
+	cut := step{err: &llm.StopError{Reason: llm.StopMaxTokens, Response: &llm.Response{
+		Blocks: []llm.Block{{Kind: llm.BlockText, Text: "CyberAI KB Latest Facts  \nAI Agent Updates  \nEmer"}}, Usage: titleUsage}}}
+	h.queue("a1", textStep("answer", usage), cut)
+	id := h.create("uid:501", "a1")
+	s := h.attachPage("uid:501")
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "bind to cyberai-kb then list the latest facts"))
+	untilTitle(t, s, "CyberAI KB Latest Facts")
+	waitIdle(t, h.mgr.find(id, writer.String()))
+	require.Equal(t, "CyberAI KB Latest Facts", h.row("uid:501", id).Title)
 }
 
 // PATCH /chats/{id} renames the chat: the answer is its row, chat_state carries
@@ -301,7 +319,9 @@ func TestChat_RenameThroughTheAPI(t *testing.T) {
 }
 
 func TestCleanTitle(t *testing.T) {
-	resp := func(s string) *llm.Response { return &llm.Response{Blocks: []llm.Block{{Kind: llm.BlockText, Text: s}}} }
+	resp := func(s string) *llm.Response {
+		return &llm.Response{Blocks: []llm.Block{{Kind: llm.BlockText, Text: s}}}
+	}
 	require.Equal(t, "Rail marks and states", cleanTitle(resp("\n  \"Rail marks and states.\"  \nsecond line")))
 	require.Equal(t, "Chat titles in knomit", cleanTitle(resp("Title: Chat titles in knomit")))
 	require.Equal(t, "", cleanTitle(resp(strings.Repeat("w ", 13))), "more than 12 words is not a title")
