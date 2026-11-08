@@ -212,6 +212,12 @@ func ApplyPruneDecisions(ctx context.Context,
 				mf.Path, len(m.Paths))})
 			continue
 		}
+		// The merged body is a new body: no [[...]] outside code, whatever
+		// its members held.
+		if err := fact.CheckWikiLinks(mf.Body); err != nil {
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s rejected: %v", mf.Path, err)})
+			continue
+		}
 		merged := fact.NewFact(mf.Path)
 		merged.Title = mf.Title
 		merged.Body = mf.Body
@@ -425,6 +431,12 @@ func ApplyDistillDecisions(ctx context.Context,
 		// Distill cannot create hypothesis-type facts.
 		if fact.Type(df.Type) == fact.Hypothesis {
 			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill: skipping hypothesis-type output %s — distill cannot create hypotheses", df.Path)})
+			continue
+		}
+		// A distilled fact is a new body: no [[...]] in its prose, the same
+		// rule as knomit_learn.
+		if err := fact.CheckWikiLinks(df.Body); err != nil {
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill %s rejected: %v", df.Path, err)})
 			continue
 		}
 		// Replace LLM-generated filename with a UUID to match learn convention.
@@ -690,6 +702,10 @@ func ApplyReflectDecisions(
 		}
 		path := fact.BuildFactPath(ontologyRoot, topic, category)
 		if err := step.ValidateOutputPath(path, ontologyRoot); err != nil {
+			return fmt.Errorf("propose[%d]: %w", i, err)
+		}
+		// A proposed methodology is a new body: the knomit_learn rule.
+		if err := fact.CheckWikiLinks(p.Body); err != nil {
 			return fmt.Errorf("propose[%d]: %w", i, err)
 		}
 

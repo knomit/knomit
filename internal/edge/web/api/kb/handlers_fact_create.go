@@ -108,6 +108,12 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 			return
 		}
 
+		// The same wiki-link rule, and error text, as knomit_learn.
+		if err := knomitfact.CheckWikiLinks(req.Body); err != nil {
+			writeWikiLinkProblem(w, r, err)
+			return
+		}
+
 		path := knomitfact.BuildFactPath(ontologyRoot, topic, category)
 
 		// A dot-prefixed segment is private: it would be written and then

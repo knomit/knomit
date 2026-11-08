@@ -45,6 +45,14 @@ func writeGateProblem(w http.ResponseWriter, r *http.Request, gerr error) {
 		gerr.Error(), r.URL.Path)
 }
 
+// writeWikiLinkProblem answers a body the wiki-link rule refuses
+// (fact.CheckWikiLinks, fact.CheckWikiLinksUpdate) with 422, for POST and PUT
+// alike. The detail is knomit_learn's and knomit_update's own error text.
+func writeWikiLinkProblem(w http.ResponseWriter, r *http.Request, err error) {
+	hal.WriteProblem(w, http.StatusUnprocessableEntity, "Link syntax in fact body",
+		err.Error(), r.URL.Path)
+}
+
 // systemFileResolver resolves a ref to a .knomit/ file in ri at the tip of
 // branch — the same branch and moment the fact resolver uses.
 //
@@ -109,12 +117,7 @@ func priorRefs(ctx context.Context, ri *repos.RepoInstance, branch, path string)
 // handleFactUpdate needs: a PUT to a fresh path CREATES a fact, and a create
 // must name an ontology topic. exists is true for a stored version that does
 // not parse (it is still a file at that path).
-func priorVersion(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]string, bool, error) {
-	var (
-		refs   []string
-		exists bool
-		err    error
-	)
+func priorVersion(ctx context.Context, ri *repos.RepoInstance, branch, path string) (refs []string, exists bool, err error) {
 	if aerr := ri.WithRead(func(svc *store.Service) {
 		res, rerr := svc.Facts().ReadFact(ctx, branch, path, nil)
 		if rerr != nil {
@@ -377,6 +380,19 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 		if o := ont; o != nil && !exists && !knomitfact.IsUnderArtifactsRoot(path) {
 			if err := putPlacement(o, ontologyRoot, path); err != nil {
 				writePlacementProblem(w, r, err)
+				return
+			}
+		}
+		// The wiki-link rule on the resulting body, whatever the stored
+		// version held: a PUT that creates gets knomit_learn's text, an edit
+		// knomit_update's. An artifact is exempt, as in knomit_learn.
+		if !knomitfact.IsUnderArtifactsRoot(path) {
+			check := knomitfact.CheckWikiLinksUpdate
+			if !exists {
+				check = knomitfact.CheckWikiLinks
+			}
+			if err := check(f.Body); err != nil {
+				writeWikiLinkProblem(w, r, err)
 				return
 			}
 		}

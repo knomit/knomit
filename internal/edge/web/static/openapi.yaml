@@ -1044,6 +1044,8 @@ paths:
         422 "Fact fails the ontology's validations" when the fact fails a
         validation of the repository's ontology (at the branch's tip): the
         detail is the rule's own message, and nothing is written.
+
+        422 "Link syntax in fact body": the body holds `[[...]]` outside code. The detail says what to change.
       operationId: createFact
       requestBody:
         required: true
@@ -1165,6 +1167,8 @@ paths:
         fails a validation of the repository's ontology (at the branch's tip),
         with the rule's own message: an edit of a fact that already failed
         one must bring it into compliance. Nothing is written.
+
+        422 "Link syntax in fact body": the body holds `[[...]]` outside code. The detail says what to change.
 
         A PUT whose bytes to commit (the request's content, or the server's
         rewrite of it when a gate canonicalises refs, motifs, expires or

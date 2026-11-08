@@ -11,7 +11,7 @@
 // same chain, in the same order, and what gets committed is what SerializeFact
 // produces, never the caller's raw bytes:
 //
-//	ParseFact  →  ValidateFact  →  refs.Gate.Apply  →  SerializeFact
+//	ParseFact  →  ValidateFact  →  wiki-link rule  →  refs.Gate.Apply  →  SerializeFact
 //
 // The subject-motif gate is NOT a step here, deliberately: SerializeFact
 // applies it internally, so reaching SerializeFact IS being gated. The REST
@@ -127,6 +127,15 @@ func normalizeOne(
 		}
 	} else if len(f.Context) > 0 {
 		return nil, fmt.Errorf("resolution body for %q: %w", file, knomitfact.ErrContextWithoutOntology)
+	}
+
+	// 2b. The wiki-link rule, as knomit_update applies it: the resolved body
+	// may hold no [[...]] outside code, whatever the merged versions held. An
+	// artifact is exempt, as on every write path.
+	if !knomitfact.IsArtifactPath(file) {
+		if err := knomitfact.CheckWikiLinksUpdate(f.Body); err != nil {
+			return nil, fmt.Errorf("resolution body for %q: %w", file, err)
+		}
 	}
 
 	// 3. The refs gate. Only refs the resolver ADDS are judged: prior is every

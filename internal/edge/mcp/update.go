@@ -113,9 +113,7 @@ The two shapes do not mix: str_replace refuses text, and append refuses old_str 
 
 Ops apply in order, each to the body the previous op produced, so a later op may anchor on text an earlier one inserted. All ops land as ONE revision or none do: if any op fails, nothing is written and the error names the op by its zero-based index.
 
-Matching is exact: no regex, no whitespace or Unicode normalisation. On 0 matches the error gives the longest prefix of old_str that does occur, its byte offset, and the first differing character on each side as U+XXXX — fix old_str from that (smart quotes, em dash vs "--", non-breaking space, trailing whitespace) and retry. On 2 or more matches it gives the count and offsets — widen old_str with surrounding text until it is unique.
-
-The body's leading and trailing whitespace is not stored. An edit that leaves an unclosed ` + "```" + ` fence in a body whose fences were balanced is refused.`
+Matching is exact: no regex, no whitespace or Unicode normalisation. On 0 matches the error gives the longest prefix of old_str that does occur, its byte offset, and the first differing character on each side as U+XXXX — fix old_str from that (smart quotes, em dash vs "--", non-breaking space, trailing whitespace) and retry. On 2 or more matches it gives the count and offsets — widen old_str with surrounding text until it is unique.`
 
 // ifCommitDescription is the agent-facing contract for knomit_update's if_commit.
 const ifCommitDescription = `Optional guard against editing a fact that changed since you read it. Pass the commit you read the fact at — the "commit" knomit_explain returned for it — as the full 40-character hash. The update proceeds only if the file's bytes at that commit equal its bytes now; an unrelated commit in between does not matter. Otherwise nothing is written and the error gives current_commit: read the fact again at current_commit and rebuild your edit against it. The check and the write are atomic, so two callers holding the same if_commit cannot both land. Applies to ops and to updates.body alike.`
@@ -437,6 +435,15 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		fact.Body = strings.TrimSpace(fact.Body)
 		if bodyChanged {
 			if err := factpkg.CheckFenceEdit(priorBody, fact.Body); err != nil {
+				return mcpgo.NewToolResultError(err.Error()), nil
+			}
+		}
+		// The resulting body may hold no [[...]] outside code, on EVERY
+		// update — one that changes only refs or confidence included — and
+		// whatever the fact held before: a legacy fact cannot be updated
+		// until its body is fixed. An artifact is exempt, as in knomit_learn.
+		if !factpkg.IsArtifactPath(file) {
+			if err := factpkg.CheckWikiLinksUpdate(fact.Body); err != nil {
 				return mcpgo.NewToolResultError(err.Error()), nil
 			}
 		}

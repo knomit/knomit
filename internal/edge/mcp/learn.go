@@ -342,6 +342,12 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 				return nil, nil, nil, nil, fmt.Errorf(
 					"fact %d: topic/category resolves to %s; a path segment beginning with '.' is private and cannot hold a fact", i, path)
 			}
+			// No [[...]] in a fact body's prose: refs are the only link
+			// channel. Artifacts are exempt — they are a job's bookkeeping,
+			// not knowledge, and may discuss the notation.
+			if err := fact.CheckWikiLinks(fi.Body); err != nil {
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
+			}
 		}
 		topicCategories[i] = topicCategory
 
@@ -1055,6 +1061,11 @@ func applyDedupMerge(
 			if err := fact.ValidateFact(ontology, topicCategories[i], merged); err != nil {
 				return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge: %v", i, err)
 			}
+		}
+		// The merge rewrites the EXISTING fact, and the body it keeps may be
+		// the existing one: an update, so the update rule applies to it.
+		if err := fact.CheckWikiLinksUpdate(merged.Body); err != nil {
+			return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge into %s: %v", i, match.Path, err)
 		}
 		// F22: the merged fact lands at the MATCH's path, which the prefix
 		// search can place in a descendant topic whose context declarations
