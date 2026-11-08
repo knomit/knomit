@@ -11,7 +11,8 @@ function normalTitle(text: string): string {
  * the top bar alike: it opens on a double-click of the name, holding the name
  * selected. Enter or blur saves; Esc cancels; an empty name reverts to the one
  * there was. onDone is called exactly once, with the new name, or with null when
- * nothing is to be saved (cancelled, emptied or unchanged).
+ * nothing is to be saved (cancelled, emptied or unchanged). Taken off screen
+ * without any of those, it saves nothing and calls nothing.
  */
 export function ChatTitleEdit({ initial, onDone, testId, style }: {
   initial: string;
@@ -24,9 +25,13 @@ export function ChatTitleEdit({ initial, onDone, testId, style }: {
   const done = useRef(false);
   useEffect(() => {
     const el = ref.current;
-    if (!el) return;
-    el.focus();
-    el.select();
+    if (el) {
+      el.focus();
+      el.select();
+    }
+    // Taken off screen without Enter, Esc or a blur (another chat was opened):
+    // the edit is cancelled, and a late blur cannot save it.
+    return () => { done.current = true; };
   }, []);
   const finish = (save: boolean) => {
     if (done.current) return;
@@ -48,7 +53,8 @@ export function ChatTitleEdit({ initial, onDone, testId, style }: {
       onKeyDown={e => {
         // The key is the edit's: neither the rail's nor the chat's Esc.
         e.stopPropagation();
-        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+        // An Enter that confirms an IME composition is the composition's, not a save.
+        if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); finish(true); }
         else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
       }}
       onBlur={() => finish(true)}

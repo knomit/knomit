@@ -155,9 +155,12 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
     ? { kind: 'lens', name: state.context.kind === 'lens' ? state.context.name : '' }
     : { kind: 'repo', name: state.repo });
   // The crumb of an open chat (not a draft) renames it on a double-click.
-  const [renaming, setRenaming] = useState(false);
+  // `renaming` is the id of the chat whose name is being edited. Another chat
+  // on screen (a rail click does not blur the input: rows take no focus) ends
+  // the edit, CANCELLED: the text was typed for the other chat.
+  const [renaming, setRenaming] = useState<string | null>(null);
   const canRename = !!onRenameChat && target.kind === 'chat' && !!target.id && !target.draft && !locked;
-  if (renaming && !canRename) setRenaming(false);
+  if (renaming !== null && (!canRename || renaming !== target.id)) setRenaming(null);
   const label = {
     name: target.name,
     // A chat draft is amber; an open chat's title is cream, with the provider mark in amber.
@@ -253,14 +256,14 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
               {label.icon}
               {/* The name is the one part that gives way: it shrinks and ends in an
                   ellipsis, with the whole name in its tooltip. */}
-              {renaming && target.kind === 'chat' && target.id ? (
-                <ChatTitleEdit initial={label.name} testId="target-label-rename" style={{ fontWeight: 500, ...noDrag }} onDone={t => {
-                  setRenaming(false);
-                  if (t !== null && target.id) onRenameChat?.(target.id, t);
+              {renaming !== null && renaming === target.id ? (
+                <ChatTitleEdit key={renaming} initial={label.name} testId="target-label-rename" style={{ fontWeight: 500, ...noDrag }} onDone={t => {
+                  setRenaming(null);
+                  if (t !== null) onRenameChat?.(renaming, t);
                 }} />
               ) : (
                 <span className="k-bar-name" data-testid="target-label-name" title={label.name || undefined} style={barName}
-                  onDoubleClick={canRename ? () => setRenaming(true) : undefined}>{label.name}</span>
+                  onDoubleClick={canRename && target.id ? () => setRenaming(target.id ?? null) : undefined}>{label.name}</span>
               )}
               {/* The grey model name stays whole beside it; only below the narrow
                   breakpoint (App.css) is it dropped. */}

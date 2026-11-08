@@ -1338,6 +1338,61 @@ describe('a chat target', () => {
     };
     const patches = (fx: { calls: { route: string; body: unknown }[] }) => fx.calls.filter(c => c.route === 'PATCH /api/v1/chats/chat-a').map(c => c.body);
 
+    // Review of #808, confirmed in a browser: rail rows take no focus, so a click
+    // on chat B while A's name was being edited left the input open, and Enter
+    // then renamed B with the text typed for A. Opening another chat now CANCELS
+    // the edit. SABOTAGE: drop the target-id reset in TopBar -> red.
+    it('opening another chat while the top bar edits a name cancels the edit: nothing is saved, to either chat', async () => {
+      await primeApi();
+      const CHAT_B = { id: 'chat-b', provider: 'anthropic', model: 'a1' };
+      const { fx } = chatRoutes([{ ...CHAT_A, title: 'alpha words', state: 'idle', turns: 1 }, { ...CHAT_B, title: 'beta words', state: 'idle', turns: 1 }]);
+      fx.set('GET /api/v1/chats/chat-b', { body: { ...CHAT_B, running: false, items: [], pending_approvals: [], grants: [] } });
+      const sent = (id: string) => fx.calls.filter(c => c.route === `PATCH /api/v1/chats/${id}`);
+      await mountApp();
+      fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+      await waitFor(() => expect(screen.getByTestId('target-label-name')).toHaveTextContent('alpha words'));
+      fireEvent.doubleClick(screen.getByTestId('target-label-name'));
+      const input = screen.getByTestId('target-label-rename') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'typed for alpha' } });
+      // As a browser does it: the row's mousedown takes no focus, so no blur.
+      expect(fireEvent.mouseDown(screen.getByTestId('rail-chat-chat-b'))).toBe(false);
+      fireEvent.click(screen.getByTestId('rail-chat-chat-b'));
+      await waitFor(() => expect(screen.getByTestId('target-label-name')).toHaveTextContent('beta words'));
+      expect(screen.queryByTestId('target-label-rename')).toBeNull();
+      // Whatever arrives late (a blur, an Enter on the detached input) saves nothing.
+      fireEvent.keyDown(input, { key: 'Enter' });
+      fireEvent.blur(input);
+      expect(sent('chat-a')).toEqual([]);
+      expect(sent('chat-b')).toEqual([]);
+      expect(screen.getByTestId('rail-chat-title-chat-a')).toHaveTextContent('alpha words');
+      expect(screen.getByTestId('rail-chat-title-chat-b')).toHaveTextContent('beta words');
+    });
+
+    // SABOTAGE: drop the done guard in ChatTitleEdit.finish -> red (two PATCHes).
+    it('Enter then the blur that follows it saves exactly once', async () => {
+      const fx = await mountWithChat();
+      fireEvent.doubleClick(screen.getByTestId('rail-chat-title-chat-a'));
+      const input = screen.getByTestId('rail-chat-rename-chat-a');
+      fireEvent.change(input, { target: { value: 'Once only' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      fireEvent.blur(input);
+      expect(patches(fx)).toEqual([{ title: 'Once only' }]);
+    });
+
+    // An Enter that confirms an IME composition (Japanese, Chinese input) is
+    // the composition's. SABOTAGE: drop the isComposing check -> red.
+    it('an Enter that ends an IME composition does not save; the next Enter does', async () => {
+      const fx = await mountWithChat();
+      fireEvent.doubleClick(screen.getByTestId('target-label-name'));
+      const input = screen.getByTestId('target-label-rename');
+      fireEvent.change(input, { target: { value: '名前' } });
+      fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+      expect(screen.getByTestId('target-label-rename')).toBe(input);
+      expect(patches(fx)).toEqual([]);
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(patches(fx)).toEqual([{ title: '名前' }]);
+    });
+
     it('the rail row: double-click, type, Enter saves; both the row and the top bar show it', async () => {
       const fx = await mountWithChat();
       fireEvent.doubleClick(screen.getByTestId('rail-chat-title-chat-a'));
