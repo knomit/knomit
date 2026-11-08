@@ -1378,9 +1378,11 @@ paths:
         response is a `RefsCollection` of referencing/referenced facts at
         this anchor instead of a fact view. Each entry's `commit` field
         and `_links.self` are pinned to the entry's own version:
-        - `/incoming` items carry `commit = source_commit` (the commit
-          that asserted the ref); `_links.self` points to the source
-          fact at that commit.
+        - `/incoming` items carry a commit where the citing fact's path
+          holds the citing version: `source_commit` (the commit that
+          asserted the ref), or, for a citing fact renamed since, a commit
+          at its new path. `_links.self` points to the citing fact at that
+          commit.
         - `/outgoing` items carry `commit = target_commit` (the version
           of the target the ref resolved to at the anchor); `_links.self`
           points to the target fact at that commit.
@@ -6760,11 +6762,13 @@ components:
         path:    { type: string }
         title:   { type: string }
         type:    { type: string }
-        # commit pins each entry to a specific version: source_commit for
-        # /incoming items (the commit that asserted the ref), target_commit
-        # for /outgoing items (the version of the target the ref resolved to
-        # at the source's commit). _links.self is anchored to this commit.
-        commit:  { type: string, description: "Commit hash this entry is pinned to (source_commit on /incoming, target_commit on /outgoing)." }
+        # commit pins each entry to a commit where the entry's fact exists:
+        # on /incoming, one holding the citing version (source_commit, or for
+        # a citing fact renamed since, a commit at its new path); on
+        # /outgoing, target_commit (the version of the target the ref
+        # resolved to at the source's commit). _links.self is anchored to
+        # this commit.
+        commit:  { type: string, description: "Commit hash this entry is pinned to: a commit where the entry's fact exists (on /incoming, one holding the citing version; on /outgoing, target_commit)." }
         # The entry's version is retracted (on /incoming and /outgoing alike).
         # _links.self is still present: `commit` is a commit where the fact
         # exists, so the link opens it there.
