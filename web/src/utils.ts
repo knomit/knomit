@@ -250,6 +250,9 @@ export function chipStyle(category: string, value: string):
 export type EdgeDir = 'in' | 'out';
 export const EDGE_ACCENT: Record<EdgeDir, string> = { in: '#8af', out: '#fa8' };
 export const EDGE_GLYPH: Record<EdgeDir, string> = { in: '↙', out: '↗' };
+/** The fact band's history button: an arrow in the same plain-text family as
+ *  ↙ ↗ ≈. It replaced ⏱, which macOS draws as a colour emoji beside them. */
+export const HISTORY_GLYPH = '↺';
 /** What each direction is CALLED, defined once so the cell and the panel it
  *  opens cannot drift. The cells gained words when the motif names arrived and
  *  the row became a list of named things rather than a row of symbols; the
