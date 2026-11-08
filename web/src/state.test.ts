@@ -1378,3 +1378,43 @@ describe('per-repo read-only', () => {
     expect(readOnlyTitle(s)).toBe(READ_ONLY_TITLE);
   });
 });
+
+// Only going back to a chat restores the branch and since-fork, and it asks App to
+// re-read them. Back inside Browse leaves them, as it always did.
+describe('NAV_BACK and the branch', () => {
+  const exp = { name: 'try', parent: 'main', fork_commit: 'f0rk' } as AppState['experiment'];
+  const onExp: AppState = { ...init, repo: 'r', context: { kind: 'repo', repo: 'r' }, branch: 'exp/try', headCommit: 'h1', experiment: exp, sinceFork: true, branchWritable: true, factPath: 'kb/a.md' };
+  const land = (s: AppState) => reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/b.md', asOf: { mode: 'live' }, sinceFork: false, fromChat: 'c1' });
+  const open = (s: AppState) => reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/b.md', asOf: { mode: 'live' } });
+  const toMain = (s: AppState) => reducer(s, { type: 'SET_STATUS', head: 'h2', branch: 'main', embeddingsEnabled: false, ontologyRoot: 'kb', branchWritable: false, experiment: null });
+
+  it('back to a chat: the old branch, head, experiment, write gate, fact and since-fork, and a re-read', () => {
+    const away = toMain(land(onExp));
+    expect(away).toMatchObject({ branch: 'main', experiment: null, sinceFork: false, factPath: 'kb/b.md', branchRecheck: false });
+    expect(reducer(away, { type: 'NAV_BACK' })).toMatchObject({ branch: 'exp/try', headCommit: 'h1', experiment: exp, branchWritable: true, sinceFork: true, factPath: 'kb/a.md', chatReturn: 'c1', branchRecheck: true });
+  });
+  it('back to a chat on the same branch keeps the newer head and the experiment, and still re-reads', () => {
+    const away = reducer(land(onExp), { type: 'SET_HEAD', head: 'h9' });
+    expect(reducer(away, { type: 'NAV_BACK' })).toMatchObject({ branch: 'exp/try', headCommit: 'h9', sinceFork: true, branchRecheck: true });
+  });
+  it('since-fork never comes back outside an experiment', () => {
+    const left = reducer(land(onExp), { type: 'SET_STATUS', head: 'h1', branch: 'exp/try', embeddingsEnabled: false, ontologyRoot: 'kb', experiment: null });
+    expect(reducer(left, { type: 'NAV_BACK' }).sinceFork).toBe(false);
+  });
+  it('back inside Browse after the branch moved stays on it, and restores only the fact: nothing is re-read', () => {
+    const back = reducer(toMain(open(onExp)), { type: 'NAV_BACK' });
+    expect(back).toMatchObject({ branch: 'main', headCommit: 'h2', experiment: null, branchWritable: false, sinceFork: false, factPath: 'kb/a.md', chatReturn: null, branchRecheck: false });
+  });
+  it('back inside Browse does not touch since-fork', () => {
+    const on = open(onExp);
+    const off = reducer(on, { type: 'SET_SINCE_FORK', value: false });
+    expect(reducer(off, { type: 'NAV_BACK' }).sinceFork).toBe(false);
+    const offFirst = open({ ...onExp, sinceFork: false });
+    const turnedOn = reducer(offFirst, { type: 'SET_SINCE_FORK', value: true });
+    expect(reducer(turnedOn, { type: 'NAV_BACK' }).sinceFork).toBe(true);
+  });
+  it('a branch gone: the fact, filters, trail and experiment go with it', () => {
+    const s = reducer({ ...land(onExp), filters: [{ category: 'path', value: 'kb/x' }], freeText: 'q' }, { type: 'BRANCH_GONE' });
+    expect(s).toMatchObject({ factPath: null, filters: [], freeText: '', navStack: [], experiment: null, sinceFork: false, asOf: { mode: 'live' } });
+  });
+});

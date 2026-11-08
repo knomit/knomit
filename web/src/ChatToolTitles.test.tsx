@@ -248,7 +248,6 @@ describe('web/src words no tool itself', () => {
     }
     expect(found.sort()).toEqual([
       "ChatResultPanel.tsx 'knomit_materialize'",
-      "ChatSidePanel.tsx 'knomit_materialize'",
       "chatState.ts 'knomit_bind'",
     ]);
   });

@@ -6,7 +6,6 @@ import { resetFactCache } from './chatFactLinks';
 import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatSnapshot } from './chatApi';
 import { typeStyles, repoHue } from './utils';
-import { PANEL_OPEN_IN_BROWSE } from './chatCopy';
 import { TypeIcon } from './icons';
 import { CommitHash } from './TimelineNav';
 
@@ -58,15 +57,15 @@ const resolved = (body: unknown) => {
   return { body: handles.filter(h => known[h]).map(h => known[h]) };
 };
 
-function mount(snap: ChatSnapshot = TWO_TURNS, onOpenInBrowse = vi.fn()) {
+function mount(snap: ChatSnapshot = TWO_TURNS, onBrowseFact = vi.fn()) {
   const fx = stubFleetFetch({
     [`GET ${BASE}`]: { body: snap },
     [RESOLVE]: resolved,
     [`GET ${FACT_BASE}/${POLICY.path}`]: { body: { path: POLICY.path, title: POLICY.title, type: 'policy', kind: 'pragmatic', body: 'Review them like code.', domain: [], confidence: 0.92, sources: 4, entities: [], refs: [] } },
   });
   const repos = [{ name: 'agentic-engineering', id: '87b70fb1aeb1' }];
-  const utils = render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} onOpenInBrowse={onOpenInBrowse} repos={repos} />);
-  return { fx, onOpenInBrowse, ...utils };
+  const utils = render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} onBrowseFact={onBrowseFact} repos={repos} />);
+  return { fx, onBrowseFact, ...utils };
 }
 const resolveCalls = (fx: ReturnType<typeof stubFleetFetch>) => fx.calls.filter(c => c.route === RESOLVE);
 
@@ -131,6 +130,49 @@ describe('chat fact links', () => {
     ]);
   });
 
+  it('a failed bind to a second repo is left out of prefer, so the turn still names one repo', async () => {
+    const { fx } = mount(snapshot([
+      { kind: 'user', text: 'q' },
+      { kind: 'tool_call', id: 'tu_1', name: 'knomit_bind', state: 'done', arguments: { repo: 'agentic-engineering' } },
+      { kind: 'tool_call', id: 'tu_2', name: 'knomit_bind', state: 'done', is_error: true, arguments: { repo: 'no-such-repo' } },
+      { kind: 'assistant', text: 'see `3fc77970`' },
+    ]));
+    await screen.findByTestId('fact-link');
+    expect(resolveCalls(fx)[0].body).toEqual({ handles: ['3fc77970'], prefer: ['agentic-engineering'] });
+  });
+
+  // A resolver as the server is: a hash answers only with exactly one repo
+  // preferred; a short id two repos hold answers only with one of them preferred.
+  const serverLike = (fx: ReturnType<typeof stubFleetFetch>) => fx.set(RESOLVE, (body: unknown) => {
+    const { handles, prefer } = body as { handles: string[]; prefer: string[] };
+    const out: object[] = [];
+    if (handles.includes('abc1234') && prefer.length === 1) out.push({ handle: 'abc1234', id: '', title: '', type: '', repo: prefer[0], branch: 'agent/test', path: '', excerpt: '', commit: 'abc1234' + 'f'.repeat(33) });
+    if (handles.includes('3fc77970') && prefer.includes('second-repo')) out.push({ ...POLICY, repo: 'second-repo' });
+    return { body: out };
+  });
+  const bindOne = { kind: 'tool_call', id: 'tu_1', name: 'knomit_bind', state: 'done', title: 'Bind', in_base: true, target: 'agentic-engineering', arguments: { repo: 'agentic-engineering' } } as const;
+  const failedQuery = { kind: 'tool_call', id: 'tu_2', name: 'knomit_query', state: 'done', is_error: true, title: 'Query', in_base: true, target: 'second-repo', arguments: { text: 'x', repo: 'second-repo' } } as const;
+
+  it('a failed query naming a reachable second repo does not stop a commit chip', async () => {
+    const { fx } = mount(snapshot([{ kind: 'user', text: 'first' }]));
+    serverLike(fx);
+    fx.set(`GET ${BASE}`, { body: snapshot([{ kind: 'user', text: 'q' }, bindOne, failedQuery, { kind: 'assistant', text: 'Fixed in `abc1234`.' }]) });
+    act(() => { chatStream('chat-a')!.emit('ready', {}); });
+    await screen.findByTestId('commit-link');
+    expect(resolveCalls(fx).at(-1)!.body).toEqual({ handles: ['abc1234'], prefer: ['agentic-engineering'] });
+  });
+
+  it('a short id two repos hold, where only a failed call named one of them, stays plain code', async () => {
+    const { fx } = mount(snapshot([{ kind: 'user', text: 'first' }]));
+    serverLike(fx);
+    fx.set(`GET ${BASE}`, { body: snapshot([{ kind: 'user', text: 'q' }, bindOne, failedQuery, { kind: 'assistant', text: 'See `3fc77970`.' }]) });
+    act(() => { chatStream('chat-a')!.emit('ready', {}); });
+    await waitFor(() => expect(resolveCalls(fx).at(-1)?.body).toEqual({ handles: ['3fc77970'], prefer: ['agentic-engineering'] }));
+    await settle();
+    expect(screen.queryByTestId('fact-link')).toBeNull();
+    expect([...screen.getByTestId('chat-turn-0').querySelectorAll('code')].map(c => c.textContent)).toEqual(['3fc77970']);
+  });
+
   it('a fact the server could not parse (no confidence) shows no confidence in the card, as Browse leaves a missing one out', async () => {
     const { confidence: _c, kind: _k, origin: _o, sources: _s, ...unparsed } = POLICY;
     void _c; void _k; void _o; void _s;
@@ -150,9 +192,8 @@ describe('chat fact links', () => {
     vi.useRealTimers();
   });
 
-  it('a commit hash the server resolved in the turn\'s repo is the timeline\'s CommitHash, linking to that version; others stay code', async () => {
+  it('a commit hash the server resolved in the turn\'s repo is the timeline\'s CommitHash; others stay code', async () => {
     const FULL = 'abc1234' + 'f'.repeat(33);
-    const onOpenCommit = vi.fn();
     const fx = stubFleetFetch({
       [`GET ${BASE}`]: { body: snapshot([
         { kind: 'user', text: 'q' },
@@ -166,7 +207,7 @@ describe('chat fact links', () => {
           : [] };
       },
     });
-    render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} onOpenCommit={onOpenCommit} repos={[]} />);
+    render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} repos={[]} />);
     const link = await screen.findByTestId('commit-link');
     expect(resolveCalls(fx)[0].body).toEqual({ handles: ['abc1234', '1111111'], prefer: ['agentic-engineering'] });
     expect(within(link).getByTestId('commit-hash')).toHaveTextContent('abc1234');
@@ -176,8 +217,6 @@ describe('chat fact links', () => {
     expect(link).toHaveAttribute('title', FULL);
     const codes = [...screen.getByTestId('chat-turn-0').querySelectorAll('code')].map(c => c.textContent);
     expect(codes).toEqual(['1111111']);
-    fireEvent.click(link);
-    expect(onOpenCommit).toHaveBeenCalledWith('agentic-engineering', FULL);
   });
 
   it('a failed resolve leaves the code as code and is not retried, on this mount or the next', async () => {
@@ -240,18 +279,18 @@ describe('chat fact links', () => {
   });
 
   it('click opens the fact in the side panel and the chip stays highlighted; Cmd-click goes to Browse', async () => {
-    const { onOpenInBrowse } = mount();
+    const { onBrowseFact } = mount();
     const turn1 = await screen.findByTestId('chat-turn-1');
     const chip = await within(turn1).findByTestId('fact-link');
     expect(screen.queryByTestId('chat-side-panel')).toBeNull();
 
     fireEvent.click(chip, { metaKey: true });
-    expect(onOpenInBrowse).toHaveBeenCalledWith('agentic-engineering', POLICY.path);
+    expect(onBrowseFact).toHaveBeenCalledWith('chat-a', { repo: POLICY.repo, branch: POLICY.branch, path: POLICY.path });
     expect(screen.queryByTestId('chat-side-panel')).toBeNull();
 
     fireEvent.click(chip);
     const panel = await screen.findByTestId('chat-side-panel');
-    expect(await within(panel).findByTestId('chat-fact-title')).toHaveTextContent(POLICY.title);
+    expect(await within(panel).findByTestId('fact-title')).toHaveTextContent(POLICY.title);
     expect(chip).toHaveAttribute('data-open', 'true');
     // The same fact cited in the other turn is highlighted as well: it is what is open.
     const other = within(screen.getByTestId('chat-turn-0')).getAllByTestId('fact-link')[0];
@@ -261,8 +300,8 @@ describe('chat fact links', () => {
     expect(chip).not.toHaveAttribute('data-open');
   });
 
-  it('hovering about 300ms shows the card: type, repo, confidence, title, excerpt, path and Open in Browse', async () => {
-    const { onOpenInBrowse } = mount();
+  it('hovering about 300ms shows the card: type, repo, confidence, title, excerpt and path, and no way to Browse', async () => {
+    mount();
     const turn1 = await screen.findByTestId('chat-turn-1');
     const chip = await within(turn1).findByTestId('fact-link');
     vi.useFakeTimers();
@@ -285,8 +324,7 @@ describe('chat fact links', () => {
     expect(within(card).getByTestId('fact-card-excerpt')).toHaveTextContent(POLICY.excerpt);
     // The path is Browse's band path row.
     expect(within(card).getByTestId('fact-band-path')).toHaveTextContent(POLICY.path);
-    fireEvent.click(within(card).getByText(PANEL_OPEN_IN_BROWSE));
-    expect(onOpenInBrowse).toHaveBeenCalledWith('agentic-engineering', POLICY.path);
+    expect(within(card).queryByRole('button')).toBeNull(); // Cmd-click on the link goes to Browse
     vi.useRealTimers();
   });
 

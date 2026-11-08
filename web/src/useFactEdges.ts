@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { api, isNotFound } from './api';
 import type { RefGroup } from './api';
-import type { AppState } from './state';
+import type { FactReading } from './state';
 import { factHistoryAnchor, edgeAnchorCommit, isLive, isLensContext, openFactSourceResolved } from './state';
 import { useAsync } from './hooks';
 
@@ -83,7 +83,7 @@ const EMPTY: FactEdges = {
  * head is re-read at most once per failure — a second 404 finds the head
  * unmoved and reports it, so there is no loop.
  */
-export function useFactEdges(state: AppState, onHead?: (head: string) => void): FactEdges {
+export function useFactEdges(state: FactReading, onHead?: (head: string) => void): FactEdges {
   const [edges, setEdges] = useState<{ incoming: RefGroup[]; outgoing: RefGroup[] }>({ incoming: [], outgoing: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

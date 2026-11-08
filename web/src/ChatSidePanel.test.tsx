@@ -6,7 +6,7 @@ import { useEffect, useReducer } from 'react';
 import { ChatFacet } from './ChatFacet';
 import { ChatSidePanel } from './ChatSidePanel';
 import { clampPanelWidth, initialPanelState, panelReducer, PANEL_WIDTH_KEY, PANEL_DEFAULT_WIDTH, PANEL_MAX_FRACTION, PANEL_MIN_WIDTH, usePanelWidth } from './chatPanelState';
-import type { PanelEntry, PanelState } from './chatPanelState';
+import type { BrowseFactRequest, PanelEntry, PanelState } from './chatPanelState';
 import { installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
 import { stubFleetFetch, problem } from './fleetTestFetch';
 import type { ChatSnapshot } from './chatApi';
@@ -47,11 +47,11 @@ function routes() {
 
 /** The panel with its own history, driven through the panel API (the way fact links will). */
 let api: { open: (e: PanelEntry) => void; state: () => PanelState };
-function Harness({ running = false, onBrowse, bound = '', callFor }: { running?: boolean; onBrowse?: (r: string, p: string) => void; bound?: string; callFor?: (id: string) => ToolCall | undefined }) {
+function Harness({ running = false, onBrowse, bound = '', callFor }: { running?: boolean; onBrowse?: (r: BrowseFactRequest) => void; bound?: string; callFor?: (id: string) => ToolCall | undefined }) {
   const [panel, dispatch] = useReducer(panelReducer, initialPanelState);
   useEffect(() => { api = { open: entry => dispatch({ type: 'open', entry }), state: () => panel }; });
   const w = usePanelWidth();
-  return <ChatSidePanel chatId="chat-a" panel={panel} dispatch={dispatch} running={running} width={w.width} onSplitterDown={w.onSplitterDown} onOpenInBrowse={onBrowse} boundFor={() => bound} callFor={callFor} />;
+  return <ChatSidePanel chatId="chat-a" panel={panel} dispatch={dispatch} running={running} width={w.width} onSplitterDown={w.onSplitterDown} onBrowse={onBrowse} boundFor={() => bound} callFor={callFor} />;
 }
 
 beforeEach(() => { installFakeEventSource(); localStorage.clear(); });
@@ -63,33 +63,11 @@ const footer = () => screen.getByTestId('chat-panel-footer').textContent;
 
 describe('panelReducer', () => {
   const run = (...as: Parameters<typeof panelReducer>[1][]) => as.reduce(panelReducer, initialPanelState);
-  it('is closed and empty to begin with; open pushes and shows the entry', () => {
-    expect(initialPanelState).toEqual({ entries: [], index: -1, open: false });
-    const s = run({ type: 'open', entry: R1 });
-    expect(s).toEqual({ entries: [R1], index: 0, open: true });
-  });
-  it('back and forward walk mixed facts and results; opening from the middle drops what was ahead', () => {
-    let s = run({ type: 'open', entry: R1 }, { type: 'open', entry: F1 }, { type: 'open', entry: R2 });
-    expect(s.entries).toEqual([R1, F1, R2]);
-    s = [{ type: 'back' }, { type: 'back' }].reduce((a, x) => panelReducer(a, x as never), s);
-    expect(s.index).toBe(0);
-    expect(panelReducer(s, { type: 'back' }).index).toBe(0); // no further back
-    s = panelReducer(s, { type: 'forward' });
-    expect(s.entries[s.index]).toEqual(F1);
-    // From the middle, a new open replaces the future: R2 is gone.
-    s = panelReducer(s, { type: 'open', entry: { kind: 'result', callId: 'tu_9' } });
-    expect(s.entries).toEqual([R1, F1, { kind: 'result', callId: 'tu_9' }]);
-    expect(s.index).toBe(2);
-    expect(panelReducer(s, { type: 'forward' }).index).toBe(2); // nothing ahead
-  });
-  it('close keeps the history; reopening the same entry does not push it again', () => {
-    let s = run({ type: 'open', entry: R1 }, { type: 'open', entry: F1 }, { type: 'close' });
-    expect(s.open).toBe(false);
-    expect(s.entries).toEqual([R1, F1]);
-    s = panelReducer(s, { type: 'open', entry: F1 });
-    expect(s).toEqual({ entries: [R1, F1], index: 1, open: true });
-    // Opening what is showing is a no-op.
-    expect(panelReducer(s, { type: 'open', entry: F1 })).toBe(s);
+  it('is closed to begin with; open shows the entry, a second replaces it, close empties it', () => {
+    expect(initialPanelState).toEqual({ entry: null });
+    expect(run({ type: 'open', entry: R1 })).toEqual({ entry: R1 });
+    expect(run({ type: 'open', entry: R1 }, { type: 'open', entry: F1 })).toEqual({ entry: F1 });
+    expect(run({ type: 'open', entry: R1 }, { type: 'close' })).toEqual({ entry: null });
   });
 });
 
@@ -104,17 +82,19 @@ describe('ChatSidePanel', () => {
     stubFleetFetch(routes());
     render(<Harness />);
     act(() => api.open(F1));
-    await screen.findByTestId('chat-fact-title');
-    expect(screen.getByTestId('chat-fact-title')).toHaveTextContent('One decision');
+    expect(await screen.findByTestId('fact-title')).toHaveTextContent('One decision');
     expect(screen.getByTestId('fact-type-badge').textContent?.trim()).toBe('observation');
     expect(screen.getByTestId('fact-confidence').textContent?.replace(/\s+/g, ' ').trim()).toBe('conf 0.90');
     expect(screen.getByTestId('fact-meta').textContent?.replace(/\s+/g, ' ').trim()).toBe('observation·conf 0.90·2 sources');
     expect(screen.getByTestId('fact-band-path')).toHaveTextContent('kb/decisions/web/one.md');
-    await waitFor(() => expect(screen.getByTestId('chat-fact-cited-by')).toHaveTextContent('cited by 2'));
-    expect(screen.getByTestId('chat-fact-cites')).toHaveTextContent('cites 1');
-    await waitFor(() => expect(screen.getByTestId('chat-fact-version')).toHaveTextContent('v3'));
+    await waitFor(() => expect(screen.getByTestId('connections-in')).toHaveTextContent('2'));
+    expect(screen.getByTestId('connections-out')).toHaveTextContent('1');
+    await waitFor(() => expect(screen.getByTestId('version-walker')).toHaveTextContent('v3'));
     expect(screen.getByTestId('fact-body').querySelector('strong')).toHaveTextContent('SSE');
-    expect(crumb()).toBe('r1 / kb / decisions / web');
+    // The band is the chrome: there is no row above it, and the × sits in its actions.
+    expect(screen.queryByTestId('chat-panel-header')).toBeNull();
+    expect(within(screen.getByTestId('fact-band-actions')).getByTestId('chat-panel-close')).toBeInTheDocument();
+    expect(screen.queryByTestId('retract-btn')).toBeNull();
   });
 
   it('a tool result has Result and Arguments tabs, not two stacked blocks', async () => {
@@ -134,83 +114,103 @@ describe('ChatSidePanel', () => {
     expect(screen.getByTestId('chat-result-text')).toHaveTextContent('RESULT-ONE');
   });
 
-  it('draws Esc and the back key as keycaps and right-aligns the count (mockup .kbdh)', async () => {
+  it('draws Esc as a keycap, and has no back, forward, back key or count (mockup .kbdh)', async () => {
     stubFleetFetch(routes());
     render(<Harness bound="r1" />);
     act(() => api.open(R1));
     await screen.findByTestId('chat-result-text');
     const f = screen.getByTestId('chat-panel-footer');
-    const caps = [...f.querySelectorAll('span')].filter(e => e.style.border.includes('solid')).map(e => e.textContent);
-    expect(caps).toEqual(['Esc', '\u2318[']);
-    const count = [...f.querySelectorAll('span')].find(e => e.textContent === '1 of 1 opened')!;
-    expect(count.style.marginLeft).toBe('auto');
-    // The header arrows are the mockup's 26px buttons holding a 13px stroke icon.
-    const back = screen.getByTestId('chat-panel-back');
-    expect(back.style.width).toBe('26px');
-    expect(back.querySelector('svg')).toHaveAttribute('width', '13');
+    expect([...f.querySelectorAll('span')].filter(e => e.style.border.includes('solid')).map(e => e.textContent)).toEqual(['Esc']);
+    expect(footer()).toBe('Esc close');
+    expect(screen.queryByTestId('chat-panel-back')).toBeNull();
+    expect(screen.queryByTestId('chat-panel-forward')).toBeNull();
+    // The close is the mockup's 26px button holding a 13px stroke icon, in the header.
+    const close = within(screen.getByTestId('chat-panel-header')).getByTestId('chat-panel-close');
+    expect(close.style.width).toBe('26px');
+    expect(close.querySelector('svg')).toHaveAttribute('width', '13');
   });
 
-  it('back and forward move across a mixed history, with the footer counting N of M', async () => {
-    stubFleetFetch(routes());
-    render(<Harness bound="r1" />);
-    act(() => api.open(R1));
-    await screen.findByTestId('chat-result-text');
-    expect(footer()).toBe('Esc close · ⌘[ back · 1 of 1 opened');
-    expect(screen.getByTestId('chat-panel-back')).toBeDisabled();
-    act(() => api.open(F1));
-    await screen.findByTestId('chat-fact-title');
-    act(() => api.open(R2));
-    await screen.findByTestId('chat-result-fact');
-    expect(footer()).toBe('Esc close · ⌘[ back · 3 of 3 opened');
-    expect(screen.getByTestId('chat-panel-forward')).toBeDisabled();
-    // The result's breadcrumb comes from its arguments.
-    await waitFor(() => expect(crumb()).toBe('r1 / kb / decisions / web'));
-
-    fireEvent.click(screen.getByTestId('chat-panel-back'));
-    await screen.findByTestId('chat-fact-title');
-    expect(footer()).toBe('Esc close · ⌘[ back · 2 of 3 opened');
-    fireEvent.click(screen.getByTestId('chat-panel-back'));
-    expect(await screen.findByTestId('chat-result-text')).toHaveTextContent('RESULT-ONE');
-    expect(footer()).toBe('Esc close · ⌘[ back · 1 of 3 opened');
-    fireEvent.click(screen.getByTestId('chat-panel-forward'));
-    await screen.findByTestId('chat-fact-title');
-    expect(footer()).toBe('Esc close · ⌘[ back · 2 of 3 opened');
-  });
-
-  it('⌘[ goes back, from anywhere, and the browser\'s own history key is suppressed', async () => {
+  it('⌘[ is no longer the panel\'s: it does not touch the panel or take the key', async () => {
     stubFleetFetch(routes());
     render(<Harness />);
     act(() => api.open(R1));
     await screen.findByTestId('chat-result-text');
-    act(() => api.open(F1));
-    await screen.findByTestId('chat-fact-title');
     const ev = new KeyboardEvent('keydown', { key: '[', metaKey: true, bubbles: true, cancelable: true });
     act(() => { document.body.dispatchEvent(ev); });
-    expect(ev.defaultPrevented).toBe(true);
-    expect(await screen.findByTestId('chat-result-text')).toHaveTextContent('RESULT-ONE');
-    expect(footer()).toBe('Esc close · ⌘[ back · 1 of 2 opened');
-    // A bare [ does nothing.
-    fireEvent.keyDown(document.body, { key: '[' });
-    expect(footer()).toBe('Esc close · ⌘[ back · 1 of 2 opened');
+    expect(ev.defaultPrevented).toBe(false);
+    expect(screen.getByTestId('chat-result-text')).toBeInTheDocument();
   });
 
-  it('× closes it; Open in Browse names the repo and the fact path, for a fact and for a materialize result', async () => {
+  it('a new entry replaces what was on screen; × closes it', async () => {
     stubFleetFetch(routes());
-    const onBrowse = vi.fn();
-    render(<Harness bound="r1" onBrowse={onBrowse} />);
+    render(<Harness bound="r1" />);
     act(() => api.open(F1));
-    await screen.findByTestId('chat-fact-title');
-    fireEvent.click(screen.getByTestId('chat-panel-browse'));
-    expect(onBrowse).toHaveBeenLastCalledWith('r1', 'kb/decisions/web/one.md');
+    await screen.findByTestId('fact-title');
     act(() => api.open(R2));
     await screen.findByTestId('chat-result-fact');
-    await waitFor(() => expect(screen.getByTestId('chat-panel-browse')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('chat-panel-browse'));
-    expect(onBrowse).toHaveBeenLastCalledWith('r1', 'kb/decisions/web/two.md');
-    expect(screen.getByTestId('chat-panel-browse')).toHaveTextContent('Open in Browse');
+    expect(screen.queryByTestId('fact-title')).toBeNull();
+    await waitFor(() => expect(crumb()).toBe('r1 / kb / decisions / web'));
     fireEvent.click(screen.getByTestId('chat-panel-close'));
     expect(screen.queryByTestId('chat-side-panel')).toBeNull();
-    expect(api.state().entries).toEqual([F1, R2]);
+  });
+
+  it('the panel has no Open in Browse, on a fact or on a materialize result', async () => {
+    stubFleetFetch(routes());
+    render(<Harness bound="r1" onBrowse={vi.fn()} />);
+    act(() => api.open(F1));
+    await screen.findByTestId('fact-title');
+    expect(screen.queryByTestId('chat-panel-browse')).toBeNull();
+    act(() => api.open(R2));
+    await screen.findByTestId('chat-result-fact');
+    await waitFor(() => expect(crumb()).toBe('r1 / kb / decisions / web'));
+    expect(screen.queryByTestId('chat-panel-browse')).toBeNull();
+    expect(document.body.textContent).not.toContain('Open in Browse');
+  });
+
+  it('the band\'s controls send the reader to Browse on this fact: version, cited by, cites', async () => {
+    stubFleetFetch(routes());
+    const onBrowse = vi.fn();
+    render(<Harness onBrowse={onBrowse} />);
+    act(() => api.open(F1));
+    await screen.findByTestId('fact-title');
+    const base = { repo: 'r1', branch: 'main', path: 'kb/decisions/web/one.md' };
+    fireEvent.click(await screen.findByTestId('version-walker'));
+    expect(onBrowse).toHaveBeenLastCalledWith({ ...base, commit: 'c9' }); // Browse's walker opens the newest version
+    await waitFor(() => expect(screen.getByTestId('connections-in')).toHaveTextContent('2'));
+    fireEvent.click(screen.getByTestId('connections-in'));
+    expect(onBrowse).toHaveBeenLastCalledWith({ ...base, panel: { connections: 'in' } });
+    fireEvent.click(screen.getByTestId('connections-out'));
+    expect(onBrowse).toHaveBeenLastCalledWith({ ...base, panel: { connections: 'out' } });
+  });
+
+  it('the title flows up into the band once it has scrolled away, with Browse\'s own observer', async () => {
+    const seen: ((e: { isIntersecting: boolean }[]) => void)[] = [];
+    vi.stubGlobal('IntersectionObserver', class { constructor(cb: (e: { isIntersecting: boolean }[]) => void) { seen.push(cb); } observe() {} disconnect() {} });
+    stubFleetFetch(routes());
+    render(<Harness />);
+    act(() => api.open(F1));
+    await screen.findByTestId('fact-title');
+    expect(screen.queryByTestId('fact-band-title')).toBeNull();
+    expect(screen.getByTestId('fact-band-path')).toBeInTheDocument();
+    // The observer is built in a passive effect, which may run after the title is found.
+    await waitFor(() => expect(seen.length).toBeGreaterThan(0));
+    act(() => seen[seen.length - 1]([{ isIntersecting: false }]));
+    expect(screen.getByTestId('fact-band-title')).toHaveTextContent('One decision');
+    expect(screen.queryByTestId('fact-band-path')).toBeNull();
+  });
+
+  it('materialize is Browse\'s control and view, at the commit the fact was read at, and its back returns to the fact', async () => {
+    const FULL = 'abc1234' + 'f'.repeat(33);
+    const AT = '/api/v1/repos/r1/branches/main/commits/' + FULL + '/facts/kb/decisions/web/one.md';
+    stubFleetFetch({ ...routes(), [`GET ${AT}`]: { body: FACT } });
+    render(<Harness />);
+    act(() => api.open({ ...F1, commit: FULL } as PanelEntry));
+    await screen.findByTestId('fact-title');
+    fireEvent.click(screen.getByTestId('materialize-btn'));
+    expect(await screen.findByTestId('materialize-view')).toBeInTheDocument();
+    await waitFor(() => expect((fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.some(c => String(c[0]).includes(`/commits/${FULL}/facts/kb/decisions/web/one.md/materialize`))).toBe(true));
+    fireEvent.click(screen.getByTestId('mat-back'));
+    expect(await screen.findByTestId('fact-title')).toBeInTheDocument();
   });
 
   it('is 470px wide by default and remembers a dragged width', async () => {
@@ -277,12 +277,11 @@ describe('the side panel in the chat page', () => {
     expect(screen.getByTestId('chat-tool-select-tu_1')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('chat-tool-select-tu_2')).toHaveAttribute('aria-pressed', 'false');
     expect(panelW()).toBe('470px');
-    // Another step moves the highlight and the panel; the history now has two.
+    // Another step moves the highlight and the panel.
     fireEvent.click(screen.getByTestId('chat-tool-select-tu_2'));
     await screen.findByTestId('chat-result-fact');
     expect(screen.getByTestId('chat-tool-select-tu_2')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('chat-tool-select-tu_1')).toHaveAttribute('aria-pressed', 'false');
-    expect(footer()).toBe('Esc close · ⌘[ back · 2 of 2 opened');
   });
 
   it('the chat column reflows beside the panel instead of being covered', async () => {
@@ -384,28 +383,19 @@ describe('the side panel in the chat page', () => {
 });
 
 describe('the side panel: target, width clamp, errors, keys', () => {
-  it('Open in Browse for a real materialize (file + audience + binding, no repo) uses the bound target', async () => {
+  it('a materialize result (file + audience + binding, no repo) is crumbed by the bound target and its path', async () => {
     stubFleetFetch(routes());
-    const onBrowse = vi.fn();
-    render(<Harness bound="r1" onBrowse={onBrowse} />);
+    render(<Harness bound="r1" />);
     act(() => api.open(R2));
     await screen.findByTestId('chat-result-fact');
-    await waitFor(() => expect(screen.getByTestId('chat-panel-browse')).toBeInTheDocument());
-    expect(crumb()).toBe('r1 / kb / decisions / web');
-    fireEvent.click(screen.getByTestId('chat-panel-browse'));
-    expect(onBrowse).toHaveBeenCalledTimes(1);
-    expect(onBrowse).toHaveBeenLastCalledWith('r1', 'kb/decisions/web/two.md');
+    await waitFor(() => expect(crumb()).toBe('r1 / kb / decisions / web'));
   });
 
-  it('a kb://<store>/ file is passed whole, and its breadcrumb drops the store', async () => {
+  it('a kb://<store>/ file\'s breadcrumb drops the store', async () => {
     stubFleetFetch({ ...routes(), [`GET ${BASE}/calls/tu_3`]: { body: { ...calls.tu_2, arguments: { file: 'kb://abc123def456/kb/x/y/z.md', audience: 'agent' } } } });
-    const onBrowse = vi.fn();
-    render(<Harness bound="all" onBrowse={onBrowse} />);
+    render(<Harness bound="all" />);
     act(() => api.open({ kind: 'result', callId: 'tu_3' }));
-    await waitFor(() => expect(screen.getByTestId('chat-panel-browse')).toBeInTheDocument());
-    expect(crumb()).toBe('all / kb / x / y');
-    fireEvent.click(screen.getByTestId('chat-panel-browse'));
-    expect(onBrowse).toHaveBeenLastCalledWith('all', 'kb://abc123def456/kb/x/y/z.md');
+    await waitFor(() => expect(crumb()).toBe('all / kb / x / y'));
   });
 
   it('a bind result is crumbed by the target it names (name, like lens/repo), not the binding in force before it', async () => {
@@ -417,23 +407,12 @@ describe('the side panel: target, width clamp, errors, keys', () => {
     expect(crumb()).toBe('B / Bind');
   });
 
-  it('the footer items are the mockup items: keycap, word, keycap, word, count, with no extra flex items for the separators', async () => {
+  it('a result with neither a target nor a binding is crumbed by its label', async () => {
     stubFleetFetch(routes());
-    render(<Harness bound="r1" />);
-    act(() => api.open(R1));
-    await screen.findByTestId('chat-result-text');
-    const f = screen.getByTestId('chat-panel-footer');
-    expect(f.children).toHaveLength(5);
-    expect(f.textContent).toBe('Esc close \u00b7 \u2318[ back \u00b7 1 of 1 opened');
-  });
-
-  it('a result with neither a target nor a binding offers no Open in Browse', async () => {
-    stubFleetFetch(routes());
-    render(<Harness bound="" onBrowse={vi.fn()} />);
+    render(<Harness bound="" />);
     act(() => api.open(R2));
     await screen.findByTestId('chat-result-fact');
-    expect(screen.queryByTestId('chat-panel-browse')).toBeNull();
-    expect(crumb()).toBe('Materialize / kb / decisions / web');
+    await waitFor(() => expect(crumb()).toBe('Materialize / kb / decisions / web'));
   });
 
   it('clampPanelWidth: the minimum, the share of the container, and no bound without a container', () => {
@@ -470,20 +449,112 @@ describe('the side panel: target, width clamp, errors, keys', () => {
     expect(localStorage.getItem(PANEL_WIDTH_KEY)).toBe('320');
   });
 
-  it('a fact that cannot be read shows the server\'s sentence in the blocked notice style, not the request URL', async () => {
+  it('a fact that cannot be read shows Browse\'s error, with the × still there', async () => {
     stubFleetFetch({
       ...routes(),
       [`GET ${FACT_BASE}/kb/gone.md`]: problem(404, 'not_found', 'no such fact'),
     });
     render(<Harness />);
     act(() => api.open({ kind: 'fact', repo: 'r1', branch: 'main', path: 'kb/gone.md' }));
-    const err = await screen.findByTestId('chat-fact-error');
-    expect(err.textContent).toBe('no such fact');
-    expect(err.getAttribute('data-tone')).toBe('blocked');
-    expect(err.textContent).not.toContain('/api/v1');
-    expect(err.getAttribute('title')).toBeNull();
-    expect(screen.getByRole('alert')).toContainElement(err);
-    expect(screen.queryByTestId('chat-fact')).toBeNull();
+    expect(await screen.findByText(/no such fact/)).toBeInTheDocument();
+    expect(screen.getByTestId('chat-panel-close')).toBeInTheDocument();
+    expect(screen.queryByTestId('fact-view')).toBeNull();
+  });
+
+  // The panel's own Esc guards, on their own. SABOTAGE: remove either check.
+  it('a key something else already took leaves the panel open', async () => {
+    stubFleetFetch(routes());
+    render(<Harness />);
+    act(() => api.open(R1));
+    await screen.findByTestId('chat-side-panel');
+    const taker = (e: KeyboardEvent) => e.preventDefault();
+    window.addEventListener('keydown', taker, true);
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    window.removeEventListener('keydown', taker, true);
+    expect(screen.getByTestId('chat-side-panel')).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('chat-side-panel')).toBeNull());
+  });
+  it('Esc with a turn running leaves the panel open, whatever the chat column does with it', async () => {
+    stubFleetFetch(routes());
+    render(<Harness running />);
+    act(() => api.open(R1));
+    await screen.findByTestId('chat-side-panel');
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.getByTestId('chat-side-panel')).toBeInTheDocument();
+  });
+
+  // kb/decisions/web/chat/side-panel/c12285c0: Stop always wins. SABOTAGE: any focus
+  // outside the chat refuses it; a field or dialog out there no longer holds its Esc.
+  describe('Esc with a turn running and focus outside the chat', () => {
+    const running = async () => {
+      const fx = stubFleetFetch({
+        ...routes(),
+        [`GET ${BASE}`]: { body: snap({ running: true, items: [{ kind: 'user', text: 'q' }] }) },
+        [`POST ${BASE}/cancel`]: { body: {} },
+      });
+      render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} repos={[]} />);
+      await screen.findByTestId('chat-facet');
+      await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+      return fx;
+    };
+    const stops = (fx: ReturnType<typeof stubFleetFetch>) => fx.calls.filter(c => c.route === `POST ${BASE}/cancel`);
+    const outside = (html: string) => { const box = document.createElement('div'); box.innerHTML = html; document.body.appendChild(box); return box; };
+    let box: HTMLElement | null = null;
+    afterEach(() => { box?.remove(); box = null; });
+
+    it('on a plain control (the gear) it is Stop', async () => {
+      const fx = await running();
+      box = outside('<button>gear</button>');
+      const gear = box.querySelector('button')!;
+      gear.focus();
+      expect(document.activeElement).toBe(gear);
+      fireEvent.keyDown(gear, { key: 'Escape' });
+      await waitFor(() => expect(stops(fx)).toHaveLength(1));
+    });
+    it('in a field it is the field\'s', async () => {
+      const fx = await running();
+      box = outside('<input />');
+      const input = box.querySelector('input')!;
+      input.focus();
+      fireEvent.keyDown(input, { key: 'Escape' });
+      await new Promise(r => setTimeout(r, 20));
+      expect(stops(fx)).toHaveLength(0);
+    });
+    it('in a dialog it is the dialog\'s', async () => {
+      const fx = await running();
+      box = outside('<div role="dialog"><button>ok</button></div>');
+      const ok = box.querySelector('button')!;
+      ok.focus();
+      fireEvent.keyDown(ok, { key: 'Escape' });
+      await new Promise(r => setTimeout(r, 20));
+      expect(stops(fx)).toHaveLength(0);
+    });
+    it('in a menu it is the menu\'s', async () => {
+      const fx = await running();
+      box = outside('<div role="menu"><button role="menuitem">item</button></div>');
+      const item = box.querySelector('button')!;
+      item.focus();
+      expect(document.activeElement).toBe(item);
+      fireEvent.keyDown(item, { key: 'Escape' });
+      await new Promise(r => setTimeout(r, 20));
+      expect(stops(fx)).toHaveLength(0);
+    });
+    // The chat stays mounted behind Browse, hidden. SABOTAGE: remove the shown() check in ChatPanel.
+    it('on a chat that is not on screen it is not Stop: the hidden turn keeps running', async () => {
+      const fx = stubFleetFetch({
+        ...routes(),
+        [`GET ${BASE}`]: { body: snap({ running: true, items: [{ kind: 'user', text: 'q' }] }) },
+        [`POST ${BASE}/cancel`]: { body: {} },
+      });
+      render(<div style={{ display: 'none' }}><ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} repos={[]} /></div>);
+      await screen.findByTestId('chat-stop');
+      await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+      expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(true);
+      await new Promise(r => setTimeout(r, 20));
+      expect(stops(fx)).toHaveLength(0);
+      expect(screen.getByTestId('chat-stop')).toBeInTheDocument();
+    });
   });
 
   it('Esc while a turn runs and focus is inside the side panel is Stop too, and the panel stays', async () => {

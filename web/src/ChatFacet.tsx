@@ -3,6 +3,7 @@ import { publishChatPill, forgetChatPill } from './chatPillStore';
 import { ChatPanel } from './ChatPanel';
 import { ChatSidePanel } from './ChatSidePanel';
 import { initialPanelState, panelReducer, shownEntry, usePanelWidth } from './chatPanelState';
+import type { BrowseFactRequest } from './chatPanelState';
 import { ChatSettings } from './ChatSettings';
 import {
   answerChatApproval, cancelChatTurn, getChat, getChatContext, sendChatTurn,
@@ -13,7 +14,7 @@ import { NEW_CHAT_ERROR } from './chatCopy';
 import { boundBeforeCall, chatReducer, findCall, initialChatState, refusalReason, sessionCost } from './chatState';
 import { RECONNECT_INITIAL_MS, RECONNECT_MAX_MS } from './eventStream';
 import type { ToolCall, UsagePayload } from './chatState';
-import { factKey } from './chatFactLinks';
+import { commitKey, factKey } from './chatFactLinks';
 import type { RepoRef, ResolvedFact } from './chatFactLinks';
 
 const NO_REPOS: RepoRef[] = [];
@@ -254,14 +255,17 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
  * App keeps one mounted per live chat, so a chat's stream and transcript
  * survive the reader looking at a repository.
  */
-export function ChatFacet({ chat, facet, onGone, onNewChat, onOpenInBrowse, onOpenCommit, repos }: {
-  /** A commit link in an answer: Browse that repo as of that commit. */
-  onOpenCommit?: (repo: string, commit: string) => void;
+export function ChatFacet({ chat, facet, onGone, onNewChat, onBrowseFact, repos, repoNames, serverReadOnly = false, onScreen = true }: {
   chat: ChatInfo;
   /** The repos the page lists: a repo chip in an answer names one of them. */
   repos?: RepoRef[];
-  /** Open a fact in Browse (the side panel's "Open in Browse"). */
-  onOpenInBrowse?: (repo: string, path: string) => void;
+  /** What the fact view reads from the page, as Browse does (see FactView). */
+  repoNames?: Record<string, string>;
+  serverReadOnly?: boolean;
+  /** Whether this chat is the one on screen. Every chat stays mounted. */
+  onScreen?: boolean;
+  /** Send the reader to Browse on a fact, from this chat. */
+  onBrowseFact?: (chatId: string, req: BrowseFactRequest) => void;
   /** Start an empty chat with this chat's model (a notice's "New chat"). */
   onNewChat?: (chat: ChatInfo) => void | Promise<void>;
   /** The tab on screen. */
@@ -280,13 +284,17 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onOpenInBrowse, onOp
   const selectedId = openEntry?.kind === 'result' ? openEntry.callId : null;
   // A fact link opens its fact in the same panel; the link stays highlighted
   // while that fact is the one on screen.
-  const openFactKey = openEntry?.kind === 'fact' && !openEntry.commit ? factKey(openEntry.repo, openEntry.branch, openEntry.path) : null;
+  const openFactKey = openEntry?.kind === 'fact' && !openEntry.commit ? factKey(openEntry.repo, openEntry.branch, openEntry.path)
+    : openEntry?.kind === 'commit' ? commitKey(openEntry.repo, openEntry.branch, openEntry.commit) : null;
   const onSelect = useCallback((c: ToolCall) => {
     if (selectedId === c.id) dispatchPanel({ type: 'close' });
     else dispatchPanel({ type: 'open', entry: { kind: 'result', callId: c.id } });
   }, [selectedId]);
   const onOpenFact = (f: ResolvedFact) => {
     dispatchPanel({ type: 'open', entry: { kind: 'fact', repo: f.repo, branch: f.branch, path: f.path } });
+  };
+  const onOpenCommit = (repo: string, branch: string, commit: string) => {
+    dispatchPanel({ type: 'open', entry: { kind: 'commit', repo, branch, commit } });
   };
 
   // The model's context window, for the composer's meter and the top bar's
@@ -315,7 +323,7 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onOpenInBrowse, onOp
             <ChatPanel state={state} selectedId={selectedId} actionError={newChatError || actionError} notSent={notSent} landed={landed} modelName={chat.name || chat.model}
               context={{ used: state.ctxTokens, window: ctxWindow }}
               onSend={send} onStop={stop} onSelect={onSelect} onAnswer={answer}
-              factLinks={{ repos: repos ?? NO_REPOS, openKey: openFactKey, onOpen: onOpenFact, onBrowse: onOpenInBrowse, onCommit: onOpenCommit }}
+              factLinks={{ repos: repos ?? NO_REPOS, openKey: openFactKey, onOpen: onOpenFact, onBrowse: onBrowseFact ? f => onBrowseFact(chat.id, { repo: f.repo, branch: f.branch, path: f.path }) : undefined, onCommit: onOpenCommit }}
               onNewChat={onNewChat ? () => {
                 setNewChatError('');
                 Promise.resolve(onNewChat(chat)).catch(() => setNewChatError(NEW_CHAT_ERROR));
@@ -325,7 +333,8 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onOpenInBrowse, onOp
               side panel; the chat column narrows to make room. */}
           {openEntry && (
             <ChatSidePanel chatId={chat.id} panel={panel} dispatch={dispatchPanel} running={state.running}
-              width={panelWidth} onSplitterDown={onSplitterDown} onOpenInBrowse={onOpenInBrowse}
+              width={panelWidth} onSplitterDown={onSplitterDown} onBrowse={onBrowseFact ? req => onBrowseFact(chat.id, req) : undefined}
+              repos={repos} repoNames={repoNames} serverReadOnly={serverReadOnly} onScreen={onScreen && facet === 'chat'}
               boundFor={callId => boundBeforeCall(state.turns, callId)} callFor={callId => findCall(state.turns, callId)} />
           )}
         </div>

@@ -1,3 +1,4 @@
+import type { EdgeDir } from './utils';
 import type { ExperimentInfo, Lens, LensSource } from './api';
 import { displayLensPath } from './utils';
 
@@ -37,9 +38,22 @@ export type AsOf =
   | { mode: 'history'; commit: string }
   | { mode: 'diff'; from: string; to: string };
 
+/** A panel of the open fact a landing asks to open: cited by or cites, or a motif. */
+export interface FactPanel { connections?: EdgeDir; motif?: string }
+
 interface NavEntry {
+  // Set when this departure was to Browse from a chat: going back to this entry
+  // goes back to that chat (chatReturn). It stands in for everything older on
+  // the trail, because Back from here is the chat and not what Browse held.
+  fromChat?: string;
   repo: string;
+  // The branch this entry was left on, with what the app holds about it. Only a
+  // chat's landing (fromChat) restores these: it can move the branch, and factPath
+  // and filters mean nothing on another one. Back inside Browse leaves the branch.
   branch: string;
+  head: string;
+  experiment: ExperimentInfo | null;
+  branchWritable: boolean;
   view: View;
   filters: FilterChip[];
   freeText: string;
@@ -57,9 +71,21 @@ interface NavEntry {
   // one mount would return you to a view you were never in. SET_LENS_SOURCES
   // does not push either — a dropdown toggle refines the current view.
   lensSources: string[] | null;
+  // Since-fork in force when this entry was left. A chat's landing clears it
+  // (Library would demote the tree), and going back to the chat restores it.
+  sinceFork: boolean;
 }
 
 export interface AppState {
+  // NAV_BACK popped an entry that came from this chat. App shows the chat (the
+  // view state is not ours, see facets.ts) if it is still there, and clears this.
+  chatReturn: string | null;
+  // Going back to a chat restored a branch from its entry. App reads that branch's
+  // status (it may be gone by now, and the entry may be stale), and clears this.
+  branchRecheck: boolean;
+  // A landing's request to open a panel of the fact at `path`. FactView serves it
+  // once and clears it.
+  factPanelRequest: (FactPanel & { path: string }) | null;
   repo: string;
   // context is the browse surface (repo | lens). In a repo context, repo/branch
   // are authoritative for both reads and writes. In a lens context, reads come
@@ -172,7 +198,11 @@ export type Action =
   // `sort` rides APPLY_NAV for the same reason `filters` does: a reveal changes
   // the path scope, the sort axis and the open fact together, and they must land
   // in ONE entry or Back would undo them one at a time.
-  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; hop?: boolean }
+  | { type: 'BRANCH_RECHECK_SERVED' }
+  | { type: 'BRANCH_GONE' }
+  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; sinceFork?: boolean; hop?: boolean; fromChat?: string; factPanel?: FactPanel }
+  | { type: 'CHAT_RETURN_SERVED' }
+  | { type: 'FACT_PANEL_SERVED' }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
   // A reload puts back the list the URL carried (listUrl.ts), once its context
@@ -202,6 +232,9 @@ export const init: AppState = {
   lens: null,
   lensWriteId: null,
   lensSources: null,
+  chatReturn: null,
+  branchRecheck: false,
+  factPanelRequest: null,
   factSource: null,
   view: 'library',
   factPath: null,
@@ -234,10 +267,14 @@ export const init: AppState = {
   factTitles: {},
 };
 
-function pushNav(s: AppState): NavEntry[] {
+function pushNav(s: AppState, fromChat?: string): NavEntry[] {
   const entry: NavEntry = {
+    ...(fromChat ? { fromChat } : {}),
     repo: s.repo,
     branch: s.branch,
+    head: s.headCommit,
+    experiment: s.experiment,
+    branchWritable: s.branchWritable,
     view: s.view,
     filters: [...s.filters],
     freeText: s.freeText,
@@ -245,6 +282,7 @@ function pushNav(s: AppState): NavEntry[] {
     asOf: s.asOf,
     sort: s.librarySort,
     lensSources: s.lensSources === null ? null : [...s.lensSources],
+    sinceFork: s.sinceFork,
   };
   const stack = [...s.navStack, entry];
   if (stack.length > 20) stack.shift();
@@ -384,8 +422,21 @@ function applyAction(s: AppState, a: Action): AppState {
           navStack: s.navStack.slice(0, -1),
         };
       }
+      // Back to a chat: what the reader left when the landing took them away. It is
+      // only what the app knew then, so App re-reads it (branchRecheck). Back inside
+      // Browse leaves the branch alone: a branch moved there by the picker or by an
+      // experiment ending is where the reader chose to be, and may be all there is.
+      const moved = !!prev.branch && prev.branch !== s.branch;
+      const branchBack = prev.fromChat ? {
+        ...(moved ? { branch: prev.branch, headCommit: prev.head, experiment: prev.experiment, branchWritable: prev.branchWritable } : {}),
+        // Only an experiment holds it, as SET_SINCE_FORK guards.
+        sinceFork: prev.sinceFork && !!(moved ? prev.experiment : s.experiment),
+        branchRecheck: true,
+      } : {};
       return {
         ...s,
+        ...branchBack,
+        chatReturn: prev.fromChat ?? null,
         view: prev.view,
         factPath: prev.factPath,
         asOf: prev.asOf,
@@ -703,10 +754,23 @@ function applyAction(s: AppState, a: Action): AppState {
         filters: a.filters !== undefined ? a.filters : s.filters,
         freeText: a.freeText !== undefined ? a.freeText : s.freeText,
         librarySort: a.sort ?? s.librarySort,
-        navStack: pushNav(s),
+        sinceFork: a.sinceFork ?? s.sinceFork,
+        navStack: pushNav(s, a.fromChat),
+        factPanelRequest: a.factPanel && a.factPath ? { ...a.factPanel, path: a.factPath } : null,
         rightPanelFocused: false,
       };
     }
+    case 'CHAT_RETURN_SERVED':
+      return s.chatReturn ? { ...s, chatReturn: null } : s;
+    case 'BRANCH_RECHECK_SERVED':
+      return s.branchRecheck ? { ...s, branchRecheck: false } : s;
+    case 'BRANCH_GONE':
+      // The branch restored for a return from a chat no longer exists. Nothing on it,
+      // or on the trail behind it, can be read; the status of the branch moved to
+      // comes with this.
+      return { ...s, view: 'library', factPath: null, asOf: { mode: 'live' }, filters: [], freeText: '', navStack: [], experiment: null, sinceFork: false };
+    case 'FACT_PANEL_SERVED':
+      return s.factPanelRequest ? { ...s, factPanelRequest: null } : s;
     case 'AMEND_NAV': {
       // In-place update — no navStack push. Used by auto-select behaviors so that
       // a single user action (e.g. view-button click) creates exactly one navStack entry.
@@ -742,6 +806,14 @@ export function reducer(s: AppState, a: Action): AppState {
   return next;
 }
 
+// FactReading is what the fact view (FactView) reads: which fact, from where, at
+// which commit, and whether it can be written. Browse's whole AppState is one; the
+// chat's side panel builds one for the fact it shows. Every selector below takes
+// this rather than AppState, so both go through the same rules.
+export type FactReading = Pick<AppState,
+  'context' | 'lens' | 'lensWriteId' | 'repo' | 'branch' | 'factPath' | 'factSource' | 'asOf' | 'headCommit'
+  | 'serverReadOnly' | 'repoReadOnly' | 'branchWritable' | 'factPanelRequest'>;
+
 // openFactSourceResolved says whether factSource is the mount of the fact
 // state.factPath names — i.e. whether pairing the two addresses a real fact.
 // Outside a lens there is no per-fact mount, so it is always true.
@@ -764,7 +836,7 @@ export function reducer(s: AppState, a: Action): AppState {
 // repo's NAME is never taken for it. Only when the repo listing carried no id
 // (an older server) does the name stand in. A hop within one mount is resolved
 // at once.
-export function openFactSourceResolved(s: AppState): boolean {
+export function openFactSourceResolved(s: FactReading): boolean {
   if (s.context.kind !== 'lens') return true;
   const src = s.factSource;
   if (!s.factPath || !src) return false;
@@ -774,7 +846,7 @@ export function openFactSourceResolved(s: AppState): boolean {
   return s.lensWriteId ? src.id === s.lensWriteId : src.repo === s.lens.write.name;
 }
 
-export function selectAnchorCommit(s: AppState): string | null {
+export function selectAnchorCommit(s: FactReading): string | null {
   switch (s.asOf.mode) {
     case 'live':     return null;
     case 'history': return s.asOf.commit;
@@ -782,12 +854,12 @@ export function selectAnchorCommit(s: AppState): string | null {
   }
 }
 
-export function isLive(s: AppState): boolean {
+export function isLive(s: FactReading): boolean {
   return s.asOf.mode === 'live';
 }
 
 // isLensContext is true when the app is browsing a lens (rather than a repo).
-export function isLensContext(s: AppState): boolean {
+export function isLensContext(s: FactReading): boolean {
   return s.context.kind === 'lens';
 }
 
@@ -811,7 +883,7 @@ export function lensResolutionPending(s: AppState): boolean {
 // it (via api.getAgentBranch) before issuing a write. A closed fact (factPath
 // null) is treated as "no fact open" so a stale factSource can never leak past
 // a fact close — the fact-open path re-sets factSource for the next lens fact.
-export function openFactSource(s: AppState): { repo: string; branch: string } {
+export function openFactSource(s: FactReading): { repo: string; branch: string } {
   if (s.context.kind === 'lens') {
     if (s.factPath && s.factSource) {
       return { repo: s.factSource.repo, branch: s.factSource.branch };
@@ -831,7 +903,7 @@ export function openFactSource(s: AppState): { repo: string; branch: string } {
 // context: {state.repo, state.branch, <bare path>} — byte-identical to the old
 // inline pairing.
 export function factHistoryAnchor(
-  s: AppState,
+  s: FactReading,
   path: string | null = s.factPath,
 ): { repo: string; branch: string; path: string } {
   const { repo, branch } = openFactSource(s);
@@ -846,7 +918,7 @@ export function factHistoryAnchor(
 // open fact's mount head isn't tracked in state and state.headCommit is the
 // WRITE repo's head (which doesn't exist in a read mount → an empty edge set in
 // the default live view). Repo context is byte-identical (always state.headCommit).
-export function edgeAnchorCommit(s: AppState): string {
+export function edgeAnchorCommit(s: FactReading): string {
   return selectAnchorCommit(s) ?? (isLensContext(s) ? '' : s.headCommit);
 }
 
@@ -860,7 +932,7 @@ export function remoteErrorText(s: AppState): string {
   return s.remoteSyncError || s.remotePushError;
 }
 
-export function isReadOnly(s: AppState): boolean {
+export function isReadOnly(s: FactReading): boolean {
   return s.serverReadOnly || s.repoReadOnly || !s.branchWritable || !isLive(s);
 }
 
@@ -872,7 +944,7 @@ export const BRANCH_TITLE = 'Read-only — facts are not authored on this branch
 // A subscription is read-only while the anchor is perfectly live, so the
 // temporal wording would be actively wrong there — and it is the one reason the
 // reader cannot fix by scrubbing back to live.
-export function readOnlyTitle(s: AppState): string {
+export function readOnlyTitle(s: FactReading): string {
   if (s.repoReadOnly) return SUBSCRIPTION_TITLE;
   // Ordered most-specific-first, like the subscription case above and for the
   // same reason: a branch that cannot be authored is read-only while the
@@ -909,6 +981,8 @@ export function selectTrail(s: AppState): TrailCrumb[] {
   const prefix: TrailCrumb[] = [];
   for (let i = s.navStack.length - 1; i >= 0; i--) {
     const e = s.navStack[i];
+    // Back from here is the chat, so what Browse held before it is not a crumb.
+    if (e.fromChat) break;
     if (e.factPath == null) continue;
     prefix.unshift({ factPath: e.factPath, asOf: e.asOf, pops: s.navStack.length - i });
     if (e.asOf.mode === 'live') break;

@@ -1,13 +1,16 @@
 import { useRef } from 'react';
 import type { Dispatch } from 'react';
-import type { AppState, Action } from './state';
+import type { AppState, Action, AsOf, FactPanel, FilterChip } from './state';
 import { displayLensPath } from './utils';
 
 export type NavRequest =
   | { view: 'library' }
   | { view: 'library'; factPath: string | null }
-  /** Open the fact AND take the tree to where it lives — see resolveNavRequest. */
-  | { view: 'library'; factPath: string; reveal: true };
+  /** Open the fact AND take the tree to where it lives — see resolveNavRequest.
+   *  `asOf` anchors it there (live when absent); `fromChat` makes Back return to
+   *  that chat; `factPanel` opens that panel of the fact on landing; `filter` is a
+   *  chip the fact's own tag asked for, added in the same move. */
+  | { view: 'library'; factPath: string; reveal: true; asOf?: AsOf; fromChat?: string; factPanel?: FactPanel; filter?: FilterChip };
 
 /**
  * Pure async function — resolves a NavRequest to an APPLY_NAV dispatch.
@@ -53,11 +56,26 @@ export async function resolveNavRequest(
     // flat list instead of the folder — and a highlight comes from path-scoped
     // stats, so the fact just opened need not match the chip at all. Asking for
     // the tree means asking for the one mode the chips cannot survive.
+    //
+    // THE FREE TEXT GOES TOO, for the same reason: a search runs Relevance
+    // whatever the sort asks for. And it is what makes an anchored reveal safe:
+    // Recent and Relevance select row 0 when the open fact is not on page 1 and
+    // keep asOf, so a fact held out of page 1 (or retracted at HEAD, which is on
+    // no HEAD list at all) would silently become another fact at that commit.
+    // The tree selects nothing by itself.
+    //
+    // FROM A CHAT, SINCE-FORK GOES TOO: Library counts it as a content filter, so it
+    // demotes Path to Recent exactly as a chip does, and row 0 would then replace the
+    // fact. Going back to the chat restores it (NavEntry). A reveal inside Browse (a
+    // highlight) leaves it: the reader set it there, and has no such way back.
     const dir = parentDir(displayLensPath(req.factPath));
     dispatch({
-      type: 'APPLY_NAV', view: 'library', factPath: req.factPath, asOf: { mode: 'live' },
-      filters: [{ category: 'path', value: dir }],
+      type: 'APPLY_NAV', view: 'library', factPath: req.factPath, asOf: req.asOf ?? { mode: 'live' },
+      filters: [{ category: 'path', value: dir }, ...(req.filter ? [req.filter] : [])],
+      freeText: '',
       sort: 'path',
+      ...(req.fromChat ? { fromChat: req.fromChat, sinceFork: false } : {}),
+      ...(req.factPanel ? { factPanel: req.factPanel } : {}),
     });
     return;
   }

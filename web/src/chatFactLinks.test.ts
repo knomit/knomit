@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { factCandidates, isFactCandidate, repoChipName } from './chatFactLinks';
+import { factCandidates, isFactCandidate, repoChipName, turnPrefer } from './chatFactLinks';
+import type { ChatTurn, ToolCall } from './chatState';
 
 describe('isFactCandidate', () => {
   it('takes 8-hex short ids, fact handles and paths, and kb:// URIs', () => {
@@ -73,5 +74,59 @@ describe('repoChipName', () => {
     expect(repoChipName('kb://3ec012f5b4d2', full)).toBe('knomit-kb');
     expect(repoChipName('kb://3ec012f5b4d2aaaabbbbccccddddeeeeffff0000', full)).toBe('knomit-kb');
     expect(repoChipName('kb://3ec012f5b4d2aaaa', full)).toBeNull();
+  });
+});
+
+describe('turnPrefer', () => {
+  // The server's in_base and target beside the arguments, as a call that names a repo carries them.
+  const call = (id: string, name: string, args: unknown, isError = false): ToolCall => {
+    const repo = (args as { repo?: string }).repo;
+    const server = repo ? { inBase: true, target: repo } : { inBase: true };
+    return { id, name, state: 'done', isError, args, ...server };
+  };
+  const turn = (...calls: ToolCall[]): ChatTurn => ({ parts: [{ kind: 'group', calls }] }) as unknown as ChatTurn;
+
+  it('a failed bind is not a repo the turn worked in, so one repo stays preferred', () => {
+    const t = turn(
+      call('a', 'knomit_bind', { repo: 'one' }),
+      call('b', 'knomit_bind', { repo: 'two' }, true),
+      call('c', 'knomit_query', { text: 'x' }),
+    );
+    expect(turnPrefer([t], 0)).toEqual(['one']);
+  });
+
+  it('a successful bind to the second repo does count, latest first', () => {
+    const t = turn(
+      call('a', 'knomit_bind', { repo: 'one' }),
+      call('b', 'knomit_bind', { repo: 'two' }),
+    );
+    expect(turnPrefer([t], 0)).toEqual(['two', 'one']);
+  });
+
+  it('a failed call that is not a bind adds nothing either: its repo, or the store of a kb:// file it named', () => {
+    const t = turn(
+      call('a', 'knomit_bind', { repo: 'one' }),
+      call('b', 'knomit_query', { text: 'x', repo: 'two' }, true),
+      call('c', 'knomit_materialize', { file: 'kb://abc123def456/kb/a.md' }, true),
+    );
+    expect(turnPrefer([t], 0)).toEqual(['one']);
+  });
+
+  it('a failed bind does not move the binding in force, for the calls after it in the turn', () => {
+    const noRepo = (id: string): ToolCall => ({ id, name: 'knomit_query', state: 'done', isError: false, args: { text: 'x' }, inBase: true });
+    const t = turn(call('a', 'knomit_bind', { repo: 'one' }), call('b', 'knomit_bind', { repo: 'two' }, true), noRepo('c'));
+    expect(turnPrefer([t], 0)).toEqual(['one']);
+  });
+
+  it('a call without in_base adds nothing, whatever it names', () => {
+    const noBase: ToolCall = { id: 'b', name: 'knomit_explain', state: 'done', isError: false, args: { repo: 'two' }, target: 'two' };
+    expect(turnPrefer([turn(call('a', 'knomit_bind', { repo: 'one' }), noBase)], 0)).toEqual(['one']);
+    expect(turnPrefer([turn(noBase)], 0)).toEqual([]);
+  });
+
+  it('a failed bind in an earlier turn leaves the binding in force as it was', () => {
+    const first = turn(call('a', 'knomit_bind', { repo: 'one' }), call('b', 'knomit_bind', { repo: 'two' }, true));
+    const second = turn(call('c', 'knomit_query', { text: 'x' }));
+    expect(turnPrefer([first, second], 1)).toEqual(['one']);
   });
 });

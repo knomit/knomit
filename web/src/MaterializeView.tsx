@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { ArrowUpIcon, ChevronLeftIcon, DownloadIcon, FocusIcon } from './icons';
 import { saveExport, saveOutcomeLine } from './saveFile';
 import type { SaveOutcome } from './saveFile';
@@ -11,6 +12,7 @@ import { PATH_H, SectionPath, Section, Stepper, Switch } from './materializePart
 import { NESTING, clampDepth, clampReferences, clipTitle, exportFilename, id8, optionChange, pathBudget as budgetFor } from './materializeOptions';
 import type { PathItem } from './materializeOptions';
 import { useMatFocus } from './useMatFocus';
+import type { MatFocusScope } from './useMatFocus';
 import './materialize.css';
 
 export { NESTING, PATH_H };
@@ -53,13 +55,17 @@ function pathTo(n: number, tree: Map<number, TreeInfo>, byN: Map<number, MatNode
 /** How far (px) the reader must scroll before the back-to-top arrow appears. */
 export const BACK_TO_TOP_PX = 600;
 
-export function MaterializeView({ target, title, options, onOptionsChange, onBack, api = materializeApi, save = saveExport }: {
+export function MaterializeView({ target, title, options, onOptionsChange, onBack, focusScope, barAction, api = materializeApi, save = saveExport }: {
   target: MatTarget;
   /** The viewed fact's title; the stream's own root_title wins when it sends one. */
   title: string;
   options: MatOptions;
   onOptionsChange: (o: MatOptions) => void;
   onBack: () => void;
+  /** See MatFocusScope. */
+  focusScope?: MatFocusScope;
+  /** Sits last in the bar's action group (the chat panel's ×). */
+  barAction?: ReactNode;
   api?: MaterializeApi;
   /** Saves the exported text: the desktop's native save dialog, or a browser download (saveExport). */
   save?: Save;
@@ -87,7 +93,7 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
   // replaces the right-hand panel. Not remembered and not in the URL (it is how
   // the reader chooses to read, not what is materialized). The toggle, Esc and
   // Back end it; Back and leaving the view also restore everything.
-  const [focus, setFocus] = useMatFocus();
+  const [focus, setFocus] = useMatFocus(undefined, focusScope);
 
   // The section at the top of the reading pane, by anchor and ordinal.
   const topSection = useCallback((): Goto | null => {
@@ -269,6 +275,7 @@ export function MaterializeView({ target, title, options, onOptionsChange, onBac
               ? <svg className="icon-spin" data-testid="mat-export-spinner" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
               : <DownloadIcon color="currentColor" size={15} />}
           </button>
+          {barAction}
           </span>
         </div>
         <div className="k-mat-row">

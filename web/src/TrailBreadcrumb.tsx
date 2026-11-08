@@ -54,6 +54,10 @@ interface TrailBreadcrumbProps {
   // resolve; the lens single-fact endpoint routes them to the right mount.
   lensName?: string;
   trail: TrailCrumb[];
+  // Whether a fact is open: only then is the last crumb the open view, drawn in
+  // the current style. With none open (the filter bar's "as of" after the fact
+  // was closed) every crumb is a way back and is drawn as one. Defaults to open.
+  factOpen?: boolean;
   // Shared title cache (state.factTitles) — the RightPanel writes the title of
   // every fact it loads here, so a crumb we've navigated to is already labelled
   // WITHOUT re-fetching. This is the authoritative source; the local fetch below
@@ -62,7 +66,7 @@ interface TrailBreadcrumbProps {
   onJump: (index: number) => void;
 }
 
-export function TrailBreadcrumb({ repo, branch, lensName, trail, titles, onJump }: TrailBreadcrumbProps) {
+export function TrailBreadcrumb({ repo, branch, lensName, trail, factOpen = true, titles, onJump }: TrailBreadcrumbProps) {
   // Fallback fetch cache: for crumbs the shared cache doesn't cover. Crumbs
   // carry only path + anchor; fetch each fact's human title so the breadcrumb
   // reads "Alpha fact…", not the hash filename.
@@ -115,7 +119,7 @@ export function TrailBreadcrumb({ repo, branch, lensName, trail, titles, onJump 
               {item.kind === 'crumb' ? (
                 <CrumbButton
                   label={label(item.index)}
-                  isLast={item.index === trail.length - 1}
+                  isLast={factOpen && item.index === trail.length - 1}
                   onClick={() => onJump(item.index)}
                 />
               ) : (

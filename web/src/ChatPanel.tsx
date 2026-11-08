@@ -9,6 +9,7 @@ import { TurnNotices, NoticeLine } from './ChatNotice';
 import { SendingLine, ThinkingPlaceholder, StoppedMark } from './ChatWaiting';
 import { chatPlugins, chatLivePlugins, chatComponents } from './chatTableBars';
 import { FactLinkContext, useTurnFacts, remarkFactLinks, turnPrefer } from './chatFactLinks';
+import { typingIn } from './chatPanelState';
 import type { RepoRef, ResolvedFact } from './chatFactLinks';
 import { boundAfter, compactCount, sessionCost } from './chatState';
 import type { ChatState, ChatTurn, ToolCall } from './chatState';
@@ -77,8 +78,8 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   /** The answers' fact links: the repos a repo chip may name, the fact open in
    *  the side panel, and what a link does. */
   factLinks?: {
-    repos: RepoRef[]; openKey: string | null; onOpen?: (f: ResolvedFact) => void; onBrowse?: (repo: string, path: string) => void;
-    onCommit?: (repo: string, commit: string) => void;
+    repos: RepoRef[]; openKey: string | null; onOpen?: (f: ResolvedFact) => void; onBrowse?: (f: ResolvedFact) => void;
+    onCommit?: (repo: string, branch: string, commit: string) => void;
   };
 }) {
   const [draft, setDraft] = useState('');
@@ -115,10 +116,11 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   }, [landed]);
 
   // Stop. A send still in flight is withdrawn, and its text comes back.
-  const stop = () => {
-    if (!state.running) return;
+  const stop = (): boolean => {
+    if (!state.running) return false;
     if (sending && lastTurn) setDraft(d => (d.trim() ? `${lastTurn.user}\n${d}` : lastTurn.user));
     onStop();
+    return true;
   };
   const stopRef = useRef(stop);
   useEffect(() => { stopRef.current = stop; });
@@ -131,10 +133,16 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
       const el = root.current;
       if (!el || !shown(el)) return;
       const active = document.activeElement;
-      // The chat is its column and the side panel beside it (data-chat-scope).
+      // The chat is its column and the side panel beside it (data-chat-scope). Focus
+      // on a plain control outside it (the gear, say) holds no claim on Esc, and Stop
+      // always wins; a field or a dialog out there has one of its own.
       const scope = el.closest('[data-chat-scope]') ?? el;
-      if (active && active !== document.body && !scope.contains(active)) return;
-      stopRef.current();
+      if (active && active !== document.body && !scope.contains(active)
+        && (typingIn(active) || active.closest('[role="dialog"],[role="menu"]'))) return;
+      // The key is spent, and it has to say so. A browser runs microtasks between
+      // listeners, so React has already rendered `running: false` when the side
+      // panel's listener runs next: it cannot tell this Esc was Stop, and would close.
+      if (stopRef.current()) e.preventDefault();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

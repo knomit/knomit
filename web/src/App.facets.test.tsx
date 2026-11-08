@@ -5,6 +5,7 @@ import { installFakeEventSource, uninstallFakeEventSource, streamsMatching, late
 import { __resetRepoCreatesForTest } from './useRepoCreates';
 import { SUBSCRIPTION_TITLE } from './state';
 import { stubFleetFetch } from './fleetTestFetch';
+import { resetFactCache } from './chatFactLinks';
 
 // The facets of a target: Browse, Activity and Settings, as tabs in the top
 // bar. facetsFor decides which exist; the facet is remembered under
@@ -1340,6 +1341,611 @@ describe('a chat target', () => {
     expect(screen.getByTestId('facet-tab-browse')).toHaveAttribute('aria-selected', 'true');
     // The chat is still in the rail: leaving it does not end it.
     expect(screen.getByTestId('rail-chat-chat-a')).toBeInTheDocument();
+  });
+
+  // The whole wiring from a real chip in a real App. SABOTAGE: ChatFacet's
+  // onCommit left out -> the chip does nothing and no panel opens.
+  it('a commit chip opens the commit in the chat\'s side panel and the reader stays in the chat', async () => {
+    window.history.replaceState(null, '', '/');
+    resetFactCache();
+    const { api } = await import('./api');
+    const m = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    await primeApi();
+    const FULL = 'abc1234' + 'f'.repeat(33);
+    const PATH = 'kb/decisions/one.md';
+    const { fx } = chatRoutes([CHAT_A]);
+    fx.set('GET /api/v1/chats/chat-a', { body: { ...CHAT_A, running: false, pending_approvals: [], grants: [], items: [
+      { kind: 'user', text: 'q' },
+      { kind: 'assistant', text: 'Fixed in `abc1234`.' },
+    ] } });
+    fx.set('POST /api/v1/facts/resolve', { body: [{ handle: 'abc1234', id: '', title: '', type: '', repo: 'core-kb', branch: 'read/branch', path: '', excerpt: '', commit: FULL }] });
+    m.commitDetail.mockResolvedValue({ commit: FULL, date: '2026-11-01T10:00:00Z', message: 'learn: one', author: { name: 'Ada', email: 'a@example.com' }, files: [{ path: PATH, action: 'modified', title: 'One' }] });
+    m.fact.mockResolvedValue({ path: PATH, title: 'One', type: 'observation', body: 'THE OLD TEXT', domain: [], confidence: 0.9, sources: 1, entities: [], refs: [] });
+    m.explain.mockResolvedValue({ incoming: [], outgoing: [] });
+    m.factCommits.mockResolvedValue({ entries: [] });
+    await mountApp();
+    fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+    fireEvent.click(await screen.findByTestId('commit-link'));
+
+    const commit = await screen.findByTestId('chat-commit');
+    expect(m.commitDetail).toHaveBeenCalledWith('core-kb', 'read/branch', FULL);
+    expect(commit).toHaveTextContent('learn: one');
+    expect(screen.getByTestId('rail-chat-chat-a')).toHaveAttribute('aria-current', 'true');
+    expect(tabNames()).toEqual(['Chat', 'Settings']);
+
+    m.fact.mockClear();
+    fireEvent.click(within(commit).getByTestId('timeline-file-row'));
+    expect(await screen.findByTestId('fact-view')).toHaveTextContent('THE OLD TEXT');
+    expect(m.fact).toHaveBeenCalledWith('core-kb', 'read/branch', PATH, FULL, { fallback: 'before' });
+    expect(tabNames()).toEqual(['Chat', 'Settings']);
+  });
+
+  // Every way from a chat's fact to Browse, with the real Library and only the api
+  // mocked. Recent and search select row 0 when the open fact is not on page 1 and
+  // keep the anchor, so landing in either would silently show ANOTHER fact at that
+  // commit, under a band that looks right. The list here never holds the fact, and
+  // answers late or in the same microtask (the case that needs the landing to be a
+  // layout effect: an effect's update would render after it).
+  // SABOTAGE: reveal without sort/freeText; the landing in a passive effect.
+  describe('from the chat\'s band to Browse', () => {
+    const FULL = 'abc1234' + 'f'.repeat(33);
+    const PATH = 'kb/decisions/one.md';
+    const ROW0 = 'kb/other/zero.md';
+    const later = <T,>(v: T, ms: number) => (ms ? new Promise<T>(r => setTimeout(() => r(v), ms)) : Promise.resolve(v));
+    type Control = 'version' | 'in' | 'out';
+    const TEST_ID: Record<Control, string> = { version: 'version-walker', in: 'connections-in', out: 'connections-out' };
+    const statusOf = (b: string) => ({ head: 'abc1234', branch: b, embeddings_enabled: false, ontology_root: 'kb', index_state: 'ready', index_done: 0, index_total: 0, index_percent: 100 });
+
+    async function toTheChatsFact({ start, mode, ms, action = 'modified', branch = 'machine/test', motifs }: {
+      start: string; mode: 'recent' | 'search' | 'path'; ms: number; action?: string; branch?: string; motifs?: string[];
+    }) {
+      window.history.replaceState(null, '', '/'); // the URL holds the last test's list and context, and beats localStorage
+      resetFactCache(); // the resolver's answers are kept per handle for the page's life
+      localStorage.setItem('knomit.context', JSON.stringify({ kind: 'repo', repo: start }));
+      const { api } = await import('./api');
+      const m = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+      await primeApi();
+      m.recent.mockImplementation(() => later({ facts: [{ path: ROW0, title: 'Row zero' }], total: 1 }, ms));
+      m.search.mockImplementation(() => later({ results: [{ path: ROW0, title: 'Row zero', score: 1 }], total: 1 }, ms));
+      m.explain.mockResolvedValue({ incoming: [{ path: 'kb/in.md', title: 'In', versions: [{ commit: 'c1' }] }], outgoing: [{ path: 'kb/out.md', title: 'Out', versions: [{ commit: 'c2' }] }] });
+      m.factCommits.mockResolvedValue({ entries: [{ commit: 'newest1', date: '', message: 'newest' }, { commit: FULL, date: '', message: 'at it' }] });
+      m.commitDetail.mockResolvedValue({ commit: FULL, date: '2026-11-01T10:00:00Z', message: 'learn: one', author: { name: 'Ada', email: 'a@example.com' }, files: [{ path: PATH, action, title: 'One' }] });
+      m.fact.mockImplementation(async (_r: string, _b: string, path: string, c?: string) => ({ path, title: path, type: 'observation', body: 'BODY OF ' + path, domain: [], confidence: 0.9, sources: 1, entities: [], refs: [], commit_hash: c ?? 'newest1', ...(path === PATH && motifs ? { motifs } : {}) }));
+      const { fx } = chatRoutes([CHAT_A]);
+      fx.set('GET /api/v1/chats/chat-a', { body: { ...CHAT_A, running: false, pending_approvals: [], grants: [], items: [
+        { kind: 'user', text: 'q' },
+        { kind: 'assistant', text: 'Fixed in `abc1234`.' },
+      ] } });
+      fx.set('POST /api/v1/facts/resolve', { body: [{ handle: 'abc1234', id: '', title: '', type: '', repo: 'core-kb', branch, path: '', excerpt: '', commit: FULL }] });
+      await mountApp();
+      if (mode === 'recent') {
+        fireEvent.mouseEnter(screen.getByTestId('mode-flyout'));
+        const seg = await screen.findByTestId('sort-recent');
+        fireEvent.pointerDown(seg, { pointerType: 'mouse' });
+        fireEvent.click(seg, { detail: 1 });
+      } else if (mode === 'search') {
+        const input = within(screen.getByTestId('browse-search')).getByRole('textbox');
+        fireEvent.change(input, { target: { value: 'something' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+      }
+      await act(async () => { await new Promise(r => setTimeout(r, 60)); });
+      fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+      fireEvent.click(await screen.findByTestId('commit-link'));
+      const commit = await screen.findByTestId('chat-commit');
+      fireEvent.click(within(commit).getByTestId('timeline-file-row'));
+      await screen.findByTestId('fact-view');
+      await screen.findByTestId('version-walker');
+      await waitFor(() => expect(screen.getByTestId('connections-in')).toHaveTextContent('1'));
+      return m;
+    }
+    const click = async (m: Record<string, ReturnType<typeof vi.fn>>, control: Control, ms: number) => {
+      m.fact.mockClear();
+      fireEvent.click(screen.getByTestId(TEST_ID[control]));
+      await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+      await act(async () => { await new Promise(r => setTimeout(r, ms + 150)); });
+      return within(screen.getByTestId('browse-facet'));
+    };
+    // Everything Browse read for a fact, and what is on screen.
+    const reads = (m: Record<string, ReturnType<typeof vi.fn>>) => m.fact.mock.calls.map(c => `${c[2]}@${String(c[3]).slice(0, 7)}`);
+    const expectLandedOnTheFact = (m: Record<string, ReturnType<typeof vi.fn>>, control: Control, browse: ReturnType<typeof within>) => {
+      expect(reads(m).at(-1)).toBe(`${PATH}@abc1234`);
+      // Row 0 at the commit is the trap. Row 0 live is only the back-crumb's title, when it was the fact open before.
+      expect(reads(m)).not.toContain(`${ROW0}@abc1234`);
+      const body = screen.getByTestId('browse-facet').textContent;
+      expect(body).toContain('BODY OF ' + PATH);
+      expect(body).not.toContain('BODY OF ' + ROW0);
+      expect(browse.getByTestId('timeline-nav')).toBeInTheDocument();
+      // Each control lands on its own view of the fact.
+      for (const dir of ['in', 'out'] as const) {
+        expect(browse.getByTestId(TEST_ID[dir]).getAttribute('aria-expanded')).toBe(control === dir ? 'true' : 'false');
+      }
+    };
+
+    // Back returns to the chat, whichever way the reader asks.
+    const expectBackInTheChat = async () => {
+      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
+      expect(screen.getByTestId('rail-chat-chat-a')).toHaveAttribute('aria-current', 'true');
+      // As it was: the same chat, its panel still on the fact.
+      expect(screen.getByTestId('fact-view')).toBeVisible();
+      expect(screen.getByTestId('fact-view')).toHaveTextContent('BODY OF ' + PATH);
+    };
+
+    for (const control of ['version', 'in', 'out'] as const) {
+      for (const start of ['core-kb', 'ops-kb']) for (const mode of ['recent', 'search'] as const) for (const ms of [30, 0]) {
+        it(`${control}: from ${start === 'core-kb' ? 'the same repo' : 'another repo'}, Browse in ${mode}, the list answering ${ms ? 'late' : 'in the same microtask'}`, async () => {
+          const m = await toTheChatsFact({ start, mode, ms });
+          const browse = await click(m, control, ms);
+          expectLandedOnTheFact(m, control, browse);
+        });
+      }
+      for (const start of ['core-kb', 'ops-kb']) {
+        it(`${control}: a fact retracted at HEAD (on no list at all), from ${start}, in Recent`, async () => {
+          const m = await toTheChatsFact({ start, mode: 'recent', ms: 30, action: 'deleted' });
+          const browse = await click(m, control, 30);
+          expectLandedOnTheFact(m, control, browse);
+        });
+      }
+    }
+
+    for (const start of ['core-kb', 'ops-kb']) for (const mode of ['recent', 'search'] as const) {
+      it(`a motif in the band lands on that fact, at that commit, with its panel: from ${start}, in ${mode}`, async () => {
+        const m = await toTheChatsFact({ start, mode, ms: 30, motifs: ['a-shape'] });
+        m.fact.mockClear();
+        fireEvent.click(await within(screen.getByTestId('fact-view')).findByTestId('motif-cell'));
+        await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+        await act(async () => { await new Promise(r => setTimeout(r, 180)); });
+        expect(reads(m).at(-1)).toBe(`${PATH}@abc1234`);
+        expect(within(screen.getByTestId('browse-facet')).getByTestId('motif-panel')).toBeInTheDocument();
+      });
+    }
+
+    it('a panel opens once: leaving Browse and coming back to the same fact does not open it again', async () => {
+      const m = await toTheChatsFact({ start: 'core-kb', mode: 'path', ms: 0 });
+      const browse = await click(m, 'in', 0);
+      expect(browse.getByTestId('connections-in').getAttribute('aria-expanded')).toBe('true');
+      fireEvent.click(screen.getByTestId('rail-chat-chat-a')); // not back: the fact stays open in Browse
+      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
+      fireEvent.click(screen.getByTestId('rail-repo-core-kb'));
+      await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+      const again = within(screen.getByTestId('browse-facet'));
+      expect((await again.findByTestId('connections-in')).getAttribute('aria-expanded')).toBe('false');
+    });
+
+    // Browse on another branch of the same repo: the commit was read from the
+    // resolver's branch, and that is the history the timeline has to show.
+    it('Browse on another branch of the repo moves to the branch the fact was read from', async () => {
+      const m = await toTheChatsFact({ start: 'core-kb', mode: 'recent', ms: 30, branch: 'read/branch' });
+      m.status.mockImplementation(async (_r: string, b?: string) => statusOf(b || 'machine/test'));
+      const browse = await click(m, 'version', 30);
+      expect(m.status).toHaveBeenCalledWith('core-kb', 'read/branch');
+      expectLandedOnTheFact(m, 'version', browse);
+      const ours = m.fact.mock.calls.filter(c => c[2] === PATH);
+      expect(ours.length).toBeGreaterThan(0);
+      expect(ours.every(c => c[1] === 'read/branch')).toBe(true);
+    });
+
+    // The branch switch is a second wait, with the list read of the first still in flight.
+    for (const ms of [30, 0]) it(`from another repo in Recent, where the fact was read from another branch, the list answering ${ms ? 'late' : 'in the same microtask'}`, async () => {
+      const m = await toTheChatsFact({ start: 'ops-kb', mode: 'recent', ms, branch: 'read/branch' });
+      m.status.mockImplementation(async (_r: string, b?: string) => statusOf(b || 'machine/test'));
+      const browse = await click(m, 'version', ms);
+      expectLandedOnTheFact(m, 'version', browse);
+      expect(m.fact.mock.calls.filter(c => c[2] === PATH).every(c => c[1] === 'read/branch')).toBe(true);
+    });
+
+    it('a branch that cannot be read still lands on the fact, on the branch on screen', async () => {
+      const m = await toTheChatsFact({ start: 'core-kb', mode: 'recent', ms: 30, branch: 'read/branch' });
+      m.status.mockImplementation(async (_r: string, b?: string) => {
+        if (b === 'read/branch') throw new Error('no such branch');
+        return statusOf(b || 'machine/test');
+      });
+      expectLandedOnTheFact(m, 'version', await click(m, 'version', 30));
+    });
+
+    it('the timeline\'s back returns to the chat, with the side panel as it was', async () => {
+      const m = await toTheChatsFact({ start: 'core-kb', mode: 'path', ms: 0 });
+      const browse = await click(m, 'version', 0);
+      fireEvent.click(browse.getByTestId('timeline-back'));
+      await expectBackInTheChat();
+    });
+    it('⌘[ returns to the chat', async () => {
+      const m = await toTheChatsFact({ start: 'ops-kb', mode: 'path', ms: 0 });
+      await click(m, 'version', 0);
+      fireEvent.keyDown(window, { key: '[', metaKey: true });
+      await expectBackInTheChat();
+    });
+    it('back from a hop inside Browse stays in Browse; the next one returns to the chat', async () => {
+      const m = await toTheChatsFact({ start: 'core-kb', mode: 'path', ms: 0 });
+      const browse = await click(m, 'in', 0);
+      fireEvent.click(within(browse.getByTestId('connections-panel')).getByText('In'));
+      await waitFor(() => expect(reads(m).at(-1)).toBe('kb/in.md@c1'));
+      fireEvent.keyDown(window, { key: '[', metaKey: true });
+      await waitFor(() => expect(reads(m).at(-1)).toBe(`${PATH}@abc1234`));
+      expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']);
+      fireEvent.keyDown(window, { key: '[', metaKey: true });
+      await expectBackInTheChat();
+    });
+    it('what Browse held before the chat is not on the trail, because back from here is the chat', async () => {
+      const m = await toTheChatsFact({ start: 'core-kb', mode: 'recent', ms: 0 }); // row 0 is the open fact, live
+      const browse = await click(m, 'version', 0);
+      await waitFor(() => expect(document.body.textContent).toContain('BODY OF ' + PATH));
+      expect(browse.queryByText('Row zero')).toBeNull();
+      expect(browse.queryByText(ROW0)).toBeNull();
+    });
+    it('a chat that has since ended: back stays in Browse, on what it restored, and does not bring the chat back', async () => {
+      const m = await toTheChatsFact({ start: 'core-kb', mode: 'path', ms: 0 });
+      await click(m, 'version', 0);
+      const es = await waitFor(() => { const e = chatStream('chat-a'); expect(e).toBeTruthy(); return e!; });
+      act(() => { es.emit('chat_end', { reason: 'deleted' }); });
+      await waitFor(() => expect(screen.queryByTestId('rail-chat-chat-a')).toBeNull());
+      fireEvent.keyDown(window, { key: '[', metaKey: true });
+      await waitFor(() => expect(screen.queryByTestId('timeline-nav')).toBeNull());
+      expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']);
+      expect(screen.queryByTestId('chat-body-chat-a')).toBeNull();
+    });
+    // A fact chip, not a commit: the fact live, in the one fact view, on the chip's branch.
+    async function toTheChipsFact({ start, mode, ms, branch = 'machine/test', status }: { start: string; mode: 'recent' | 'path'; ms: number; branch?: string; status?: (r: string, b?: string) => unknown }) {
+      window.history.replaceState(null, '', '/');
+      resetFactCache();
+      localStorage.setItem('knomit.context', JSON.stringify({ kind: 'repo', repo: start }));
+      const { api } = await import('./api');
+      const m = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
+      await primeApi();
+      if (status) m.status.mockImplementation(async (r: string, b?: string) => status(r, b));
+      m.recent.mockImplementation(() => later({ facts: [{ path: ROW0, title: 'Row zero' }], total: 1 }, ms));
+      m.explain.mockResolvedValue({ incoming: [{ path: 'kb/in.md', title: 'In', versions: [{ commit: 'c1' }] }], outgoing: [{ path: 'kb/out.md', title: 'Out', versions: [{ commit: 'c2' }] }] });
+      m.factCommits.mockResolvedValue({ entries: [{ commit: 'newest1', date: '', message: 'newest' }, { commit: FULL, date: '', message: 'at it' }] });
+      m.fact.mockImplementation(async (_r: string, _b: string, path: string, c?: string) => ({ path, title: path, type: 'observation', body: 'BODY OF ' + path, domain: ['web'], confidence: 0.9, sources: 1, entities: [], refs: [{ raw: 'kb/ref.md', path: 'kb/ref.md', kind: 'fact' }], commit_hash: c ?? 'newest1' }));
+      const { fx } = chatRoutes([CHAT_A]);
+      fx.set('GET /api/v1/chats/chat-a', { body: { ...CHAT_A, running: false, pending_approvals: [], grants: [], items: [
+        { kind: 'user', text: 'q' },
+        { kind: 'assistant', text: `See \`${PATH}\`.` },
+      ] } });
+      fx.set('POST /api/v1/facts/resolve', { body: [{ handle: PATH, id: 'x', title: 'One', type: 'observation', repo: 'core-kb', branch, path: PATH, excerpt: '' }] });
+      await mountApp();
+      if (mode === 'recent') {
+        fireEvent.mouseEnter(screen.getByTestId('mode-flyout'));
+        const seg = await screen.findByTestId('sort-recent');
+        fireEvent.pointerDown(seg, { pointerType: 'mouse' });
+        fireEvent.click(seg, { detail: 1 });
+      }
+      await act(async () => { await new Promise(r => setTimeout(r, 60)); });
+      return m;
+    }
+    const openChip = async () => {
+      fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+      const chip = await screen.findByTestId('fact-link');
+      fireEvent.click(chip);
+      const view = await screen.findByTestId('fact-view');
+      await within(view).findByTestId('version-walker');
+      await waitFor(() => expect(within(view).getByTestId('connections-in')).toHaveTextContent('1'));
+      return within(view);
+    };
+    const landed = async (ms: number) => {
+      await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+      await act(async () => { await new Promise(r => setTimeout(r, ms + 150)); });
+      return within(screen.getByTestId('browse-facet'));
+    };
+    const backToTheChat = async () => {
+      fireEvent.keyDown(window, { key: '[', metaKey: true });
+      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
+      expect(screen.getByTestId('fact-view')).toBeVisible();
+      expect(screen.getByTestId('fact-view')).toHaveTextContent('BODY OF ' + PATH);
+    };
+
+    for (const start of ['core-kb', 'ops-kb']) for (const mode of ['recent', 'path'] as const) for (const control of ['version', 'in', 'out'] as const) {
+      it(`fact chip, ${control} in its band, Back: from ${start}, Browse in ${mode}`, async () => {
+        const m = await toTheChipsFact({ start, mode, ms: 30 });
+        const view = await openChip();
+        m.fact.mockClear();
+        fireEvent.click(view.getByTestId(TEST_ID[control]));
+        const browse = await landed(30);
+        expect(reads(m).at(-1)).toBe(control === 'version' ? `${PATH}@newest1` : `${PATH}@undefin`);
+        expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + PATH);
+        expect(reads(m)).not.toContain(`${ROW0}@newest1`);
+        if (control !== 'version') expect(browse.getByTestId(TEST_ID[control]).getAttribute('aria-expanded')).toBe('true');
+        await backToTheChat();
+      });
+    }
+
+    it('a tag on the fact lands in Browse with that filter on, the fact open, and one Back returns to the chat', async () => {
+      const m = await toTheChipsFact({ start: 'core-kb', mode: 'path', ms: 0 });
+      const view = await openChip();
+      m.fact.mockClear();
+      m.recent.mockImplementation(() => Promise.resolve({ facts: [{ path: PATH, title: 'One' }], total: 1 }));
+      fireEvent.click(view.getByText('web'));
+      await landed(0);
+      expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + PATH);
+      expect(screen.getAllByTestId('filter-chip').map(c => c.textContent).join(' ')).toContain('web');
+      await backToTheChat();
+    });
+
+    it('a reference in the body lands in Browse on that fact, at the commit the edge pins, and Back returns', async () => {
+      const m = await toTheChipsFact({ start: 'core-kb', mode: 'path', ms: 0 });
+      m.explain.mockResolvedValue({ incoming: [{ path: 'kb/in.md', title: 'In', versions: [{ commit: 'c1' }] }], outgoing: [{ path: 'kb/ref.md', title: 'Ref', versions: [{ commit: 'pin1234' }] }] });
+      const view = await openChip();
+      m.fact.mockClear();
+      fireEvent.click(view.getByText(/kb\/ref\.md/));
+      await landed(0);
+      expect(reads(m).at(-1)).toBe('kb/ref.md@pin1234');
+      await backToTheChat();
+    });
+
+    it('Browse\'s fact has its retract button and the chat\'s does not', async () => {
+      await toTheChipsFact({ start: 'core-kb', mode: 'path', ms: 0 });
+      const view = await openChip();
+      expect(view.queryByTestId('retract-btn')).toBeNull();
+      fireEvent.click(view.getByTestId('version-walker'));
+      const browse = await landed(0);
+      expect(browse.getByTestId('retract-btn')).toBeInTheDocument();
+    });
+
+    // Cmd-click on a chip. A reveal asks for the tree; since-fork on would demote
+    // it to Recent, whose row 0 would then replace the fact.
+    const EXP_STATUS = { ...statusOf('exp/try'), writable: true, experiment: { name: 'try', parent: 'machine/test', fork_commit: 'f0rk' } };
+    for (const ms of [30, 0]) it(`cmd-click in an experiment with since-fork on lands on the fact, not row 0, the list answering ${ms ? 'late' : 'in the same microtask'}`, async () => {
+      const m = await toTheChipsFact({ start: 'core-kb', mode: 'path', ms, branch: 'exp/try', status: () => EXP_STATUS });
+      fireEvent.click(await screen.findByTestId('since-fork-toggle'));
+      await waitFor(() => expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'true'));
+      await act(async () => { await new Promise(r => setTimeout(r, ms + 60)); });
+      fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+      m.fact.mockClear();
+      fireEvent.click(await screen.findByTestId('fact-link'), { metaKey: true });
+      await landed(ms);
+      expect(reads(m).at(-1)).toBe(`${PATH}@undefin`);
+      expect(m.fact.mock.calls.at(-1)?.[1]).toBe('exp/try');
+      expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + PATH);
+      expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'false');
+    });
+    it('cmd-click takes the chip\'s branch, not the one Browse is on', async () => {
+      const m = await toTheChipsFact({ start: 'core-kb', mode: 'path', ms: 0, branch: 'read/branch', status: (_r, b) => statusOf(b || 'machine/test') });
+      fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+      m.fact.mockClear();
+      fireEvent.click(await screen.findByTestId('fact-link'), { metaKey: true });
+      await landed(0);
+      expect(m.status).toHaveBeenCalledWith('core-kb', 'read/branch');
+      expect(m.fact.mock.calls.filter(c => c[2] === PATH).every(c => c[1] === 'read/branch')).toBe(true);
+    });
+
+    // A landing that moves the branch: its entry holds what the reader left, and Back
+    // restores all of it. The old fact does not exist on the branch landed on.
+    // SABOTAGE: status before the landing; NAV_BACK without the branch; no sinceFork in NavEntry.
+    const onlyOnExp = (m: Record<string, ReturnType<typeof vi.fn>>) => {
+      const answer = m.fact.getMockImplementation() as unknown as (...a: unknown[]) => unknown;
+      m.fact.mockImplementation(async (r: string, b: string, path: string, c?: string) => {
+        if (path === ROW0 && b !== 'exp/try') throw new Error(`no fact at path ${path} on branch ${b}`);
+        return answer(r, b, path, c);
+      });
+    };
+    const inExperimentOnAFact = async (chip: string, mode: 'recent' | 'path' = 'recent') => {
+      const m = await toTheChipsFact({ start: 'core-kb', mode, ms: 0, branch: chip, status: (_r, b) => (b === 'read/branch' ? statusOf('read/branch') : EXP_STATUS) });
+      onlyOnExp(m);
+      fireEvent.click(await screen.findByTestId('since-fork-toggle'));
+      await waitFor(() => expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + ROW0));
+      expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'true');
+      fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+      m.fact.mockClear();
+      fireEvent.click(await screen.findByTestId('fact-link'), { metaKey: true });
+      await landed(0);
+      return m;
+    };
+    const backThenBrowse = async () => {
+      fireEvent.keyDown(window, { key: '[', metaKey: true });
+      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
+      fireEvent.click(screen.getByTestId('rail-repo-core-kb'));
+      await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+      await act(async () => { await new Promise(r => setTimeout(r, 60)); });
+    };
+    it('leaving an experiment by a landing: Back restores the branch, the fact and since-fork, and Browse is not a 404', async () => {
+      const m = await inExperimentOnAFact('read/branch');
+      expect(m.fact.mock.calls.at(-1)?.[1]).toBe('read/branch');
+      expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + PATH);
+      expect(screen.queryByTestId('since-fork-toggle')).toBeNull(); // not in the experiment now
+      await backThenBrowse();
+      const body = screen.getByTestId('browse-facet').textContent;
+      expect(body).toContain('BODY OF ' + ROW0);
+      expect(body).not.toContain('no fact at path');
+      expect(m.fact.mock.calls.at(-1)?.[1]).toBe('exp/try');
+      expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'true');
+    });
+    // The experiment may have ended while the reader was away, an agent's doing or not.
+    // SABOTAGE: no re-read; any failure treated as gone; a gone branch left in place.
+    const gone = Object.assign(new Error('no such branch'), { status: 404 });
+    const afterAway = async (restored: (b?: string) => unknown, mode: 'recent' | 'path' = 'recent') => {
+      const m = await inExperimentOnAFact('read/branch', mode);
+      m.status.mockClear();
+      m.status.mockImplementation(async (_r: string, b?: string) => (b === 'exp/try' ? restored(b) : statusOf(b || 'machine/test')));
+      // What each branch lists: the experiment's fact is only on the experiment.
+      m.recent.mockImplementation(async (_r: string, b: string) => ({ facts: [b === 'exp/try' ? { path: ROW0, title: 'Row zero' } : { path: PATH, title: 'One' }], total: 1 }));
+      await backThenBrowse();
+      return m;
+    };
+    it('the restored branch is gone: Browse\'s normal view on the agent branch, not a 404, and no experiment', async () => {
+      const m = await afterAway(() => { throw gone; });
+      expect(m.status).toHaveBeenCalledWith('core-kb', 'exp/try');
+      await waitFor(() => expect(m.status).toHaveBeenCalledWith('core-kb', 'machine/test'));
+      await waitFor(() => expect(screen.queryByTestId('since-fork-toggle')).toBeNull());
+      // The reader's sort is kept, and Recent selects its first row there, as it does.
+      await waitFor(() => expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + PATH));
+      const body = screen.getByTestId('browse-facet').textContent;
+      expect(body).not.toContain('no fact at path');
+      expect(body).not.toContain('BODY OF ' + ROW0);
+      expect(screen.queryByTestId('filter-chip')).toBeNull();
+      expect(window.location.search).not.toContain('exp');
+    });
+    // In the tree nothing selects a row by itself, so only closing the fact stops a 404.
+    it('the restored branch is gone, in the tree: the fact is closed and Browse shows its summary', async () => {
+      await afterAway(() => { throw gone; }, 'path');
+      await waitFor(() => expect(screen.queryByTestId('since-fork-toggle')).toBeNull());
+      expect(await screen.findByTestId('stats-view')).toBeInTheDocument();
+      const body = screen.getByTestId('browse-facet').textContent;
+      expect(body).not.toContain('no fact at path');
+      expect(body).not.toContain('BODY OF ' + ROW0);
+    });
+    it('a failure that does not say the branch is gone leaves the reader on it', async () => {
+      const m = await afterAway(() => { throw new Error('network down'); });
+      expect(m.status).toHaveBeenCalledWith('core-kb', 'exp/try');
+      expect(m.status).not.toHaveBeenCalledWith('core-kb', 'machine/test');
+      expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + ROW0);
+      expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'true');
+    });
+    // An answer for the restored branch that lands after the reader moved on to another
+    // repo is for a context that is gone, and must change nothing.
+    // SABOTAGE: drop either still() in the re-read in App.tsx (the catch's, or the one after
+    // the agent branch's status).
+    const lateAnswer = async () => {
+      const m = await inExperimentOnAFact('read/branch');
+      let settle!: (v: { ok: boolean; status?: unknown }) => void;
+      const late = new Promise<unknown>((res, rej) => { settle = v => (v.ok ? res(v.status) : rej(gone)); });
+      m.status.mockClear();
+      m.getAgentBranch.mockClear();
+      m.status.mockImplementation((r: string, b?: string) => (r === 'core-kb' && b === 'exp/try' ? late : Promise.resolve(statusOf(b || 'machine/test'))));
+      fireEvent.keyDown(window, { key: '[', metaKey: true });
+      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
+      await waitFor(() => expect(m.status).toHaveBeenCalledWith('core-kb', 'exp/try'));
+      // The context moves on while the answer is in flight.
+      fireEvent.click(screen.getByTestId('rail-repo-ops-kb'));
+      await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+      await act(async () => { await new Promise(r => setTimeout(r, 60)); });
+      return { m, settle };
+    };
+    const STALE = { ...EXP_STATUS, head: 'stale99', branch: 'exp/try' };
+    it('a late 404 for the restored branch, after the context moved on, does not go looking for its agent branch', async () => {
+      const { m, settle } = await lateAnswer();
+      await act(async () => { settle({ ok: false }); await new Promise(r => setTimeout(r, 60)); });
+      expect(m.getAgentBranch).not.toHaveBeenCalledWith('core-kb');
+      expect(screen.getByTestId('target-label').textContent).toBe('ops-kb');
+    });
+    it('a late success for the restored branch, after the context moved on, is not applied', async () => {
+      const { settle } = await lateAnswer();
+      await act(async () => { settle({ ok: true, status: STALE }); await new Promise(r => setTimeout(r, 60)); });
+      expect(screen.queryByTestId('since-fork-toggle')).toBeNull();
+      expect(screen.queryByText(/stale99/)).toBeNull();
+    });
+    it('a 404 whose agent branch answers after the context moved on is not applied either', async () => {
+      const m = await inExperimentOnAFact('read/branch');
+      let release!: () => void;
+      const agentAnswer = new Promise<void>(res => { release = res; });
+      m.status.mockClear();
+      m.status.mockImplementation(async (r: string, b?: string) => {
+        if (r === 'core-kb' && b === 'exp/try') throw gone;
+        if (r === 'core-kb' && b === 'machine/test') { await agentAnswer; return { ...STALE, branch: 'machine/test' }; }
+        return statusOf(b || 'machine/test');
+      });
+      fireEvent.keyDown(window, { key: '[', metaKey: true });
+      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
+      await waitFor(() => expect(m.status).toHaveBeenCalledWith('core-kb', 'machine/test'));
+      fireEvent.click(screen.getByTestId('rail-repo-ops-kb'));
+      await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+      await act(async () => { await new Promise(r => setTimeout(r, 60)); });
+      await act(async () => { release(); await new Promise(r => setTimeout(r, 60)); });
+      expect(screen.queryByTestId('since-fork-toggle')).toBeNull();
+      expect(screen.queryByText(/stale99/)).toBeNull();
+      expect(screen.getByTestId('target-label').textContent).toBe('ops-kb');
+    });
+    it('the re-read refreshes what the entry held: a write gate that changed while away', async () => {
+      const m = await afterAway(() => ({ ...EXP_STATUS, head: 'newhead', writable: false }));
+      expect(m.status).toHaveBeenCalledWith('core-kb', 'exp/try');
+      await waitFor(() => expect(screen.getByTestId('retract-btn')).toBeDisabled());
+      expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'true');
+    });
+
+    it('a landing on the same experiment branch: since-fork is off there, and Back turns it on again', async () => {
+      await inExperimentOnAFact('exp/try');
+      expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'false');
+      await backThenBrowse();
+      expect(screen.getByTestId('since-fork-toggle')).toHaveAttribute('aria-checked', 'true');
+      expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + ROW0);
+    });
+    it('a landing that moves between ordinary branches restores the branch too', async () => {
+      const m = await toTheChipsFact({ start: 'core-kb', mode: 'recent', ms: 0, branch: 'read/branch', status: (_r, b) => statusOf(b || 'machine/test') });
+      const answer = m.fact.getMockImplementation() as unknown as (...a: unknown[]) => unknown;
+      m.fact.mockImplementation(async (r: string, b: string, path: string, c?: string) => {
+        if (path === ROW0 && b === 'read/branch') throw new Error('no fact at path');
+        return answer(r, b, path, c);
+      });
+      await waitFor(() => expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + ROW0));
+      fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+      fireEvent.click(await screen.findByTestId('fact-link'), { metaKey: true });
+      await landed(0);
+      await backThenBrowse();
+      expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + ROW0);
+      expect(m.fact.mock.calls.at(-1)?.[1]).toBe('machine/test');
+    });
+
+    // The chat stays mounted behind Browse, and its Focus must not reach it.
+    // SABOTAGE: useMatFocus ignores `hidden`; App does not pass onScreen.
+    const matFocus = () => document.documentElement.dataset.matFocus;
+    const inPanelFocus = async () => {
+      await toTheChipsFact({ start: 'core-kb', mode: 'path', ms: 0 });
+      const view = await openChip();
+      fireEvent.click(view.getByTestId('materialize-btn'));
+      await screen.findByTestId('mat-actions');
+      expect(matFocus()).toBe('1');
+    };
+    for (const [way, go] of [
+      ['cmd-click on a chip', () => fireEvent.click(screen.getByTestId('fact-link'), { metaKey: true })],
+      ['the rail', () => fireEvent.click(screen.getByTestId('rail-repo-core-kb'))],
+    ] as const) it(`the panel's Focus does not follow the reader to Browse by ${way}, and Esc there is Browse's`, async () => {
+      await inPanelFocus();
+      go();
+      await landed(0);
+      expect(matFocus()).toBeUndefined();
+      if (way === 'cmd-click on a chip') expect(screen.getAllByTestId('filter-chip').length).toBeGreaterThan(0);
+      fireEvent.keyDown(window, { key: 'Escape' }); // Browse's: CLEAR_FILTERS
+      await waitFor(() => expect(screen.queryAllByTestId('filter-chip')).toHaveLength(0));
+      fireEvent.click(screen.getByTestId('rail-chat-chat-a'));
+      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
+      expect(matFocus()).toBe('1'); // it was not spent, and the chat is as it was
+    });
+    it('the chat\'s Settings tab hides the panel, and its Focus with it', async () => {
+      await inPanelFocus();
+      fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+      await waitFor(() => expect(matFocus()).toBeUndefined());
+      fireEvent.click(screen.getByRole('tab', { name: 'Chat' }));
+      await waitFor(() => expect(matFocus()).toBe('1'));
+    });
+
+    // S4: a branch that cannot be read lands in the same task as the rejection, or the
+    // list read in flight answers first and selects row 0.
+    it('a branch that cannot be read lands on the fact even with the list answering in the same microtask', async () => {
+      const m = await toTheChatsFact({ start: 'ops-kb', mode: 'recent', ms: 0, branch: 'read/branch' });
+      m.status.mockImplementation(async (_r: string, b?: string) => {
+        if (b === 'read/branch') throw new Error('no such branch');
+        return statusOf(b || 'machine/test');
+      });
+      expectLandedOnTheFact(m, 'version', await click(m, 'version', 0));
+    });
+
+    // S5: the reader left for another repo while the branch was being read.
+    it('a branch read that answers after the reader moved to another repo lands nothing there', async () => {
+      const m = await toTheChatsFact({ start: 'core-kb', mode: 'path', ms: 0, branch: 'read/branch' });
+      let release: (v: unknown) => void = () => {};
+      m.status.mockImplementation((_r: string, b?: string) => b === 'read/branch' ? new Promise(r => { release = r; }) : Promise.resolve(statusOf(b || 'machine/test')));
+      m.fact.mockClear();
+      fireEvent.click(screen.getByTestId(TEST_ID.version));
+      await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+      fireEvent.click(screen.getByTestId('rail-repo-ops-kb'));
+      await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('ops-kb'));
+      await act(async () => { release(statusOf('read/branch')); await new Promise(r => setTimeout(r, 40)); });
+      expect(screen.getByTestId('target-label').textContent).toBe('ops-kb');
+      expect(reads(m)).not.toContain(`${PATH}@abc1234`);
+      expect(screen.getByTestId('browse-facet').textContent).not.toContain('BODY OF ' + PATH);
+    });
+
+    it('back within Browse with no chat involved is untouched: the chat is not shown', async () => {
+      await primeApi();
+      chatRoutes([CHAT_A]);
+      window.history.replaceState(null, '', '/');
+      await mountApp();
+      const input = within(screen.getByTestId('browse-search')).getByRole('textbox');
+      fireEvent.change(input, { target: { value: 'path:kb/x' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+      fireEvent.keyDown(window, { key: '[', metaKey: true });
+      await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+      expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']);
+    });
   });
 
   it('the chat ending (chat_end on its stream) removes it from the rail and unpins it', async () => {

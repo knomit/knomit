@@ -1,8 +1,10 @@
 import { useReducer, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { flushSync } from 'react-dom';
 import type { Dispatch } from 'react';
 import { reducer, init, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
-import type { Action, BrowseContext } from './state';
-import { api, branchEventsUrl, fetchVersion, repoAvailable, brokenLensMember, subscribeRepoEvents } from './api';
+import type { Action, BrowseContext, FactPanel, FilterChip } from './state';
+import type { BrowseFactRequest } from './chatPanelState';
+import { api, branchEventsUrl, fetchVersion, isNotFound, repoAvailable, brokenLensMember, subscribeRepoEvents } from './api';
 import type { RepoInfo, Lens, Status, RepoEvent, RepoDetails, ArchivedRepo } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
@@ -1460,11 +1462,23 @@ export default function App() {
     addChat(chat);
     dispatchView({ type: 'SELECT_PINNED', target: { kind: 'chat', id: chat.id }, available: facetsFor({ kind: 'chat', id: chat.id }, repos, lenses, creates) });
   }), [addChat, dispatchView, repos, lenses, creates]);
-  // The chat side panel's "Open in Browse": switch to the repository, then
-  // open the fact once its branch has landed (a context switch clears it).
-  // A chat commit link lands the same way, then anchors Browse at that commit
-  // (asOf history, as the filter bar's "as of" does), with no fact opened.
-  const pendingBrowse = useRef<{ ctx: BrowseContext; path: string; commit?: string } | null>(null);
+  // A chat sends the reader to Browse on a fact: switch to the repository, then
+  // open the fact once its branch has landed (a context switch clears it). A fact
+  // read at a commit opens at that commit, on the branch it was read from: another
+  // branch of the repo has a different history for the timeline to show. Back
+  // returns to the chat (fromChat).
+  const pendingBrowse = useRef<{ ctx: BrowseContext; path: string; commit?: string; branch?: string; panel?: FactPanel; filter?: FilterChip; fromChat: string } | null>(null);
+  const landPendingBrowse = useCallback(() => {
+    const p = pendingBrowse.current;
+    if (!p) return;
+    pendingBrowse.current = null;
+    navigate({
+      view: 'library', factPath: p.path, reveal: true, fromChat: p.fromChat,
+      ...(p.commit ? { asOf: { mode: 'history', commit: p.commit } } : {}),
+      ...(p.panel ? { factPanel: p.panel } : {}),
+      ...(p.filter ? { filter: p.filter } : {}),
+    });
+  }, [navigate]);
   const openPendingBrowse = useCallback(() => {
     const p = pendingBrowse.current;
     const cur = stateRef.current;
@@ -1473,25 +1487,86 @@ export default function App() {
       ? cur.context.kind === 'repo' && cur.context.repo === p.ctx.repo
       : cur.context.kind === 'lens' && cur.context.name === p.ctx.name;
     if (!here) return;
-    pendingBrowse.current = null;
-    if (p.commit) dispatch({ type: 'SET_AS_OF', asOf: { mode: 'history', commit: p.commit } });
-    else navigate({ view: 'library', factPath: p.path, reveal: true });
-  }, [navigate, dispatch]);
-  const onOpenCommit = useCallback((repo: string, commit: string) => {
-    const ctx: BrowseContext = { kind: 'repo', repo };
-    pendingBrowse.current = { ctx, path: '', commit };
+    if (p.branch && p.branch !== cur.branch) {
+      // The branch and the fact land in one render, and it is flushed here for
+      // the same reason the effect below is a layout effect: a list read still
+      // in flight must be dropped before it can answer and select row 0. The landing
+      // goes first: its entry is what the reader left, so it has to catch the old
+      // branch with the old fact and filters. A branch that cannot be read leaves
+      // the one on screen: the commit is the repo's, so the fact still reads there.
+      const repo = cur.repo;
+      const branch = p.branch;
+      p.branch = undefined;
+      api.status(repo, branch)
+        .then(s => {
+          if (pendingBrowse.current !== p || stateRef.current.repo !== repo) return;
+          flushSync(() => {
+            landPendingBrowse();
+            dispatch(statusAction(s));
+          });
+        })
+        .catch(() => { if (pendingBrowse.current === p) flushSync(landPendingBrowse); });
+      return;
+    }
+    landPendingBrowse();
+  }, [dispatch, landPendingBrowse]);
+  // `repo` is a repo or a lens (a chat binds to either). A lens addresses a fact
+  // as kb://<store>/<path>, a repo by the bare path.
+  const onBrowseFact = useCallback((chatId: string, { repo, path, branch, commit, panel, filter }: BrowseFactRequest) => {
+    const ctx: BrowseContext = lenses.some(l => l.name === repo) ? { kind: 'lens', name: repo } : { kind: 'repo', repo };
+    pendingBrowse.current = {
+      ctx, path: ctx.kind === 'lens' ? path : path.replace(/^kb:\/\/[^/]+\//, ''), fromChat: chatId,
+      ...(branch ? { branch } : {}), ...(commit ? { commit } : {}), ...(panel ? { panel } : {}), ...(filter ? { filter } : {}),
+    };
     onSelectTarget(ctx);
+    dispatchView({ type: 'SET_FACET', facet: 'browse' });
     openPendingBrowse();
-  }, [onSelectTarget, openPendingBrowse]);
-  // `target` is a repo or a lens (a chat binds to either). A lens addresses a
-  // fact as kb://<store>/<path>, a repo by the bare path.
-  const onOpenInBrowse = useCallback((target: string, file: string) => {
-    const ctx: BrowseContext = lenses.some(l => l.name === target) ? { kind: 'lens', name: target } : { kind: 'repo', repo: target };
-    pendingBrowse.current = { ctx, path: ctx.kind === 'lens' ? file : file.replace(/^kb:\/\/[^/]+\//, '') };
-    onSelectTarget(ctx);
-    openPendingBrowse();
-  }, [lenses, onSelectTarget, openPendingBrowse]);
-  useEffect(() => { openPendingBrowse(); }, [state.context, state.branch, openPendingBrowse]);
+  }, [lenses, onSelectTarget, openPendingBrowse, dispatchView]);
+  // A LAYOUT effect, and that is load-bearing. On the commit where a new repo's
+  // branch lands, the Library's list read starts under the OLD sort and filters.
+  // The landing must re-render before that read can answer, or its answer selects
+  // row 0 (AMEND_NAV, keeping the anchor just set) on top of the fact. An update
+  // from here renders in this same task and drops that read as stale; from a
+  // passive effect it would be a later render, however short the gap.
+  useLayoutEffect(() => { openPendingBrowse(); }, [state.context, state.branch, openPendingBrowse]);
+  // Back popped the entry that came from a chat: show that chat, as it was (it
+  // stays mounted). A chat that has since ended is gone from the list: the reader
+  // stays in Browse, on what Back restored.
+  useLayoutEffect(() => {
+    const id = state.chatReturn;
+    if (!id) return;
+    dispatch({ type: 'CHAT_RETURN_SERVED' });
+    if (!chats.some(c => c.id === id)) return;
+    const target = { kind: 'chat', id } as const;
+    dispatchView({ type: 'SELECT_PINNED', target, available: facetsFor(target, repos, lenses, creates) });
+  }, [state.chatReturn, chats, dispatch, dispatchView, repos, lenses, creates]);
+  // Going back to a chat restored a branch from what the app knew when the reader
+  // left. An agent may have committed or rolled back the experiment since, so ask.
+  // Gone: Browse's normal view on the agent branch, because nothing on this one can
+  // be read. Any other failure says nothing about the branch, so the reader keeps it.
+  useEffect(() => {
+    if (!state.branchRecheck) return;
+    dispatch({ type: 'BRANCH_RECHECK_SERVED' });
+    const { repo, branch } = state;
+    if (!branch) return;
+    const still = () => stateRef.current.repo === repo && stateRef.current.branch === branch;
+    api.status(repo, branch)
+      .then(s => { if (still()) dispatch(statusAction(s)); })
+      .catch(async e => {
+        if (!isNotFound(e) || !still()) return;
+        const agent = await api.getAgentBranch(repo);
+        const s = await api.status(repo, agent);
+        if (!still()) return;
+        dispatch({ type: 'BRANCH_GONE' });
+        dispatch(statusAction(s));
+      })
+      // No branch to move to answers either (getAgentBranch or its status failed):
+      // BRANCH_GONE is dispatched only above, from this one-shot flow, and the status
+      // poll never dispatches it. The reader stays on the dead branch, and nothing
+      // here moves them off it.
+      .catch(() => { /* deliberately silent */ });
+    // Only the flag starts this; the rest is what it asks about.
+  }, [state.branchRecheck, state.repo, state.branch]); // eslint-disable-line react-hooks/exhaustive-deps
   // The fleet row: the fleet target, pinned over the context with its own
   // tabs (Members, Activity, Settings).
   const onPickFleet = useCallback(() => {
@@ -1973,7 +2048,8 @@ export default function App() {
               <div key={c.id} data-testid={`chat-body-${c.id}`}
                 style={draftBody(!serverOpen && displayed.kind === 'chat' && displayed.id === c.id)}>
                 <ErrorBoundary variant="inline" label="The chat hit an error">
-                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} onOpenInBrowse={onOpenInBrowse} onOpenCommit={onOpenCommit} repos={repos} />
+                  <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} onBrowseFact={onBrowseFact} repos={repos} repoNames={repoNames} serverReadOnly={state.serverReadOnly}
+                    onScreen={!serverOpen && displayed.kind === 'chat' && displayed.id === c.id} />
                 </ErrorBoundary>
               </div>
             ))}

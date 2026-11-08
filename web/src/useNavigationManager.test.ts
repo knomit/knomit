@@ -82,6 +82,13 @@ describe('resolveNavRequest', () => {
 
   // ── Reveal: land in the tree where the fact lives ─────────────────────────
 
+  it('since-fork is cleared by a reveal from a chat, and left alone by one inside Browse', async () => {
+    await resolveNavRequest({ view: 'library', factPath: 'kb/a/b.md', reveal: true, fromChat: 'c1' }, makeState(), dispatch);
+    expect(vi.mocked(dispatch).mock.lastCall?.[0]).toMatchObject({ fromChat: 'c1', sinceFork: false });
+    await resolveNavRequest({ view: 'library', factPath: 'kb/a/b.md', reveal: true }, makeState(), dispatch);
+    expect(vi.mocked(dispatch).mock.lastCall?.[0]).not.toHaveProperty('sinceFork');
+  });
+
   it('reveal navigates the tree to the fact\'s folder and opens it', async () => {
     // Opening a highlight used to set the fact and leave the left panel wherever
     // it was — usually the ontology root — so you arrived at a fact with no idea
@@ -94,6 +101,7 @@ describe('resolveNavRequest', () => {
       factPath: 'kb/technology/ai/security/b9f5e0ac.md',
       asOf: { mode: 'live' },
       filters: [{ category: 'path', value: 'kb/technology/ai/security' }],
+      freeText: '',
       sort: 'path',
     });
   });
@@ -124,6 +132,23 @@ describe('resolveNavRequest', () => {
     const call = (dispatch as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(call.filters).toEqual([{ category: 'path', value: 'kb/meta' }]);
     expect(call.sort).toBe('path');
+  });
+
+  it('reveal drops the free text, because a search runs Relevance whatever the sort asks for', async () => {
+    const state = makeState({ freeText: 'something' });
+    await resolveNavRequest({ view: 'library', factPath: 'kb/meta/x.md', reveal: true }, state, dispatch);
+    const call = (dispatch as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(call.freeText).toBe('');
+  });
+
+  it('reveal with an anchor opens the fact at it, in the same one move; without one it is live', async () => {
+    const state = makeState({ asOf: { mode: 'history', commit: 'old1234' }, freeText: 'x' });
+    await resolveNavRequest({ view: 'library', factPath: 'kb/meta/x.md', reveal: true, asOf: { mode: 'history', commit: 'abc1234' } }, state, dispatch);
+    await resolveNavRequest({ view: 'library', factPath: 'kb/meta/x.md', reveal: true }, state, dispatch);
+    const calls = (dispatch as unknown as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0]);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({ type: 'APPLY_NAV', factPath: 'kb/meta/x.md', asOf: { mode: 'history', commit: 'abc1234' }, sort: 'path', freeText: '', filters: [{ category: 'path', value: 'kb/meta' }] });
+    expect(calls[1].asOf).toEqual({ mode: 'live' });
   });
 
   it('reveal of a fact directly under the root scopes to the root', async () => {

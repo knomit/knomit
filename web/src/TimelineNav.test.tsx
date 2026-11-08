@@ -102,6 +102,21 @@ it('a sibling files-affected row opens at the viewed commit', async () => {
   expect(onOpenFileAt).toHaveBeenCalledWith('kb/sib.md', 'newest1');
 });
 
+it('a files-affected row the commit deleted is disabled: the timeline has nothing to open there', async () => {
+  vi.mocked(api.commitDetail).mockResolvedValue({ commit: 'newest1', date: '', message: 'm',
+    files: [{ path: 'kb/gone.md', action: 'deleted', title: 'Gone' }, { path: 'kb/sib.md', action: 'added', title: 'Sib' }] });
+  const onOpenFileAt = vi.fn();
+  render(<TimelineNav repo="r" branch="b" factPath="kb/a.md" activeCommit="newest1" onScrub={() => {}} onOpenFileAt={onOpenFileAt} />);
+  fireEvent.click((await screen.findAllByTestId('timeline-row'))[0]);
+  const gone = (await screen.findByText('Gone')).closest('button')!;
+  expect(gone).toBeDisabled();
+  fireEvent.click(gone);
+  expect(onOpenFileAt).not.toHaveBeenCalled();
+  expect(screen.getByText('Sib').closest('button')).toBeEnabled();
+  // The timeline keeps its own label; the chat's commit view says "Facts affected".
+  expect(screen.getByTestId('commit-files-label')).toHaveTextContent('Files affected · 2');
+});
+
 it('header exposes a return-to-live control wired to onReturnToLive', async () => {
   const onReturnToLive = vi.fn();
   render(<TimelineNav repo="r" branch="b" factPath="kb/a.md" activeCommit="newest1" onScrub={() => {}} onOpenFileAt={() => {}} onReturnToLive={onReturnToLive} />);

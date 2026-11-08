@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
-import type { CommitAuthor, CommitDetail } from './api';
+import type { CommitAuthor, CommitDetail, CommitFile } from './api';
 import { BotIcon, UserIcon, BroadcastIcon, ChevronLeftIcon, ChevronDownIcon } from './icons';
 
 // Agent commits are authored under the agents.knomit.io domain; everyone else
 // (humans, PR merges) is shown as a person.
 const AGENT_EMAIL_DOMAIN = '@agents.knomit.io';
+const AMBER = '#e5a23c';
 
 /** A commit as the timeline shows it: its first 7 characters, mono, blue. The
  *  chat's commit links draw it too, so a hash reads the same everywhere. */
@@ -44,6 +45,207 @@ function CommitAuthorLine({ author }: { author?: CommitAuthor }) {
   );
 }
 
+/** The label above a commit's file rows. */
+function CommitFilesLabel({ label, count }: { label: string; count: number }) {
+  return (
+    <div data-testid="commit-files-label" style={{ fontSize: 9, color: '#555', fontFamily: 'var(--k-font-mono)', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 6 }}>
+      {label} · {count}
+    </div>
+  );
+}
+
+/** One file a commit touched: its action's glyph, its title, its path. `self`
+ *  marks the fact the reader is on ("you are here"). */
+function CommitFileRow({ file, self = false, disabled = false, onOpen }: {
+  file: CommitFile;
+  self?: boolean;
+  disabled?: boolean;
+  onOpen: () => void;
+}) {
+  const glyph = file.action === 'added' ? '+' : file.action === 'deleted' ? '−' : '~';
+  const color = file.action === 'added' ? '#7c9' : file.action === 'deleted' ? '#f66' : '#aaf';
+  const isDeleted = file.action === 'deleted';
+  // The current fact is "you are here" — mark it with an amber
+  // arrow + band matching the active timeline row, not dimmed.
+  return (
+    <button
+      data-testid="timeline-file-row"
+      data-self={self ? 'true' : undefined}
+      data-action={file.action}
+      disabled={disabled}
+      onClick={() => { if (!disabled) onOpen(); }}
+      style={{
+        width: '100%', display: 'flex', alignItems: 'flex-start', gap: 8, padding: '5px 4px',
+        background: self ? 'rgba(229,162,60,0.10)' : 'none',
+        border: 'none', borderLeft: `2px solid ${self ? AMBER : 'transparent'}`,
+        outline: 'none', borderRadius: 3, textAlign: 'left',
+        cursor: disabled ? 'default' : 'pointer', color: 'inherit',
+      }}
+    >
+      <span style={{ color: self ? AMBER : color, fontFamily: 'var(--k-font-mono)', width: 12, fontSize: 12, flexShrink: 0, lineHeight: 1.3 }}>
+        {self ? '▸' : glyph}
+      </span>
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <span style={{
+          fontSize: 11, fontWeight: self ? 600 : 400,
+          color: self ? AMBER : isDeleted ? '#666' : '#ddd',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          textDecoration: isDeleted ? 'line-through' : 'none',
+        }}>
+          {file.title || file.path.split('/').pop()}
+        </span>
+        <span style={{ fontSize: 9, color: '#555', fontFamily: 'var(--k-font-mono)', lineHeight: 1.3, wordBreak: 'break-all' }}>
+          {file.path}
+        </span>
+      </span>
+      {self && (
+        <span data-testid="timeline-here-marker" style={{ fontSize: 8, color: AMBER, fontFamily: 'var(--k-font-mono)', flexShrink: 0, letterSpacing: 0.6, textTransform: 'uppercase' }}>here</span>
+      )}
+    </button>
+  );
+}
+
+/**
+ * One commit, as the timeline shows it: the row (operation, hash, badges, time,
+ * message) and, while open, its card (author, message, the files it touched). The
+ * chat's side panel shows a commit with this too (ChatCommitView), so the two read
+ * the same. What differs is the label, which files are listed, and what a file
+ * row does: inputs.
+ */
+export function CommitBlock({ commit, operation, date, message, active, newestBadge = null, onRowClick, detail, detailOpen, filesLabel, files, fileIsSelf, fileIsDisabled, onOpenFile }: {
+  commit: string;
+  operation?: string;
+  date: string;
+  message: string;
+  /** The version the reader is on: the highlight, AT, and the card's caret. */
+  active: boolean;
+  /** HEAD or LAST, on the newest row of a list of versions. */
+  newestBadge?: { label: string; color: string; borderColor: string } | null;
+  onRowClick: () => void;
+  detail: CommitDetail | null;
+  detailOpen: boolean;
+  filesLabel: string;
+  files: CommitFile[];
+  fileIsSelf?: (f: CommitFile) => boolean;
+  fileIsDisabled?: (f: CommitFile) => boolean;
+  onOpenFile: (f: CommitFile) => void;
+}) {
+  const atBadge = active
+    ? { label: 'AT', color: AMBER, borderColor: AMBER + '55' }
+    : null;
+  return (
+    <div>
+      <button
+        data-testid="timeline-row"
+        onClick={onRowClick}
+        title={active ? (detailOpen ? 'Collapse commit details' : 'Expand commit details') : 'View this version'}
+        style={{
+          width: '100%', display: 'block', textAlign: 'left',
+          padding: '8px 12px',
+          background: active ? 'rgba(229,162,60,0.10)' : 'none',
+          border: 'none', outline: 'none',
+          borderLeft: `2px solid ${active ? AMBER : 'transparent'}`,
+          cursor: 'pointer', color: 'inherit',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+          {/* Op chip */}
+          <span style={{
+            flexShrink: 0, fontFamily: 'var(--k-font-mono)', fontSize: 9, padding: '1px 6px',
+            borderRadius: 8, background: operation ? '#1a1a2a' : 'transparent',
+            color: operation ? '#aaf' : 'transparent',
+            letterSpacing: 0.4,
+          }}>
+            {operation || '·'}
+          </span>
+          <CommitHash commit={commit} />
+          {/* Badges: newest (HEAD/LAST) and active (AT) are independent */}
+          {newestBadge && (
+            <span style={{
+              fontSize: 8, fontFamily: 'var(--k-font-mono)', letterSpacing: 0.6,
+              padding: '0 4px', border: `1px solid ${newestBadge.borderColor}`,
+              borderRadius: 2, color: newestBadge.color, flexShrink: 0,
+            }}>
+              {newestBadge.label}
+            </span>
+          )}
+          {atBadge && (
+            <span style={{
+              fontSize: 8, fontFamily: 'var(--k-font-mono)', letterSpacing: 0.6,
+              padding: '0 4px', border: `1px solid ${atBadge.borderColor}`,
+              borderRadius: 2, color: atBadge.color, flexShrink: 0,
+            }}>
+              {atBadge.label}
+            </span>
+          )}
+          {/* Relative time */}
+          {date && (
+            <span style={{ marginLeft: 'auto', fontSize: 9.5, color: '#555', flexShrink: 0 }}>
+              {date}
+            </span>
+          )}
+          {/* Disclosure caret — only on the active row, the only one
+              with a detail to disclose. A 9px text triangle (▸/▾) was
+              the smallest mark on the row and read as punctuation; this
+              is the stroked chevron used everywhere else in the app, at
+              a legible size, turned a quarter turn when closed so open
+              and closed are the same shape pointing two ways rather
+              than two glyphs to tell apart. */}
+          {active && (
+            <span
+              aria-hidden="true"
+              data-testid="timeline-detail-caret"
+              data-open={detailOpen ? 'true' : 'false'}
+              style={{
+                marginLeft: date ? 6 : 'auto', flexShrink: 0,
+                display: 'inline-flex', alignItems: 'center',
+                transform: detailOpen ? 'none' : 'rotate(-90deg)',
+              }}
+            >
+              <ChevronDownIcon color={AMBER} size={13} />
+            </span>
+          )}
+        </div>
+        {/* 2-line message */}
+        <div style={{
+          fontSize: 11, color: active ? '#ddd' : '#999', lineHeight: 1.4,
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+        }}>
+          {message}
+        </div>
+      </button>
+
+      {/* Inline commit detail card for the active row (collapsed until asked for) */}
+      {active && detail && detailOpen && (
+        <div style={{
+          margin: '0 12px 10px 30px', padding: '10px 12px',
+          background: '#111', border: '1px solid #1a1a1a', borderRadius: 6,
+        }}>
+          <CommitAuthorLine author={detail.author} />
+          {detail.message && (
+            <div style={{
+              fontSize: 11.5, color: '#ddd', lineHeight: 1.5, marginBottom: 10,
+              fontStyle: 'italic',
+            }}>
+              {detail.message}
+            </div>
+          )}
+          <CommitFilesLabel label={filesLabel} count={files.length} />
+          {files.map(f => (
+            <CommitFileRow
+              key={f.path}
+              file={f}
+              self={fileIsSelf?.(f) ?? false}
+              disabled={fileIsDisabled?.(f) ?? false}
+              onOpen={() => onOpenFile(f)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Two commit refs match if either is a prefix of the other, so a full
 // 40-char hash from one endpoint selects an abbreviated hash from another.
 function sameCommit(a: string | null, b: string | null): boolean {
@@ -76,8 +278,6 @@ interface Props {
   canBack?: boolean;
   onBack?: () => void;
 }
-
-const AMBER = '#e5a23c';
 
 export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onOpenFileAt, onReturnToLive, canBack = false, onBack }: Props) {
   const [entries, setEntries] = useState<FactEntry[]>([]);
@@ -212,166 +412,33 @@ export function TimelineNav({ repo, branch, factPath, activeCommit, onScrub, onO
           const isNewest = index === 0;
           const isActive = sameCommit(entry.commit, activeCommit);
 
-          // Badge logic: newest row always gets HEAD (live) or LAST (retracted).
-          // Active row always gets AT. These are independent and can both appear.
+          // Newest row always gets HEAD (live) or LAST (retracted). The active row
+          // always gets AT (CommitBlock). These are independent and can both appear.
           const newestBadge: { label: string; color: string; borderColor: string } | null =
             isNewest
               ? isRetracted
                 ? { label: 'LAST', color: '#f88', borderColor: '#f88555' }
                 : { label: 'HEAD', color: '#6a9', borderColor: '#6a9555' }
               : null;
-          const atBadge = isActive
-            ? { label: 'AT', color: AMBER, borderColor: AMBER + '55' }
-            : null;
 
           return (
-            <div key={entry.commit}>
-              <button
-                data-testid="timeline-row"
-                onClick={() => handleRowClick(entry.commit)}
-                title={isActive ? (detailOpen ? 'Collapse commit details' : 'Expand commit details') : 'View this version'}
-                style={{
-                  width: '100%', display: 'block', textAlign: 'left',
-                  padding: '8px 12px',
-                  background: isActive ? 'rgba(229,162,60,0.10)' : 'none',
-                  border: 'none', outline: 'none',
-                  borderLeft: `2px solid ${isActive ? AMBER : 'transparent'}`,
-                  cursor: 'pointer', color: 'inherit',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-                  {/* Op chip */}
-                  <span style={{
-                    flexShrink: 0, fontFamily: 'var(--k-font-mono)', fontSize: 9, padding: '1px 6px',
-                    borderRadius: 8, background: entry.operation ? '#1a1a2a' : 'transparent',
-                    color: entry.operation ? '#aaf' : 'transparent',
-                    letterSpacing: 0.4,
-                  }}>
-                    {entry.operation || '·'}
-                  </span>
-                  <CommitHash commit={entry.commit} />
-                  {/* Badges: newest (HEAD/LAST) and active (AT) are independent */}
-                  {newestBadge && (
-                    <span style={{
-                      fontSize: 8, fontFamily: 'var(--k-font-mono)', letterSpacing: 0.6,
-                      padding: '0 4px', border: `1px solid ${newestBadge.borderColor}`,
-                      borderRadius: 2, color: newestBadge.color, flexShrink: 0,
-                    }}>
-                      {newestBadge.label}
-                    </span>
-                  )}
-                  {atBadge && (
-                    <span style={{
-                      fontSize: 8, fontFamily: 'var(--k-font-mono)', letterSpacing: 0.6,
-                      padding: '0 4px', border: `1px solid ${atBadge.borderColor}`,
-                      borderRadius: 2, color: atBadge.color, flexShrink: 0,
-                    }}>
-                      {atBadge.label}
-                    </span>
-                  )}
-                  {/* Relative time */}
-                  {entry.date && (
-                    <span style={{ marginLeft: 'auto', fontSize: 9.5, color: '#555', flexShrink: 0 }}>
-                      {entry.date}
-                    </span>
-                  )}
-                  {/* Disclosure caret — only on the active row, the only one
-                      with a detail to disclose. A 9px text triangle (▸/▾) was
-                      the smallest mark on the row and read as punctuation; this
-                      is the stroked chevron used everywhere else in the app, at
-                      a legible size, turned a quarter turn when closed so open
-                      and closed are the same shape pointing two ways rather
-                      than two glyphs to tell apart. */}
-                  {isActive && (
-                    <span
-                      aria-hidden="true"
-                      data-testid="timeline-detail-caret"
-                      data-open={detailOpen ? 'true' : 'false'}
-                      style={{
-                        marginLeft: entry.date ? 6 : 'auto', flexShrink: 0,
-                        display: 'inline-flex', alignItems: 'center',
-                        transform: detailOpen ? 'none' : 'rotate(-90deg)',
-                      }}
-                    >
-                      <ChevronDownIcon color={AMBER} size={13} />
-                    </span>
-                  )}
-                </div>
-                {/* 2-line message */}
-                <div style={{
-                  fontSize: 11, color: isActive ? '#ddd' : '#999', lineHeight: 1.4,
-                  display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-                }}>
-                  {entry.message}
-                </div>
-              </button>
-
-              {/* Inline commit detail card for the active row (collapsed until asked for) */}
-              {isActive && detail && detailOpen && (
-                <div style={{
-                  margin: '0 12px 10px 30px', padding: '10px 12px',
-                  background: '#111', border: '1px solid #1a1a1a', borderRadius: 6,
-                }}>
-                  <CommitAuthorLine author={detail.author} />
-                  {detail.message && (
-                    <div style={{
-                      fontSize: 11.5, color: '#ddd', lineHeight: 1.5, marginBottom: 10,
-                      fontStyle: 'italic',
-                    }}>
-                      {detail.message}
-                    </div>
-                  )}
-                  <div style={{ fontSize: 9, color: '#555', fontFamily: 'var(--k-font-mono)', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 6 }}>
-                    Files affected · {detail.files.length}
-                  </div>
-                  {detail.files.map(f => {
-                    const glyph = f.action === 'added' ? '+' : f.action === 'deleted' ? '−' : '~';
-                    const color = f.action === 'added' ? '#7c9' : f.action === 'deleted' ? '#f66' : '#aaf';
-                    const isDeleted = f.action === 'deleted';
-                    const isSelf = f.path === factPath;
-                    const isDisabled = isDeleted || isSelf;
-                    // The current fact is "you are here" — mark it with an amber
-                    // arrow + band matching the active timeline row, not dimmed.
-                    return (
-                      <button
-                        key={f.path}
-                        data-testid="timeline-file-row"
-                        data-self={isSelf ? 'true' : undefined}
-                        disabled={isDisabled}
-                        onClick={() => { if (!isDisabled) onOpenFileAt(f.path, activeCommit); }}
-                        style={{
-                          width: '100%', display: 'flex', alignItems: 'flex-start', gap: 8, padding: '5px 4px',
-                          background: isSelf ? 'rgba(229,162,60,0.10)' : 'none',
-                          border: 'none', borderLeft: `2px solid ${isSelf ? AMBER : 'transparent'}`,
-                          outline: 'none', borderRadius: 3, textAlign: 'left',
-                          cursor: isDisabled ? 'default' : 'pointer', color: 'inherit',
-                        }}
-                      >
-                        <span style={{ color: isSelf ? AMBER : color, fontFamily: 'var(--k-font-mono)', width: 12, fontSize: 12, flexShrink: 0, lineHeight: 1.3 }}>
-                          {isSelf ? '▸' : glyph}
-                        </span>
-                        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
-                          <span style={{
-                            fontSize: 11, fontWeight: isSelf ? 600 : 400,
-                            color: isSelf ? AMBER : isDeleted ? '#666' : '#ddd',
-                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                            textDecoration: isDeleted ? 'line-through' : 'none',
-                          }}>
-                            {f.title || f.path.split('/').pop()}
-                          </span>
-                          <span style={{ fontSize: 9, color: '#555', fontFamily: 'var(--k-font-mono)', lineHeight: 1.3, wordBreak: 'break-all' }}>
-                            {f.path}
-                          </span>
-                        </span>
-                        {isSelf && (
-                          <span data-testid="timeline-here-marker" style={{ fontSize: 8, color: AMBER, fontFamily: 'var(--k-font-mono)', flexShrink: 0, letterSpacing: 0.6, textTransform: 'uppercase' }}>here</span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+            <CommitBlock
+              key={entry.commit}
+              commit={entry.commit}
+              operation={entry.operation}
+              date={entry.date}
+              message={entry.message}
+              active={isActive}
+              newestBadge={newestBadge}
+              onRowClick={() => handleRowClick(entry.commit)}
+              detail={isActive ? detail : null}
+              detailOpen={detailOpen}
+              filesLabel="Files affected"
+              files={detail?.files ?? []}
+              fileIsSelf={f => f.path === factPath}
+              fileIsDisabled={f => f.action === 'deleted' || f.path === factPath}
+              onOpenFile={f => onOpenFileAt(f.path, activeCommit)}
+            />
           );
         })}
       </div>

@@ -34,7 +34,7 @@ export interface ResolvedFact {
 }
 
 /** The repos the page knows: a kb://<store> chip names one by id or name. */
-export interface RepoRef { name: string; id?: string }
+export interface RepoRef { name: string; id?: string; mode?: string }
 
 const SHORT_ID = /^[0-9a-f]{8}$/;
 const COMMIT_HASH = /^[0-9a-f]{7,40}$/;
@@ -150,20 +150,23 @@ function collapseCell(cell: Node, facts: ReadonlyMap<string, ResolvedFact>): voi
  *  open in the side panel (its link stays highlighted), and what a click does. */
 export interface FactLinkEnv {
   facts: ReadonlyMap<string, ResolvedFact>;
-  /** factKey of the fact the side panel shows, or null. */
+  /** factKey of the fact (commitKey of the commit) the side panel shows, or null. */
   openKey: string | null;
   /** Click: open the fact in the side panel. */
   onOpen?: (f: ResolvedFact) => void;
-  /** Cmd-click, and the card's Open in Browse. */
-  onBrowse?: (repo: string, path: string) => void;
-  /** A commit link: Browse that repo as of that commit. */
-  onCommit?: (repo: string, commit: string) => void;
+  /** Cmd-click: send the reader to Browse on the fact. */
+  onBrowse?: (f: ResolvedFact) => void;
+  /** A commit link: open the commit in the side panel. The branch is the
+   *  resolver's (the repo's read branch), never a lens: a commit resolves only
+   *  when the turn worked in one repo, and it answers with that repo. */
+  onCommit?: (repo: string, branch: string, commit: string) => void;
 }
 
 const NO_FACTS: ReadonlyMap<string, ResolvedFact> = new Map();
 export const FactLinkContext = createContext<FactLinkEnv>({ facts: NO_FACTS, openKey: null });
 
 export const factKey = (repo: string, branch: string, path: string): string => `${repo}\0${branch}\0${path}`;
+export const commitKey = (repo: string, branch: string, commit: string): string => `commit\0${repo}\0${branch}\0${commit}`;
 
 /** What has been asked, for the page's life: per preference list and handle,
  *  the fact it resolved to, or null (not a fact, or the call failed). A
@@ -239,10 +242,20 @@ const argStr = (args: unknown, name: string): string => {
 };
 
 /**
- * turnPrefer is the repos turn ti worked in, for POST /facts/resolve's
- * prefer: what each of its calls acted on (a bind's target, a call's repo or
- * lens argument, else the binding in force) and the store of a kb:// file it
- * named, latest call first; then the binding in force when the turn began.
+ * turnPrefer is the repos turn ti worked in, for POST /facts/resolve's prefer:
+ * what each of its SUCCESSFUL calls acted on (a bind's target; a call the server
+ * marks in_base, the server's target, else the binding in force; a call without
+ * in_base ran nowhere in particular and adds nothing) and the store of a kb://
+ * file it named, latest call first; then the binding in force when the turn
+ * began.
+ *
+ * A call that failed worked in nothing, so it adds nothing (user decision): a
+ * failed call naming a second reachable repo must not stop a commit link from
+ * resolving, since the server resolves a hash only with exactly one repo preferred.
+ * The accepted cost is that such a repo earns no preference either, so a short id
+ * that two repos hold, where only a failed call named one of them, is ambiguous and
+ * stays code. This rule is the prefer list's alone: callTarget and the activity line
+ * still see failed calls.
  * Tool RESULTS are not in the transcript (they are fetched lazily), so a
  * kb:// in a result does not count.
  */
@@ -254,10 +267,12 @@ export function turnPrefer(turns: ChatTurn[], ti: number): string[] {
   for (const p of turns[ti]?.parts ?? []) {
     if (p.kind !== 'group') continue;
     for (const c of p.calls) {
-      own.push(callTarget(c, bound));
-      const store = /^kb:\/\/([^/\s]+)\//.exec(argStr(c.args, 'file') || argStr(c.args, 'path'))?.[1];
-      if (store) own.push(store);
-      bound = boundAfter([c], bound);
+      if (!c.isError) {
+        own.push(callTarget(c, bound));
+        const store = /^kb:\/\/([^/\s]+)\//.exec(argStr(c.args, 'file') || argStr(c.args, 'path'))?.[1];
+        if (store) own.push(store);
+      }
+      bound = boundAfter([c], bound); // a failed bind moves nothing
     }
   }
   const out: string[] = [];
