@@ -243,10 +243,12 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
               color: label.color,
             }}>
               {label.icon}
-              <span className="k-bar-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label.name}</span>
-              {/* The grey model name gives way first: it shrinks before the title does,
-                  and is dropped below the narrow breakpoint (App.css). */}
-              {target.sub && <span className="k-bar-sub" data-testid="target-label-sub" style={{ color: '#7a7a7a', fontWeight: 400, flexShrink: 100, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{target.sub}</span>}
+              {/* The name is the one part that gives way: it shrinks and ends in an
+                  ellipsis, with the whole name in its tooltip. */}
+              <span className="k-bar-name" data-testid="target-label-name" title={label.name || undefined} style={barName}>{label.name}</span>
+              {/* The grey model name stays whole beside it; only below the narrow
+                  breakpoint (App.css) is it dropped. */}
+              {target.sub && <span className="k-bar-sub" data-testid="target-label-sub" style={barSub}>{target.sub}</span>}
               {/* A target with only Settings says why: archived, its store
                   missing, or still being created. */}
               {target.chip && (
@@ -292,7 +294,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
           </div>
         )}
         {!serverOpen && facets.length > 0 && (
-          <div role="tablist" aria-label="Facets" data-testid="facet-tabs" className="k-bar-tabs" style={facetTabs}>
+          <div role="tablist" aria-label="Facets" data-testid="facet-tabs" className="k-bar-tabs" style={target.kind === 'chat' ? chatFacetTabs : facetTabs}>
             {facets.map(f => {
               const on = f === facet;
               return (
@@ -324,7 +326,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
 
         <div style={{ flex: 1 }} />
         {!serverOpen && target.kind === 'chat' && target.id && !target.draft && (
-          <span className="k-bar-pill" style={{ display: 'flex' }}><ChatPill chatId={target.id} /></span>
+          <span className="k-bar-pill" data-testid="bar-pill" style={{ display: 'flex', flexShrink: 0 }}><ChatPill chatId={target.id} /></span>
         )}
 
         {/* One control, one anchor: the gear opens the server pages, and the
@@ -403,6 +405,15 @@ const CHIP_TONE: Record<NonNullable<TargetLabel['chip']>['tone'], CSSProperties>
 const facetTabs: CSSProperties = {
   display: 'flex', alignItems: 'stretch', minWidth: 0, flexShrink: 1, overflowX: 'auto', scrollbarWidth: 'none',
 };
+
+// A chat's tabs are only Chat and Settings: they never give way. The title
+// does instead, so the tabs and the stats beside the gear stay whole.
+const chatFacetTabs: CSSProperties = { ...facetTabs, flexShrink: 0 };
+
+// The crumb's name: the part of the bar that shrinks, ending in an ellipsis.
+const barName: CSSProperties = { flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+// The model name after a chat's title: never shrinks.
+const barSub: CSSProperties = { color: '#7a7a7a', fontWeight: 400, flexShrink: 0, whiteSpace: 'nowrap' };
 
 // PanelIcon is the rail toggle's glyph: a window with its left column ruled off.
 const PanelIcon = () => (

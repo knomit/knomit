@@ -242,16 +242,26 @@ describe('the crumb', () => {
     expect(t.sub).toBeUndefined();
   });
 
-  it('the model name gives way before the title: it shrinks first and is dropped on narrow screens', () => {
+  // SABOTAGE: give the sub, the chat's tab strip or the pill a flexShrink above 0, or
+  // drop the name's ellipsis or its title -> red.
+  it('only the title gives way: it ends in an ellipsis with the whole name in its tooltip; model, tabs and stats never shrink', () => {
+    const long = 'bind to cyberai then see what are the latest facts, and give me only the top 10 facts from that list';
     render(<TopBar state={{ ...init, repo: 'alpha', context: { kind: 'repo', repo: 'alpha' } }} repos={[]} railOpen={false} onToggleRail={() => {}} onGear={() => {}} facets={['chat', 'settings']} facet="chat"
-      label={{ kind: 'chat', name: 'What changed this week?', sub: 'Sonnet 5.5', id: 'c1' }} />);
+      label={{ kind: 'chat', name: long, sub: 'Sonnet 5.5', id: 'c1' }} />);
+    const name = screen.getByTestId('target-label-name');
+    expect(name.textContent).toBe(long);
+    expect(name.title).toBe(long);
+    expect(name.style.flexShrink).toBe('1');
+    expect(name.style.minWidth).toBe('0px');
+    expect(name.style.overflow).toBe('hidden');
+    expect(name.style.textOverflow).toBe('ellipsis');
+    expect(name.style.whiteSpace).toBe('nowrap');
     const sub = screen.getByTestId('target-label-sub');
     expect(sub.className).toBe('k-bar-sub'); // App.css hides it at 640px and below
-    expect(sub.style.flexShrink).toBe('100');
-    expect(sub.style.minWidth).toBe('0px');
-    expect(sub.style.textOverflow).toBe('ellipsis');
-    const name = screen.getByTestId('target-label').querySelector('.k-bar-name') as HTMLElement;
-    expect(name.style.flexShrink).toBe(''); // the title keeps the default (1), far below the sub's 100
+    expect(sub.style.flexShrink).toBe('0');
+    expect(sub.style.textOverflow).toBe('');
+    expect(screen.getByTestId('facet-tabs').style.flexShrink).toBe('0');
+    expect(screen.getByTestId('bar-pill').style.flexShrink).toBe('0');
   });
 
   it('the top bar draws the model name in grey after the title', () => {
