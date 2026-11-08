@@ -322,6 +322,9 @@ func TestSessionLog_ToolsRecordRankerErrorIsAClass(t *testing.T) {
 	dir := t.TempDir()
 	l, err := openSessionLog(dir, "chat-00000000000000000000000000000b01", nil)
 	require.NoError(t, err)
+	// Registered after t.TempDir so it runs first (LIFO): Windows cannot
+	// delete the still-open log file when TempDir's RemoveAll runs.
+	t.Cleanup(func() { l.End("test") })
 	l.Tools(1, llm.ToolsChange{Reason: llm.ToolsReasonPreload, RankerError: "boom at /Users/someone/x"})
 	recs := recordsOf(readLog(t, dir, "chat-00000000000000000000000000000b01"), "tools")
 	require.Len(t, recs, 1)
