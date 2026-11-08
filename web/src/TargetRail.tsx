@@ -57,6 +57,8 @@ interface Props {
   chatSeen?: Record<string, number>;
   /** The x on a chat row: end the chat (the caller deletes it). */
   onEndChat?: (id: string) => void;
+  /** Rename a chat: a double-click on its name in the row edits it in place. */
+  onRenameChat?: (id: string, title: string) => void;
   /** GET /fleet, or null before it answered. The Fleet section draws its one
    *  row from it (fleet_repo), and the fleet repository is not listed under
    *  Repositories: it is the fleet target. `local` decides whether the `+`
@@ -104,7 +106,7 @@ export function TargetRail({
   repos, lenses, context, currentRepo, remoteError, serverReadOnly, onSelect,
   archived = [], pinned = null, onPin, drafts = { repo: false, lens: false }, draftShown = null,
   onNewDraft, onPickDraft, focusRequest, onFocusHandled, locked = false, fleet = null, onPickFleet,
-  chats = [], chatProviders = [], chatsAvailable = false, chatSeen = {}, onEndChat,
+  chats = [], chatProviders = [], chatsAvailable = false, chatSeen = {}, onEndChat, onRenameChat,
 }: Props) {
   const [query, setQuery] = useState('');
   const [chatsOpen, setChatsOpen] = useState(false);
@@ -221,6 +223,7 @@ export function TargetRail({
                   rowStyle={row(selected ? 'chat' : null, false)}
                   onPin={() => pin({ kind: 'chat', id: c.id })}
                   onEnd={id => onEndChat?.(id)}
+                  onRename={onRenameChat}
                 />
               );
             })}

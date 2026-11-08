@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { chatReducer, initialChatState, toolCallLabel, usageLine, formatCost, snapshotState, boundAfter, boundBeforeCall } from './chatState';
+import { chatReducer, initialChatState, toolCallLabel, usageLine, formatCost, snapshotState, boundAfter, boundBeforeCall, sessionCost } from './chatState';
 import type { ChatEvent, ChatState, ChatTurn, ToolCall } from './chatState';
 import type { ChatApproval, ChatSnapshot, ChatViewItem } from './chatApi';
 
@@ -62,6 +62,21 @@ describe('chatReducer: live events are routed by the turn index they name', () =
     expect(s.turns.map(t => t.usage?.input)).toEqual([10, 1]);
     expect(s.turns[1].costUsd).toBe(0.5);
     expect(s.turns[0].costUsd).toBeNull();
+  });
+
+  // The auto-title request's usage (side): its cost and tokens count toward the
+  // turn it followed, so toward the session cost, but its prompt is not the
+  // conversation's, so the context meter keeps the turn's last prompt.
+  // SABOTAGE: take side usage for ctxTokens -> red.
+  it('a side usage adds to the turn and the session cost but leaves the context meter alone', () => {
+    const s = run([...sent('q', 1, 0),
+      { kind: 'usage', usage: { input: 1000, cache_read: 200, cache_write: 0, output: 50 }, cost_usd: 0.01, seq: 1, turn: 0 },
+      { kind: 'usage', usage: { input: 300, cache_read: 0, cache_write: 0, output: 7 }, cost_usd: 0.002, seq: 2, side: true, turn: 0 }]);
+    expect(s.ctxTokens).toBe(1200);
+    expect(s.lastUsageSeq).toBe(2);
+    expect(s.turns[0].usage).toEqual({ input: 1300, cacheRead: 200, cacheWrite: 0, output: 57 });
+    expect(s.turns[0].costUsd).toBeCloseTo(0.012, 12);
+    expect(sessionCost(s.turns)).toBeCloseTo(0.012, 12);
   });
 
   it('sums the usage of a turn\'s requests; cost stays unknown until a request prices', () => {

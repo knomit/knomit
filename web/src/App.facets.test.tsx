@@ -1307,6 +1307,102 @@ describe('a chat target', () => {
     expect(post[0].body).toEqual({ provider: 'anthropic', model: 'a1', message: 'first words' });
   });
 
+  // Chat titles (chat review, 2026-11-08): the server's auto-title or a rename
+  // arrives as chat_state, and the rail row and the top bar both follow it live.
+  // SABOTAGE: stop applying chat_state's title in useChats -> red.
+  it('a title that arrives as chat_state shows at once in the rail row and the top bar', async () => {
+    await primeApi();
+    chatRoutes([{ ...CHAT_A, title: 'bind to alpha then list the latest facts', state: 'idle', turns: 1 }]);
+    await mountApp();
+    fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+    await waitFor(() => expect(screen.getByTestId('target-label-name')).toHaveTextContent('bind to alpha then list the latest facts'));
+    const es = await waitFor(() => { const e = chatStream('chat-a'); expect(e).toBeTruthy(); return e!; });
+    act(() => { es.emit('chat_state', { title: 'Latest facts in alpha', state: 'idle', turns: 1, last_activity: 'x', started_at: 'y' }); });
+    expect(screen.getByTestId('rail-chat-title-chat-a')).toHaveTextContent('Latest facts in alpha');
+    expect(screen.getByTestId('target-label-name')).toHaveTextContent('Latest facts in alpha');
+    expect(screen.getByTestId('target-label-name')).toHaveAttribute('title', 'Latest facts in alpha');
+  });
+
+  // Rename by double-click, in the rail row and in the top bar: Enter or blur
+  // saves through PATCH /chats/{id}, Esc cancels, and an empty name reverts.
+  // SABOTAGE: drop the onDoubleClick, save on Esc, or PATCH an empty name -> red.
+  describe('rename', () => {
+    const mountWithChat = async () => {
+      await primeApi();
+      const { fx } = chatRoutes([{ ...CHAT_A, title: 'first words', state: 'idle', turns: 1 }]);
+      fx.set('PATCH /api/v1/chats/chat-a', (body: unknown) => ({ body: { ...CHAT_A, title: (body as { title: string }).title, state: 'idle', turns: 1 } }));
+      await mountApp();
+      fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+      await waitFor(() => expect(screen.getByTestId('target-label-name')).toHaveTextContent('first words'));
+      return fx;
+    };
+    const patches = (fx: { calls: { route: string; body: unknown }[] }) => fx.calls.filter(c => c.route === 'PATCH /api/v1/chats/chat-a').map(c => c.body);
+
+    it('the rail row: double-click, type, Enter saves; both the row and the top bar show it', async () => {
+      const fx = await mountWithChat();
+      fireEvent.doubleClick(screen.getByTestId('rail-chat-title-chat-a'));
+      const input = screen.getByTestId('rail-chat-rename-chat-a') as HTMLInputElement;
+      expect(input.value).toBe('first words');
+      expect(document.activeElement).toBe(input);
+      fireEvent.change(input, { target: { value: '  Alpha   review  ' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(screen.queryByTestId('rail-chat-rename-chat-a')).toBeNull();
+      expect(patches(fx)).toEqual([{ title: 'Alpha review' }]);
+      expect(screen.getByTestId('rail-chat-title-chat-a')).toHaveTextContent('Alpha review');
+      expect(screen.getByTestId('target-label-name')).toHaveTextContent('Alpha review');
+    });
+
+    it('the top bar: double-click, type, blur saves', async () => {
+      const fx = await mountWithChat();
+      fireEvent.doubleClick(screen.getByTestId('target-label-name'));
+      const input = screen.getByTestId('target-label-rename') as HTMLInputElement;
+      expect(input.value).toBe('first words');
+      fireEvent.change(input, { target: { value: 'From the bar' } });
+      fireEvent.blur(input);
+      expect(patches(fx)).toEqual([{ title: 'From the bar' }]);
+      expect(screen.getByTestId('target-label-name')).toHaveTextContent('From the bar');
+      expect(screen.getByTestId('rail-chat-title-chat-a')).toHaveTextContent('From the bar');
+    });
+
+    it('Esc cancels, in the top bar and in the rail: nothing is sent and the name stays', async () => {
+      const fx = await mountWithChat();
+      fireEvent.doubleClick(screen.getByTestId('target-label-name'));
+      fireEvent.change(screen.getByTestId('target-label-rename'), { target: { value: 'never' } });
+      fireEvent.keyDown(screen.getByTestId('target-label-rename'), { key: 'Escape' });
+      expect(screen.queryByTestId('target-label-rename')).toBeNull();
+      fireEvent.doubleClick(screen.getByTestId('rail-chat-title-chat-a'));
+      fireEvent.change(screen.getByTestId('rail-chat-rename-chat-a'), { target: { value: 'never either' } });
+      fireEvent.keyDown(screen.getByTestId('rail-chat-rename-chat-a'), { key: 'Escape' });
+      expect(screen.queryByTestId('rail-chat-rename-chat-a')).toBeNull();
+      expect(patches(fx)).toEqual([]);
+      expect(screen.getByTestId('target-label-name')).toHaveTextContent('first words');
+      expect(screen.getByTestId('rail-chat-title-chat-a')).toHaveTextContent('first words');
+    });
+
+    it('an empty name reverts: nothing is sent and the old name is back', async () => {
+      const fx = await mountWithChat();
+      fireEvent.doubleClick(screen.getByTestId('rail-chat-title-chat-a'));
+      fireEvent.change(screen.getByTestId('rail-chat-rename-chat-a'), { target: { value: '   ' } });
+      fireEvent.keyDown(screen.getByTestId('rail-chat-rename-chat-a'), { key: 'Enter' });
+      fireEvent.doubleClick(screen.getByTestId('target-label-name'));
+      fireEvent.change(screen.getByTestId('target-label-rename'), { target: { value: '' } });
+      fireEvent.blur(screen.getByTestId('target-label-rename'));
+      expect(patches(fx)).toEqual([]);
+      expect(screen.getByTestId('rail-chat-title-chat-a')).toHaveTextContent('first words');
+      expect(screen.getByTestId('target-label-name')).toHaveTextContent('first words');
+    });
+
+    it('a rename the server refuses puts the old name back', async () => {
+      const fx = await mountWithChat();
+      fx.set('PATCH /api/v1/chats/chat-a', { status: 400, body: { detail: 'title must not be empty' } });
+      fireEvent.doubleClick(screen.getByTestId('target-label-name'));
+      fireEvent.change(screen.getByTestId('target-label-rename'), { target: { value: 'Refused' } });
+      fireEvent.keyDown(screen.getByTestId('target-label-rename'), { key: 'Enter' });
+      expect(patches(fx)).toEqual([{ title: 'Refused' }]);
+      await waitFor(() => expect(screen.getByTestId('target-label-name')).toHaveTextContent('first words'));
+    });
+  });
+
   it('a chat pinned in the same render it is added is not auto-unpinned', async () => {
     await primeApi();
     const { fx } = chatRoutes();

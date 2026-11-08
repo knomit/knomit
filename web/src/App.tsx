@@ -31,7 +31,7 @@ import { useSeenTurns } from './chatRail';
 import { createChat } from './chatApi';
 import { NEW_CHAT_ERROR } from './chatCopy';
 import type { ChatInfo } from './chatApi';
-import { deleteChat } from './chatApi';
+import { deleteChat, renameChat } from './chatApi';
 import { ActivityFacet } from './ActivityFacet';
 import { SettingsFacet } from './SettingsFacet';
 import { FacetLayoutProvider } from './facetLayout';
@@ -1091,7 +1091,7 @@ export default function App() {
   // providers behind the Chats group. Chat is not served by a read-only
   // server, and the group is absent until a provider is configured.
   const chatServed = (boot.phase === 'done' || noRepos) && !state.serverReadOnly;
-  const { chats, loaded: chatsLoaded, add: addChat, remove: removeChat } = useChats(chatServed);
+  const { chats, loaded: chatsLoaded, add: addChat, remove: removeChat, retitle: retitleChat } = useChats(chatServed);
   const chatProviders = useChatProviders(chatServed);
   const chatsAvailable = chatServed && (chatProviders?.length ?? 0) > 0;
   // The chat on screen has been seen; one that answered while another page was
@@ -1101,6 +1101,13 @@ export default function App() {
   const onEndChat = useCallback((id: string) => {
     deleteChat(id).then(() => removeChat(id), e => { if ((e as { status?: number }).status === 404) removeChat(id); });
   }, [removeChat]);
+  // A rename, from the rail row or the top bar: shown at once, kept by the server
+  // (PATCH), and confirmed by its chat_state. A refused rename puts the name back.
+  const onRenameChat = useCallback((id: string, title: string) => {
+    const before = chats.find(c => c.id === id)?.title ?? '';
+    retitleChat(id, title);
+    renameChat(id, title).catch(() => retitleChat(id, before));
+  }, [chats, retitleChat]);
   // The card the fleet's Members shows once after a create or a join.
   const [fleetLanding, setFleetLanding] = useState<FleetLanding | null>(null);
   const shownFacet: Facet | null = displayed.kind === 'draft' ? null : facets.includes(view.facet) ? view.facet : 'settings';
@@ -1994,7 +2001,7 @@ export default function App() {
         <TopBar state={state} repos={repos} label={targetLabel}
           railOpen={showRail} onToggleRail={toggleRail}
           facets={facets} facet={shownFacet ?? undefined} onFacet={onFacet} settingsDot={settingsDot} locked={view.locked}
-          onGear={onGear} server={serverBar} gear={serverPages.length > 0} />
+          onGear={onGear} server={serverBar} gear={serverPages.length > 0} onRenameChat={onRenameChat} />
       </ErrorBoundary>
       <div className="k-shell-body" style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
         {showRail && (
@@ -2016,6 +2023,7 @@ export default function App() {
               chatsAvailable={chatsAvailable}
               chatSeen={chatSeen}
               onEndChat={onEndChat}
+              onRenameChat={onRenameChat}
               draftShown={draftShownKind}
               onNewDraft={onNewDraft}
               onPickDraft={onPickDraft}
