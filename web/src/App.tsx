@@ -1,7 +1,7 @@
 import { useReducer, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { flushSync } from 'react-dom';
 import type { Dispatch } from 'react';
-import { reducer, init, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
+import { reducer, init, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText, sameContext } from './state';
 import type { Action, BrowseContext, FactPanel, FilterChip } from './state';
 import type { BrowseFactRequest } from './chatPanelState';
 import { api, branchEventsUrl, fetchVersion, isNotFound, repoAvailable, brokenLensMember, subscribeRepoEvents } from './api';
@@ -1422,7 +1422,11 @@ export default function App() {
   // while a pinned target or the draft is on screen just goes back to it. The
   // rail stays open: it is a column of the layout, not a menu that closes on
   // choice.
-  const onSelectTarget = useCallback((ctx: BrowseContext) => {
+  //
+  // A pick is a move: what the reader leaves goes on the back stack (push), so
+  // Back returns to it, in its repo or lens (navReturn below). A chat's landing
+  // in another context stamps that entry with the chat (fromChat).
+  const onSelectTarget = useCallback((ctx: BrowseContext, fromChat?: string) => {
     // The rail is disabled while locked; this is the same rule for any other
     // route here (Mounted in), so no path can unmount the commit's page.
     if (viewRef.current.locked) return;
@@ -1432,7 +1436,7 @@ export default function App() {
     const v = viewRef.current;
     if (same && v.pinned === null && !v.draftShown && v.server === null) return;
     dispatchView({ type: 'SELECT_CONTEXT_TARGET', available: facetsFor(ctx, repos, lenses, creates) });
-    if (!same) dispatch({ type: 'SET_CONTEXT', context: ctx });
+    if (!same) dispatch({ type: 'SET_CONTEXT', context: ctx, push: true, ...(fromChat ? { fromChat } : {}) });
   }, [dispatch, dispatchView, repos, lenses, creates]);
 
   // A rail pick of a settings-only target: pinned over the context.
@@ -1467,7 +1471,7 @@ export default function App() {
   // read at a commit opens at that commit, on the branch it was read from: another
   // branch of the repo has a different history for the timeline to show. Back
   // returns to the chat (fromChat).
-  const pendingBrowse = useRef<{ ctx: BrowseContext; path: string; commit?: string; branch?: string; panel?: FactPanel; filter?: FilterChip; fromChat: string } | null>(null);
+  const pendingBrowse = useRef<{ ctx: BrowseContext; path: string; commit?: string; branch?: string; panel?: FactPanel; filter?: FilterChip; fromChat: string; departed?: boolean } | null>(null);
   const landPendingBrowse = useCallback(() => {
     const p = pendingBrowse.current;
     if (!p) return;
@@ -1477,6 +1481,7 @@ export default function App() {
       ...(p.commit ? { asOf: { mode: 'history', commit: p.commit } } : {}),
       ...(p.panel ? { factPanel: p.panel } : {}),
       ...(p.filter ? { filter: p.filter } : {}),
+      ...(p.departed ? { departed: true } : {}),
     });
   }, [navigate]);
   const openPendingBrowse = useCallback(() => {
@@ -1514,11 +1519,16 @@ export default function App() {
   // as kb://<store>/<path>, a repo by the bare path.
   const onBrowseFact = useCallback((chatId: string, { repo, path, branch, commit, panel, filter }: BrowseFactRequest) => {
     const ctx: BrowseContext = lenses.some(l => l.name === repo) ? { kind: 'lens', name: repo } : { kind: 'repo', repo };
+    // Into another repo or lens, the switch pushes what Browse held, stamped with
+    // the chat, and the landing does not push again: Back is then ONE step that
+    // returns to the chat AND puts Browse back in the context it left.
+    const departed = !sameContext(ctx, stateRef.current.context);
     pendingBrowse.current = {
       ctx, path: ctx.kind === 'lens' ? path : path.replace(/^kb:\/\/[^/]+\//, ''), fromChat: chatId,
       ...(branch ? { branch } : {}), ...(commit ? { commit } : {}), ...(panel ? { panel } : {}), ...(filter ? { filter } : {}),
+      ...(departed ? { departed } : {}),
     };
-    onSelectTarget(ctx);
+    onSelectTarget(ctx, chatId);
     dispatchView({ type: 'SET_FACET', facet: 'browse' });
     openPendingBrowse();
   }, [lenses, onSelectTarget, openPendingBrowse, dispatchView]);
@@ -1567,6 +1577,55 @@ export default function App() {
       .catch(() => { /* deliberately silent */ });
     // Only the flag starts this; the rest is what it asks about.
   }, [state.branchRecheck, state.repo, state.branch]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Back to an entry left in another repo or lens (navReturn). First: is that
+  // context still there? Gone, the reader stays where they are (NAV_RETURN_GONE);
+  // there, Browse switches to it. Unless the entry returns to a chat that is
+  // still open (the chat is shown, and Browse switches behind it), the rail
+  // follows the context, as a pick of it would.
+  useLayoutEffect(() => {
+    const r = state.navReturn;
+    if (!r || r.entered) return;
+    const ctx = r.entry.context;
+    const exists = ctx.kind === 'repo'
+      ? repos.some(x => x.name === ctx.repo && repoAvailable(x) && !x.fleet)
+      : lenses.some(l => l.name === ctx.name && brokenLensMember(l, repos) === null);
+    if (!exists) { dispatch({ type: 'NAV_RETURN_GONE' }); return; }
+    const toChat = !!r.entry.fromChat && chats.some(c => c.id === r.entry.fromChat);
+    if (!toChat && !viewRef.current.locked) dispatchView({ type: 'SELECT_CONTEXT_TARGET', available: facetsFor(ctx, repos, lenses, creates) });
+    dispatch({ type: 'NAV_RETURN_ENTER' });
+  }, [state.navReturn, repos, lenses, creates, chats, dispatch, dispatchView]);
+  // Then, once the context has a branch (and a lens its doc): the entry's branch
+  // is read again, since the entry is only what the app knew when the reader left,
+  // and the entry lands on it in the same flushed render as its status, for the
+  // reason openPendingBrowse flushes (a list read in flight would select row 0
+  // over the fact). On the branch already on screen it lands at once, in this
+  // layout effect. A branch that is gone (404) is BRANCH_GONE, as for a return to
+  // a chat: Browse's normal view on the branch on screen, not an error. Any other
+  // failure lands nothing either: the reader is on the context's normal view.
+  const navReturnAsked = useRef<object | null>(null);
+  useLayoutEffect(() => {
+    const r = state.navReturn;
+    if (!r || !r.entered || !state.branch || lensResolutionPending(state)) return;
+    if (!sameContext(state.context, r.entry.context)) return;
+    const want = r.entry.branch;
+    if (!want || want === state.branch) { dispatch({ type: 'NAV_RETURN_LAND' }); return; }
+    if (navReturnAsked.current === r) return;
+    navReturnAsked.current = r;
+    const repo = state.repo;
+    const still = () => stateRef.current.navReturn === r && stateRef.current.repo === repo;
+    api.status(repo, want)
+      .then(s => {
+        if (!still()) return;
+        flushSync(() => {
+          dispatch(statusAction(s));
+          dispatch({ type: 'NAV_RETURN_LAND' });
+        });
+      })
+      .catch(e => {
+        if (!still()) return;
+        dispatch(isNotFound(e) ? { type: 'BRANCH_GONE' } : { type: 'NAV_RETURN_DROP' });
+      });
+  }, [state.navReturn, state.context, state.branch, state.lens]); // eslint-disable-line react-hooks/exhaustive-deps
   // The fleet row: the fleet target, pinned over the context with its own
   // tabs (Members, Activity, Settings).
   const onPickFleet = useCallback(() => {

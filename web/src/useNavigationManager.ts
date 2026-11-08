@@ -9,8 +9,9 @@ export type NavRequest =
   /** Open the fact AND take the tree to where it lives — see resolveNavRequest.
    *  `asOf` anchors it there (live when absent); `fromChat` makes Back return to
    *  that chat; `factPanel` opens that panel of the fact on landing; `filter` is a
-   *  chip the fact's own tag asked for, added in the same move. */
-  | { view: 'library'; factPath: string; reveal: true; asOf?: AsOf; fromChat?: string; factPanel?: FactPanel; filter?: FilterChip };
+   *  chip the fact's own tag asked for, added in the same move. `departed`: the
+   *  context switch before it already pushed what the reader left. */
+  | { view: 'library'; factPath: string; reveal: true; asOf?: AsOf; fromChat?: string; factPanel?: FactPanel; filter?: FilterChip; departed?: boolean };
 
 /**
  * Pure async function — resolves a NavRequest to an APPLY_NAV dispatch.
@@ -76,6 +77,7 @@ export async function resolveNavRequest(
       sort: 'path',
       ...(req.fromChat ? { fromChat: req.fromChat, sinceFork: false } : {}),
       ...(req.factPanel ? { factPanel: req.factPanel } : {}),
+      ...(req.departed ? { departed: true } : {}),
     });
     return;
   }
