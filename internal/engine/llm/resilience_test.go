@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -304,7 +305,9 @@ func TestTracingChat_WritesOneLinePerRequest(t *testing.T) {
 	require.Contains(t, string(lines[1]["error"]), "overloaded")
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	if runtime.GOOS != "windows" { // Windows reports a synthetic 0666, not POSIX bits
+		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 }
 
 // A truncated or refused response still used tokens: the trace line keeps its
