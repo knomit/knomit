@@ -71,6 +71,11 @@ type StreamOptions struct {
 	// a sink Event: the complete reasoning still arrives once, as EventReasoning
 	// and BlockReasoning, and a delta never reaches the history or the trace.
 	Thinking func(text string)
+	// NoThinking asks the model not to reason before it answers, for a small
+	// side request whose whole answer fits a tight MaxOutput (a chat's title):
+	// a thinking model would spend that budget on reasoning and be cut off.
+	// Anthropic: thinking disabled. Ollama: think false on a model that thinks.
+	NoThinking bool
 }
 
 func (o StreamOptions) thinking(text string) {

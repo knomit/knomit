@@ -757,3 +757,16 @@ func TestAnthropicChat_CacheWriteSplitByTTL(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, Usage{Input: 11, CacheRead: 22, CacheWrite: 33, CacheWrite5m: 20, CacheWrite1h: 13, Output: 44}, resp.Usage)
 }
+
+// NoThinking (a chat's title request) disables thinking on the wire and keeps
+// the tight max_tokens. SABOTAGE: drop the override in AnthropicChat.Stream -> red.
+func TestAnthropicChat_NoThinkingDisablesThinking(t *testing.T) {
+	srv, bodies := anthropicSSEServer(t, textAndToolStream(msgStartZero, `{"input_tokens":11,"output_tokens":4}`)...)
+	chat := NewAnthropicChat("claude-test-x", AnthropicOptions{APIKey: "k-test", BaseURL: srv.URL})
+	_, err := chat.Stream(context.Background(), prefixSnapshot(t, false), StreamOptions{NoThinking: true, MaxOutput: 32}, nil)
+	require.NoError(t, err)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(bodies()[0], &body))
+	require.Equal(t, map[string]any{"type": "disabled"}, body["thinking"])
+	require.EqualValues(t, 32, body["max_tokens"])
+}

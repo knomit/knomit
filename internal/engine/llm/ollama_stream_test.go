@@ -658,3 +658,30 @@ func TestOllamaPrefixJSON_MatchesWire(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, `{"system":null,"tools":null}`, string(empty), "no system text and no tools: both null, not missing")
 }
+
+// NoThinking (a chat's title request) sends think:false to a model that thinks,
+// so a tight num_predict is not spent on reasoning; a model that does not think
+// is still sent no think at all.
+// SABOTAGE: drop the override in OllamaChat.Stream -> red ("true").
+func TestOllamaChat_NoThinkingSendsThinkFalse(t *testing.T) {
+	srv := newOllamaServer(t, []string{"tools", "thinking"},
+		`{"message":{"role":"assistant","content":"A title"},"done":false}`,
+		`{"message":{"role":"assistant","content":""},"done_reason":"stop","done":true}`,
+	)
+	c := newTestOllama(t, srv, OllamaOptions{})
+	resp, err := c.Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{NoThinking: true, MaxOutput: 32}, nil)
+	require.NoError(t, err)
+	b := srv.received()[0]
+	require.Equal(t, `false`, string(b["think"]))
+	var opts map[string]int
+	require.NoError(t, json.Unmarshal(b["options"], &opts))
+	require.Equal(t, 32, opts["num_predict"])
+	require.Equal(t, Block{Kind: BlockText, Text: "A title"}, resp.Blocks[0])
+
+	plain := newOllamaServer(t, []string{"tools"},
+		`{"message":{"role":"assistant","content":"x"},"done_reason":"stop","done":true}`,
+	)
+	_, err = newTestOllama(t, plain, OllamaOptions{}).Stream(context.Background(), ollamaSnapshot(t, "x"), StreamOptions{NoThinking: true}, nil)
+	require.NoError(t, err)
+	require.NotContains(t, plain.received()[0], "think")
+}
