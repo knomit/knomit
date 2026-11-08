@@ -24,6 +24,9 @@ export function ChatTitleEdit({ initial, onDone, testId, style }: {
   const ref = useRef<HTMLInputElement>(null);
   const done = useRef(false);
   useEffect(() => {
+    // Live again on every mount: StrictMode (main.tsx) mounts, cleans up and
+    // mounts again in dev, and the cleanup below must not outlive that.
+    done.current = false;
     const el = ref.current;
     if (el) {
       el.focus();
