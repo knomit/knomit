@@ -113,9 +113,7 @@ The two shapes do not mix: str_replace refuses text, and append refuses old_str 
 
 Ops apply in order, each to the body the previous op produced, so a later op may anchor on text an earlier one inserted. All ops land as ONE revision or none do: if any op fails, nothing is written and the error names the op by its zero-based index.
 
-Matching is exact: no regex, no whitespace or Unicode normalisation. On 0 matches the error gives the longest prefix of old_str that does occur, its byte offset, and the first differing character on each side as U+XXXX — fix old_str from that (smart quotes, em dash vs "--", non-breaking space, trailing whitespace) and retry. On 2 or more matches it gives the count and offsets — widen old_str with surrounding text until it is unique.
-
-The body's leading and trailing whitespace is not stored. An edit that leaves an unclosed ` + "```" + ` fence in a body whose fences were balanced is refused, and so is any update that leaves ` + "`[[...]]`" + ` outside code in the body, even ones it already held: every reference, to a fact or to an external source, goes in refs.`
+Matching is exact: no regex, no whitespace or Unicode normalisation. On 0 matches the error gives the longest prefix of old_str that does occur, its byte offset, and the first differing character on each side as U+XXXX — fix old_str from that (smart quotes, em dash vs "--", non-breaking space, trailing whitespace) and retry. On 2 or more matches it gives the count and offsets — widen old_str with surrounding text until it is unique.`
 
 // ifCommitDescription is the agent-facing contract for knomit_update's if_commit.
 const ifCommitDescription = `Optional guard against editing a fact that changed since you read it. Pass the commit you read the fact at — the "commit" knomit_explain returned for it — as the full 40-character hash. The update proceeds only if the file's bytes at that commit equal its bytes now; an unrelated commit in between does not matter. Otherwise nothing is written and the error gives current_commit: read the fact again at current_commit and rebuild your edit against it. The check and the write are atomic, so two callers holding the same if_commit cannot both land. Applies to ops and to updates.body alike.`
@@ -127,7 +125,7 @@ const ifCommitDescription = `Optional guard against editing a fact that changed 
 func updateToolSchemaProperties() map[string]any {
 	return map[string]any{
 		"title": map[string]any{"type": "string", "description": "New title."},
-		"body":  map[string]any{"type": "string", "description": "New body text. " + bodyLinkRule + "A body that holds `[[...]]` outside an inline code span or fenced code block is refused, including ones the fact already had: an update to such a fact must remove them or move them to refs."},
+		"body":  map[string]any{"type": "string", "description": "New body text."},
 		// Shared with knomit_learn via factschema.go, minus the
 		// defaults: an update patches an existing fact, so declaring
 		// a schema "default" would read as "omit this and it resets".

@@ -8,8 +8,8 @@ import (
 )
 
 // approvedWikiLinkTail is the shared tail of both refusals as the user
-// approved it (2026-11-08).
-const approvedWikiLinkTail = "knomit has no link syntax in a body: it neither resolves nor renders [[...]], and every reference, to another fact or to an external source, goes in refs. Put the cited fact's path (kb/<topic>/<category>/<id>.md, as knomit_query returned it) in refs, and keep the body plain text. To show [[...]] literally, as in TOML or a regex, put it in an inline code span or a fenced code block."
+// approved it (2026-11-08, final copy).
+const approvedWikiLinkTail = "Put every reference, to another fact or to an external source, in refs. To show [[...]] literally, put it in a code span or a fenced code block."
 
 func wikiTexts(body string) []string {
 	var out []string
@@ -92,10 +92,8 @@ func TestCheckWikiLinks_ErrorSaysWhatToSend(t *testing.T) {
 	msg := err.Error()
 	require.Contains(t, msg, "[[f6db3a49]] (line 2)")
 	require.Contains(t, msg, "refs", "the error must name the channel to use instead")
-	require.Contains(t, msg, "kb/<topic>/<category>/<id>.md")
-	require.Contains(t, msg, "keep the body plain text")
-	require.Contains(t, msg, "inline code span or a fenced code block", "the error must name the code exemption")
-	require.Equal(t, "wiki link in fact body: the body contains [[f6db3a49]] (line 2). "+approvedWikiLinkTail, msg,
+	require.Contains(t, msg, "a code span or a fenced code block", "the error must name the code exemption")
+	require.Equal(t, "wiki link in fact body: the body contains [[f6db3a49]] (line 2), and a body may hold no [[...]] outside code. "+approvedWikiLinkTail, msg,
 		"the approved wording (2026-11-08), byte for byte")
 	require.Contains(t, msg, "external source")
 }
@@ -114,7 +112,7 @@ func TestCheckWikiLinksUpdate_ResultingBodyOnly(t *testing.T) {
 
 	err := CheckWikiLinksUpdate("one\ntwo\nold [[old-one]] kept")
 	require.True(t, errors.Is(err, ErrWikiLinkInBody))
-	require.Equal(t, "wiki link in fact body: the body contains [[old-one]] (line 3). An update must leave no [[...]] outside code, including ones the fact already had. "+approvedWikiLinkTail,
-		err.Error(), "the drafted update wording, byte for byte")
+	require.Equal(t, "wiki link in fact body: the body contains [[old-one]] (line 3), and a body may hold no [[...]] outside code, including ones the fact already had. "+approvedWikiLinkTail,
+		err.Error(), "the approved update wording, byte for byte")
 	require.Contains(t, err.Error(), "external source")
 }

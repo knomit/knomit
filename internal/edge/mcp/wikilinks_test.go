@@ -87,7 +87,7 @@ func TestUpdate_WikiLinkRule_FullBody(t *testing.T) {
 
 	isErr, msg := call(bodyArgs("Legacy, reworded: see [[a1b2c3d4]].\n\nAlso [[some-slug]]."))
 	require.True(t, isErr, "keeping existing ones must be refused")
-	require.Contains(t, msg, "wiki link in fact body: the body contains [[a1b2c3d4]] (line 1), [[some-slug]] (line 3). An update must leave no [[...]] outside code, including ones the fact already had.")
+	require.Contains(t, msg, "wiki link in fact body: the body contains [[a1b2c3d4]] (line 1), [[some-slug]] (line 3), and a body may hold no [[...]] outside code, including ones the fact already had.")
 	require.Contains(t, msg, "in refs")
 	require.Equal(t, start, body(), "a refused update writes nothing")
 
@@ -105,7 +105,7 @@ func TestUpdate_WikiLinkRule_Ops(t *testing.T) {
 
 	isErr, msg := call(map[string]any{"ops": []any{replace("Also [[some-slug]].", "Also, plainly.")}})
 	require.True(t, isErr, "str_replace leaving one of them must be refused")
-	require.Contains(t, msg, "the body contains [[a1b2c3d4]] (line 1).")
+	require.Contains(t, msg, "the body contains [[a1b2c3d4]] (line 1), and a body")
 
 	isErr, msg = call(map[string]any{"ops": []any{map[string]any{"op": "append", "text": "More prose."}}})
 	require.True(t, isErr, "append to a body that keeps them must be refused")
@@ -133,7 +133,7 @@ func TestUpdate_WikiLinkRule_FrontmatterOnlyRefused(t *testing.T) {
 	} {
 		isErr, msg := call(map[string]any{"updates": updates})
 		require.True(t, isErr, "%s: an update of a fact holding [[...]] is refused whatever it changes", name)
-		require.Contains(t, msg, "An update must leave no [[...]] outside code, including ones the fact already had.")
+		require.Contains(t, msg, "a body may hold no [[...]] outside code, including ones the fact already had.")
 	}
 	require.Equal(t, start, body())
 }
@@ -175,34 +175,23 @@ func TestUpdate_ArtifactMayGainWikiLinks(t *testing.T) {
 	require.False(t, res.IsError, resultText(t, res))
 }
 
-// The rule is in every description an agent reads before writing a body,
-// in the wording the user approved (2026-11-08; the update strings are the
-// drafts for the resulting-body rule), byte for byte.
-const (
-	approvedLearnBodyTail = "There is no link syntax in a body: every reference, whether another fact's path or an external source such as a URL, goes in refs. `[[...]]` outside an inline code span or fenced code block is refused."
-	approvedUpdateBody    = "New body text. There is no link syntax in a body: every reference, whether another fact's path or an external source such as a URL, goes in refs. A body that holds `[[...]]` outside an inline code span or fenced code block is refused, including ones the fact already had: an update to such a fact must remove them or move them to refs."
-	approvedOpsTail       = "The body's leading and trailing whitespace is not stored. An edit that leaves an unclosed ``` fence in a body whose fences were balanced is refused, and so is any update that leaves `[[...]]` outside code in the body, even ones it already held: every reference, to a fact or to an external source, goes in refs."
-	approvedInstructions  = "- **All references go in refs** — a body has no link syntax. Cite another fact by its path and an external source by its URL in refs, never in the body text. `[[...]]` outside an inline code span or fenced code block is refused on write.\n"
-)
+// Final copy (user, 2026-11-08): the tool descriptions say nothing about
+// [[...]] — the errors carry it — and the server instructions keep one bullet.
+const approvedInstructions = "- **All references go in refs** — a body has no link syntax. Cite another fact by its path and an external source by its URL in refs, never in the body text. `[[...]]` outside an inline code span or fenced code block is refused on write.\n"
 
-func TestWikiLinkRule_InServedDescriptions(t *testing.T) {
+func TestWikiLinkRule_ToolDescriptionsUnchanged(t *testing.T) {
 	learnBody := learnToolSchemaProperties()["body"].(map[string]any)["description"].(string)
-	require.True(t, strings.HasSuffix(learnBody, " "+approvedLearnBodyTail), learnBody)
-	require.True(t, strings.HasPrefix(learnBody, "Fact body in natural language. State compound conditions in full"), "the text before the rule is unchanged")
-	require.Contains(t, learnBody, "external source")
+	require.Equal(t, "Fact body in natural language. State compound conditions in full — name every component; never abbreviate a multi-part condition into a catchier summary. Include the consequence a consumer should act on. For rules and policies, name the foreseeable misreading (what the fact does NOT mean) if you can see one.", learnBody)
 
 	updBody := updateToolSchemaProperties()["body"].(map[string]any)["description"].(string)
-	require.Equal(t, approvedUpdateBody, updBody)
-	require.Contains(t, updBody, "external source")
+	require.Equal(t, "New body text.", updBody)
 
-	require.True(t, strings.HasSuffix(opsDescription, "\n\n"+approvedOpsTail), opsDescription)
-	require.Contains(t, opsDescription, "external source")
-
-	// The served tools/list bytes carry the same text.
+	require.True(t, strings.HasSuffix(opsDescription, "widen old_str with surrounding text until it is unique."),
+		"the ops description ends with the matching paragraph: %s", opsDescription)
 	for _, tool := range []any{learnTool(), updateTool()} {
 		raw, err := json.Marshal(tool)
 		require.NoError(t, err)
-		require.Contains(t, string(raw), "external source")
+		require.NotContains(t, string(raw), "[[...]]")
 	}
 }
 

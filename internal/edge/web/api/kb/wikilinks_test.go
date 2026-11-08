@@ -57,7 +57,7 @@ func TestFactPut_WikiLinkRule(t *testing.T) {
 
 	rec := put(path, "now [[x]]")
 	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, "an edit may not leave one: "+rec.Body.String())
-	require.Contains(t, rec.Body.String(), "the body contains [[x]] (line 1). An update must leave no [[...]] outside code, including ones the fact already had.")
+	require.Contains(t, rec.Body.String(), "the body contains [[x]] (line 1), and a body may hold no [[...]] outside code, including ones the fact already had.")
 
 	// A legacy body with one: keeping it, or swapping it, is refused; removing
 	// it is accepted.
@@ -71,7 +71,7 @@ func TestFactPut_WikiLinkRule(t *testing.T) {
 
 	rec = put("kb/technology/dated/fresh.md", "fresh [[y]]")
 	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, "a PUT that creates is judged like a create: "+rec.Body.String())
-	require.NotContains(t, rec.Body.String(), "An update must", "a create gets knomit_learn's text")
+	require.NotContains(t, rec.Body.String(), "already had", "a create gets knomit_learn's text")
 
 	rec = put("artifacts/crawl/state.md", "saw [[link]]")
 	require.Equal(t, http.StatusOK, rec.Code, "an artifact is exempt: "+rec.Body.String())

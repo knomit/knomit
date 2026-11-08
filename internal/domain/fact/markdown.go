@@ -120,9 +120,8 @@ func WikiLinks(body string) []WikiLink {
 var ErrWikiLinkInBody = errors.New("wiki link in fact body")
 
 // wikiLinkAdvice is the part of every refusal that says what to send instead.
-const wikiLinkAdvice = "knomit has no link syntax in a body: it neither resolves nor renders [[...]], and every reference, to another fact or to an external source, goes in refs. " +
-	"Put the cited fact's path (kb/<topic>/<category>/<id>.md, as knomit_query returned it) in refs, and keep the body plain text. " +
-	"To show [[...]] literally, as in TOML or a regex, put it in an inline code span or a fenced code block."
+const wikiLinkAdvice = "Put every reference, to another fact or to an external source, in refs. " +
+	"To show [[...]] literally, put it in a code span or a fenced code block."
 
 // CheckWikiLinks refuses a body that holds any `[[...]]` in prose (see
 // WikiLinks). Every write that creates a fact runs it on the body it writes.
@@ -136,7 +135,7 @@ func CheckWikiLinks(body string) error {
 // legacy fact cannot be updated, on any field, until its body is fixed. Its
 // error says so.
 func CheckWikiLinksUpdate(body string) error {
-	return checkWikiLinks(body, "An update must leave no [[...]] outside code, including ones the fact already had. ")
+	return checkWikiLinks(body, ", including ones the fact already had")
 }
 
 func checkWikiLinks(body, note string) error {
@@ -144,7 +143,8 @@ func checkWikiLinks(body, note string) error {
 	if len(links) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%w: the body contains %s. %s%s", ErrWikiLinkInBody, listWikiLinks(links), note, wikiLinkAdvice)
+	return fmt.Errorf("%w: the body contains %s, and a body may hold no [[...]] outside code%s. %s",
+		ErrWikiLinkInBody, listWikiLinks(links), note, wikiLinkAdvice)
 }
 
 // listWikiLinks renders up to three occurrences with their line numbers.

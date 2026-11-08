@@ -1045,11 +1045,7 @@ paths:
         validation of the repository's ontology (at the branch's tip): the
         detail is the rule's own message, and nothing is written.
 
-        422 "Link syntax in fact body" when the body holds `[[...]]` outside
-        an inline code span or fenced code block: a body has no link syntax,
-        and every reference, to another fact or to an external source, goes
-        in `refs`. The detail is `knomit_learn`'s own text, and nothing is
-        written.
+        422 "Link syntax in fact body": the body holds `[[...]]` outside code. The detail says what to change.
       operationId: createFact
       requestBody:
         required: true
@@ -1172,12 +1168,7 @@ paths:
         with the rule's own message: an edit of a fact that already failed
         one must bring it into compliance. Nothing is written.
 
-        422 "Link syntax in fact body" when the resulting body holds `[[...]]`
-        outside an inline code span or fenced code block, including ones the
-        fact already had: a body has no link syntax, and every reference, to
-        another fact or to an external source, goes in `refs`. An artifact is
-        exempt. The detail is `knomit_update`'s own text, and nothing is
-        written.
+        422 "Link syntax in fact body": the body holds `[[...]]` outside code. The detail says what to change.
 
         A PUT whose bytes to commit (the request's content, or the server's
         rewrite of it when a gate canonicalises refs, motifs, expires or
