@@ -67,7 +67,8 @@ func (s *streamRecorder) body() string {
 }
 
 // An IDLE job stream writes the shared keepalive comment frame, so a proxy
-// does not drop a job that is quiet while it waits on the model.
+// does not drop the stream of a running job that publishes nothing for a
+// while (here a rebuild recorded running and never updated).
 //
 // It sets the package var jobEventsKeepalive, so tests here must not run in
 // parallel.

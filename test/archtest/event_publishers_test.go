@@ -17,9 +17,9 @@ import (
 // ...) live only on events.TaskPublisher and events.RepoEventPublisher, which
 // the owner (the repos Manager and RepoInstance) keeps in unexported fields.
 // That is what keeps invariant "IndexEvents are published only by
-// Machine.publish after a transition" and the job API's single-flight (a
-// phantom running task wedges every POST with 409 and cannot be cancelled by
-// DELETE) enforced by the compiler instead of by who happens to import events.
+// Machine.publish after a transition", and the job routes' view of a rebuild
+// (only the lifecycle machine can record one running or finished), enforced
+// by the compiler instead of by who happens to import events.
 //
 // The split only holds while nothing hands a publisher out. This guard fails
 // when a non-test file outside the events package declares

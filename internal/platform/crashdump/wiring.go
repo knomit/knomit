@@ -14,8 +14,11 @@ import (
 var Global *RingWriter
 
 // globalReporter is the process-wide Reporter that recovered-panic sites
-// (chi Recoverer, TaskHub) report through, so a panic that is RECOVERED (and
-// thus never reaches Guard) still leaves a forensic bundle. Set by serve.
+// report through (the HTTP recover middleware, "http:"; the repo lifecycle,
+// "lifecycle:"; the index build, "index:"; the consensus loop, "consensus:";
+// the trigger dispatcher and its scripts, "triggers:"), so a panic that is
+// RECOVERED (and thus never reaches Guard) still leaves a forensic bundle.
+// Set by serve.
 var globalReporter atomic.Pointer[Reporter]
 
 // SetGlobalReporter installs (or, with nil, clears) the process-wide Reporter
