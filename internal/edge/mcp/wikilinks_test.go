@@ -140,7 +140,7 @@ func TestUpdate_WikiLinkRule_FrontmatterOnlyRefused(t *testing.T) {
 
 // A learn that dedup-merges into an existing fact rewrites it: when the body
 // kept is the existing one and it holds [[...]], the learn is refused.
-func TestLearn_DedupMergeIntoLegacyFactRefused(t *testing.T) {
+func TestLearn_WikiLinkDedupMergeIntoLegacyFactRefused(t *testing.T) {
 	svc, ctx, emb := newPrinciplesTestRepo(t)
 	item := func(body string, conf float64) map[string]any {
 		return map[string]any{"topic": "architecture", "category": "modules", "title": "Dedup target",
