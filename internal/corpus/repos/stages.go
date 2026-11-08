@@ -254,16 +254,12 @@ func (openStage) Enter(_ context.Context, _ *Life, r *RepoInstance) error {
 	return nil
 }
 
-// Exit cancels the hub's tasks (each holds an Acquire, so the drain below
-// would otherwise wait on work nobody told to stop), stops the observer, takes
-// the store out of the instance, drains every in-flight Acquire and only then
-// closes the service (kb/invariants/repos/store-lifetime). On Unmount the
-// instance is marked closed, so later Acquires fail with ErrRepoClosed rather
-// than ErrStoreUnavailable.
+// Exit stops the observer, takes the store out of the instance, drains every
+// in-flight Acquire and only then closes the service
+// (kb/invariants/repos/store-lifetime). On Unmount the instance is marked
+// closed, so later Acquires fail with ErrRepoClosed rather than
+// ErrStoreUnavailable.
 func (openStage) Exit(r *RepoInstance) {
-	if r.pub != nil {
-		r.pub.CancelTasks()
-	}
 	if obs := r.observer.Swap(nil); obs != nil {
 		obs.Stop()
 	}

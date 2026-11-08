@@ -67,7 +67,8 @@ func (s *streamRecorder) body() string {
 }
 
 // An IDLE job stream writes the shared keepalive comment frame, so a proxy
-// does not drop a job that is quiet while it waits on the model.
+// does not drop the stream of a running job that publishes nothing for a
+// while (here a rebuild recorded running and never updated).
 //
 // It sets the package var jobEventsKeepalive, so tests here must not run in
 // parallel.
@@ -83,21 +84,8 @@ func TestJobs_EventsKeepaliveOnAnIdleStream(t *testing.T) {
 		Name: "alpha", AgentBranch: "agent/test", Hub: hub,
 	}))
 
-	gate := make(chan struct{})
-	started := make(chan struct{})
-	id, err := hub.Start("rebuild", func(ctx context.Context, emit func(events.TaskEvent)) {
-		emit(events.TaskEvent{Status: "running", Phase: "start", Message: "rebuild starting"})
-		close(started)
-		select {
-		case <-gate:
-		case <-ctx.Done():
-		}
-	})
-	if err != nil {
-		t.Fatalf("start held rebuild: %v", err)
-	}
-	<-started
-	t.Cleanup(func() { close(gate) })
+	const id = "rebuild-1"
+	pub.PublishTask(events.TaskEvent{Op: "rebuild", ID: id, Status: "running", Phase: "start", Message: "rebuild starting"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rec := &streamRecorder{ResponseRecorder: httptest.NewRecorder()}
