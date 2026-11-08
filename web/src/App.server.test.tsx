@@ -25,7 +25,7 @@ vi.mock('./api', async (importOriginal) => {
     fetchVersion: vi.fn(),
     api: {
       listClientSessions: vi.fn(),
-      listOAuthPending: vi.fn(), listSecrets: vi.fn(),
+      listOAuthPending: vi.fn(), listOAuthGrants: vi.fn(), listSecrets: vi.fn(),
       getFleet: vi.fn(), listFleetMembers: vi.fn(),
       repos: vi.fn(), listLenses: vi.fn(), listArchived: vi.fn(), getAgentBranch: vi.fn(),
       status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), updateLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),
@@ -88,6 +88,7 @@ async function primeApi({ readOnly = false, oauth = [] as OAuthPending[] | null 
   m.listPushedBranches.mockResolvedValue([]);
   m.listClientSessions.mockResolvedValue({ truncated: false, policy: POLICY, sessions: [] });
   m.listOAuthPending.mockResolvedValue(oauth);
+  m.listOAuthGrants.mockResolvedValue(oauth === null ? null : []);
   m.listSecrets.mockResolvedValue([]);
   m.getFleet.mockResolvedValue({ state: 'standalone', agent_id: 'agent-7f3a' });
   m.listFleetMembers.mockResolvedValue([]);
@@ -109,7 +110,7 @@ const gear = () => screen.getByTestId('server-toggle');
 const tabNames = () => screen.getAllByRole('tab').map(t => t.firstChild?.textContent ?? '');
 async function openServer() {
   await act(async () => { fireEvent.click(gear()); });
-  await screen.findByTestId('logs-facet');
+  await screen.findByTestId('access-page');
 }
 
 beforeEach(() => {
@@ -130,7 +131,7 @@ afterEach(() => {
 });
 
 describe('the gear opens the server pages', () => {
-  it('reads the bar as knomit │ the server tabs (no target crumb), and has Logs and Access', async () => {
+  it('reads the bar as knomit │ the server tabs (no target crumb), and has Access then Logs', async () => {
     await primeApi({ oauth: [] });
     await mountApp();
     // Control: on a target the label names it.
@@ -142,10 +143,11 @@ describe('the gear opens the server pages', () => {
     expect(screen.getByTestId('toknomitr-bar')).not.toHaveTextContent('Server');
     expect(screen.getByTestId('bar-brand')).toHaveTextContent(/^knomit$/);
     expect(screen.getByTestId('toknomitr-bar')).not.toHaveTextContent('localhost');
-    await waitFor(() => expect(tabNames()).toEqual(['Logs', 'Access']));
+    await waitFor(() => expect(tabNames()).toEqual(['Access', 'Logs']));
     expect(screen.getByRole('tablist', { name: 'Server pages' })).toBeInTheDocument();
     expect(screen.queryByTestId('facet-tabs')).toBeNull();
-    expect(screen.getByTestId('server-tab-logs')).toHaveAttribute('aria-selected', 'true');
+    // The gear opens on the first tab, Access.
+    expect(screen.getByTestId('server-tab-access')).toHaveAttribute('aria-selected', 'true');
     // The Fleet server page is gone (Q1): the fleet is a rail target.
     expect(screen.queryByTestId('server-tab-fleet')).toBeNull();
     expect(screen.queryByTestId('fleet-page')).toBeNull();
@@ -170,11 +172,11 @@ describe('the gear opens the server pages', () => {
     await openServer();
     await waitFor(() => expect(m.listOAuthPending).toHaveBeenCalled());
     await act(async () => { await Promise.resolve(); });
-    expect(tabNames()).toEqual(['Logs', 'Access']);
+    expect(tabNames()).toEqual(['Access', 'Logs']);
     fireEvent.click(screen.getByTestId('server-tab-access'));
-    expect(await screen.findByTestId('secrets-tab')).toBeInTheDocument();
-    expect(screen.getByTestId('access-tab-secrets')).toBeInTheDocument();
-    expect(screen.queryByTestId('access-tab-auth')).toBeNull();
+    expect(await screen.findByTestId('secrets-overview')).toBeInTheDocument();
+    expect(screen.getByTestId('access-section-secrets')).toBeInTheDocument();
+    expect(screen.queryByTestId('access-section-auth')).toBeNull();
   });
 
   it('badges Access with the waiting authorizations, and shows no badge at zero', async () => {
@@ -183,7 +185,8 @@ describe('the gear opens the server pages', () => {
     await openServer();
     expect(await screen.findByTestId('server-tab-access-badge')).toHaveTextContent(/^2$/);
     fireEvent.click(screen.getByTestId('server-tab-access'));
-    expect(await screen.findByTestId('access-tab-auth-badge')).toHaveTextContent(/^2$/);
+    const section = await screen.findByTestId('access-section-auth');
+    expect(within(section).getByLabelText('2 waiting')).toHaveTextContent(/^2$/);
 
     // Zero waiting: the tab stays, the badge goes.
     cleanup();
@@ -195,20 +198,21 @@ describe('the gear opens the server pages', () => {
     expect(screen.queryByTestId('server-tab-access-badge')).toBeNull();
   });
 
-  it('opens each page in the body: Logs with its toolbar, Access on Secrets, then Authorizations as an indexed page', async () => {
+  it('opens each page in the body: Access on Secrets first, Authorizations with its queue, then Logs with its toolbar', async () => {
     await primeApi({ oauth: [pending('p1', 'alpha')] });
     await mountApp();
     await openServer();
-    expect(screen.getByTestId('logs-facet')).toBeInTheDocument();
-    expect(screen.getByTestId('facet-toolbar')).toBeInTheDocument();
+    expect(await screen.findByTestId('secrets-overview')).toBeInTheDocument();
+    expect(screen.getByTestId('access-section-secrets')).toHaveAttribute('aria-current', 'true');
+    fireEvent.click(await screen.findByTestId('access-section-auth'));
+    expect(await screen.findByTestId('auth-overview')).toBeInTheDocument();
+    const list = await screen.findByTestId('auth-list');
+    await waitFor(() => expect(within(list).getAllByTestId('oauth-row-item')).toHaveLength(1));
+    expect(within(list).getByTestId('oauth-row-item')).toHaveTextContent('alpha');
 
-    fireEvent.click(screen.getByTestId('server-tab-access'));
-    const secrets = await screen.findByTestId('secrets-tab');
-    expect(within(secrets).getByTestId('settings-index-heading')).toHaveTextContent('Secrets');
-    fireEvent.click(await screen.findByTestId('access-tab-auth'));
-    const auth = await screen.findByTestId('auth-page');
-    expect(within(auth).getByTestId('settings-index-heading')).toHaveTextContent('Authorizations');
-    expect(await within(auth).findByTestId('toc-request-p1')).toHaveTextContent('alpha');
+    fireEvent.click(screen.getByTestId('server-tab-logs'));
+    expect(await screen.findByTestId('logs-facet')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-toolbar')).toBeInTheDocument();
   });
 });
 
@@ -221,10 +225,10 @@ describe('Access forgets a tab that is gone', () => {
     await mountApp();
     await openServer();
     fireEvent.click(screen.getByTestId('server-tab-access'));
-    fireEvent.click(await screen.findByTestId('access-tab-auth'));
-    expect(await screen.findByTestId('secrets-tab')).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByTestId('access-tab-auth')).toBeNull());
-    expect(screen.getByTestId('access-tab-secrets')).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(await screen.findByTestId('access-section-auth'));
+    expect(await screen.findByTestId('secrets-overview')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId('access-section-auth')).toBeNull());
+    expect(screen.getByTestId('access-section-secrets')).toHaveAttribute('aria-current', 'true');
   });
 });
 
@@ -290,7 +294,7 @@ describe('the keyboard on a server page', () => {
 
     act(() => { fireEvent.keyDown(window, { key: 'Escape' }); });
     await act(async () => { await Promise.resolve(); });
-    expect(screen.getByTestId('logs-facet')).toBeInTheDocument();
+    expect(screen.getByTestId('access-page')).toBeInTheDocument();
     expect(gear()).toHaveAttribute('aria-pressed', 'true');
 
     await act(async () => { fireEvent.click(gear()); });
@@ -385,11 +389,12 @@ describe('a crashed server page', () => {
     await mountApp();
     logsCrash.on = true;
     await act(async () => { fireEvent.click(gear()); });
+    await act(async () => { fireEvent.click(screen.getByTestId('server-tab-logs')); });
     const card = await screen.findByTestId('panel-error');
     expect(card).toHaveTextContent('The server pages hit an error');
 
     await act(async () => { fireEvent.click(screen.getByTestId('server-tab-access')); });
-    expect(await screen.findByTestId('secrets-tab')).toBeInTheDocument();
+    expect(await screen.findByTestId('secrets-overview')).toBeInTheDocument();
     expect(screen.queryByTestId('panel-error')).toBeNull();
   });
 });

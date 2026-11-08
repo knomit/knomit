@@ -41,6 +41,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 	// the OAuth listener's, and only when [oauth] is configured.
 	if s.OAuthIssuer != nil {
 		s.mountOAuthPending(r)
+		s.mountOAuthGrants(r)
 	}
 	// The instance's stored credentials (api/secrets). Like the approval
 	// endpoints: THIS router only, never the OAuth listener's, and behind the

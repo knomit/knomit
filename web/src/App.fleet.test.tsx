@@ -21,7 +21,7 @@ vi.mock('./api', async (importOriginal) => {
     fetchVersion: vi.fn(),
     api: {
       listClientSessions: vi.fn(),
-      listOAuthPending: vi.fn(),
+      listOAuthPending: vi.fn(), listSecrets: vi.fn(),
       getFleet: vi.fn(), listFleetMembers: vi.fn(), listFleetActivity: vi.fn(),
       repos: vi.fn(), listLenses: vi.fn(), listArchived: vi.fn(), getAgentBranch: vi.fn(),
       status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), updateLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),
@@ -65,6 +65,8 @@ async function primeApi({ readOnly = false, oauth = [] as unknown[] | null } = {
   m.listPushedBranches.mockResolvedValue([]);
   m.listClientSessions.mockResolvedValue({ truncated: false, policy: POLICY, sessions: [] });
   m.listOAuthPending.mockResolvedValue(oauth);
+  // The gear opens on Access, which reads the stored secrets.
+  m.listSecrets.mockResolvedValue([]);
   m.getFleet.mockResolvedValue({
     state: 'registered', agent_id: 'agent-7f3a', fleet_repo: 'fleet', master: true, local: true, hosting: 'none', record_state: 'active',
     host: { listener_on: true, external_addresses: ['https://h.example'] }, fleet_urls: ['https://h.example/git/fleet'], follows_host: true,
@@ -125,13 +127,13 @@ describe('the fleet target', () => {
     expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']);
   });
 
-  it('the gear says logs and access only, and has no Fleet tab', async () => {
+  it('the gear says access and logs only, and has no Fleet tab', async () => {
     await primeApi();
     await mountApp();
     const gear = screen.getByTestId('server-toggle');
-    expect(gear).toHaveAttribute('title', 'Server: logs and access');
+    expect(gear).toHaveAttribute('title', 'Server: access and logs');
     await act(async () => { fireEvent.click(gear); });
-    await screen.findByTestId('logs-facet');
+    await screen.findByTestId('access-page');
     expect(screen.queryByTestId('server-tab-fleet')).toBeNull();
   });
 

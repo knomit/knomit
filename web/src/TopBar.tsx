@@ -161,7 +161,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
   };
   // Where the gear returns to from the server pages: the target under them,
   // named in its tooltip so the destination is one hover away.
-  const gearTitle = held ? heldReason : serverOpen ? `Back to ${target.name}` : 'Server: logs and access';
+  const gearTitle = held ? heldReason : serverOpen ? `Back to ${target.name}` : 'Server: access and logs';
   const tabStyle = (on: boolean, disabled: boolean): CSSProperties => ({
     display: 'flex', alignItems: 'center', gap: 6,
     padding: '0 11px', fontSize: 12, border: 'none', borderRadius: 0, background: 'none',
@@ -329,8 +329,9 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
 
         {/* One control, one anchor: the gear opens the server pages, and the
             same button in the same pixel takes you back from them. While they
-            show it is LIT, with the rail toggle's treatment; the lit state is
-            the indicator, so the glyph never changes. No red dot: the gear is
+            show it is LIT: the glyph takes the accent the open tab's underline
+            carries, with no fill behind it (a filled square read as a stray
+            background). The glyph's shape never changes. No red dot: the gear is
             server-only, and a failing remote is a fact about a target — its
             dot is on the Settings tab. */}
         {(gear || serverOpen) && <button
@@ -346,13 +347,13 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
             width: 26, height: 26, flexShrink: 0, alignSelf: 'center',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             border: 'none', borderRadius: 4, padding: 0,
-            color: held ? '#3d3d3d' : serverOpen ? '#dfe9e2' : '#666',
-            background: serverOpen ? '#1a231d' : 'transparent',
+            color: held ? '#3d3d3d' : serverOpen ? '#7c9' : '#666',
+            background: 'transparent',
             cursor: held ? 'default' : 'pointer',
             ...noDrag,
           }}
           onMouseEnter={e => { if (!held && !serverOpen) e.currentTarget.style.color = '#aaa'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = held ? '#3d3d3d' : serverOpen ? '#dfe9e2' : '#666'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = held ? '#3d3d3d' : serverOpen ? '#7c9' : '#666'; }}
         >
           <GearIcon color="currentColor" size={15} />
         </button>}

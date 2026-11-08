@@ -1185,7 +1185,7 @@ export default function App() {
 
   // The server pages, behind the gear. They show OVER the displayed target,
   // which stays exactly as it was, so the gear again (or any rail pick) is the
-  // way back to it. Which pages exist: Logs and Access, never on a read-only
+  // way back to it. Which pages exist: Access and Logs, never on a read-only
   // server. Access's Authorizations tab only with an OAuth issuer, probed
   // while the pages are open (useOAuthAvailability); a tab that is gone falls
   // back to Secrets.

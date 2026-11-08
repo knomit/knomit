@@ -1,4 +1,5 @@
 import type { SecretType, SecretView } from './api';
+import { fmtDate, relDays, type Tone } from './accessUtil';
 import { isHTTPURL, isSSHURL } from './originAuth';
 
 // Stored-secret rules the UI applies before the server does, spelled as the
@@ -103,3 +104,21 @@ export function pastedBody(p: PastedCredential): { auth_method: string; token?: 
   if (p.auth_method === 'basic') return { auth_method: 'basic', user: p.user, password: p.password };
   return { auth_method: 'ssh' };
 }
+
+// ─── Access → Secrets ──────────────────────────────────────────────────────
+
+export const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** expiryBadge: the status as the reader judges it. Expiry is advisory (sync
+ *  keeps using a lapsed secret), so the badge says what the date says. The
+ *  list's short form shows only what needs attention. */
+export function expiryBadge(s: Pick<SecretView, 'status' | 'expires_at'>, long = false): { tone: Tone; text: string; title: string } | null {
+  if (s.status === 'expired' && s.expires_at) return { tone: 'bad', text: long ? `expired ${relDays(s.expires_at)}` : 'expired', title: `Expired on ${fmtDate(s.expires_at)}. Sync keeps using it until you replace it.` };
+  if (s.status === 'expiring' && s.expires_at) return { tone: 'warn', text: long ? `expires ${relDays(s.expires_at)}` : relDays(s.expires_at).replace(/^in /, ''), title: `Expires on ${fmtDate(s.expires_at)}.` };
+  if (!long) return null;
+  if (s.status === 'ok' && s.expires_at) return { tone: 'ok', text: 'active', title: `Expires on ${fmtDate(s.expires_at)}.` };
+  return { tone: 'ok', text: 'active', title: 'No expiry date is set.' };
+}
+
+/** The list's draft row, while a secret is being added. */
+export const NEW_SECRET = 'new';

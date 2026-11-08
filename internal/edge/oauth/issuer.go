@@ -384,6 +384,16 @@ var subjectRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}$`)
 // Pending lists the requests waiting for a decision.
 func (i *Issuer) Pending(ctx context.Context) ([]Pending, error) { return i.store.ListPending(ctx) }
 
+// Logins lists the approved logins that can still be used.
+func (i *Issuer) Logins(ctx context.Context) ([]Login, error) { return i.store.ListLogins(ctx) }
+
+// RevokeLogin signs one approved login out on behalf of by: its family is
+// revoked, so its access and refresh tokens stop working at once, and by is
+// recorded as the revoker (ErrUnknownFamily for an unknown id).
+func (i *Issuer) RevokeLogin(ctx context.Context, id, by string) (Revocation, error) {
+	return i.store.RevokeFamily(ctx, id, by)
+}
+
 // Approve decides a request in favour of subject. The ceiling is scopes when
 // given (any supported permission name, never admin), else the requested
 // scopes ∩ {read, write}, else read.

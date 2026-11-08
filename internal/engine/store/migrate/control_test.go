@@ -114,6 +114,11 @@ var controlObjects = []string{
 	"oauth_families",
 	"oauth_codes", "oauth_codes_family",
 	"oauth_tokens", "oauth_tokens_family",
+	// oauth_family_clients has no index: it is read by its family_id primary
+	// key, through a correlated subquery from oauth_families.
+	"oauth_family_clients",
+	// oauth_family_revocations likewise: read by its family_id primary key.
+	"oauth_family_revocations",
 	// repo_archive_reasons has no index: it is read by its uid primary key,
 	// and listed through a LEFT JOIN from repos.
 	"repo_archive_reasons",

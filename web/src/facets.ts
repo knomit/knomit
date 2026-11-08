@@ -325,10 +325,10 @@ export function viewReducer(s: ViewState, a: ViewAction): ViewState {
       return { ...landed, facet: 'settings', lastFacet: s.lastFacet ?? s.facet };
     }
     case 'TOGGLE_SERVER':
-      // Opening lands on Logs, the first page. Closing changes nothing else:
+      // Opening lands on Access, the first page. Closing changes nothing else:
       // the target and its facet were never left. (App offers no gear when
       // serverPagesFor gives no page.)
-      return { ...s, server: s.server === null ? 'logs' : null };
+      return { ...s, server: s.server === null ? 'access' : null };
     case 'SET_SERVER_PAGE':
       return s.server === a.page ? s : { ...s, server: a.page };
     case 'SET_FOCUS':
@@ -343,14 +343,14 @@ export function viewReducer(s: ViewState, a: ViewAction): ViewState {
 }
 
 /**
- * serverPagesFor: the server tabs, in order: Logs, then Access (stored
- * secrets, and Authorizations when there is an OAuth issuer: accessTabsFor).
+ * serverPagesFor: the server tabs, in order: Access (stored secrets, and
+ * Authorizations when there is an OAuth issuer: accessTabsFor), then Logs.
  * The fleet is not here: it is a target in the rail. Both are OMITTED on a
  * read-only server, whose endpoints refuse every write, so a tab would be a
  * control that cannot work; with no page at all there is no gear.
  */
 export function serverPagesFor(serverReadOnly: boolean): ServerPage[] {
-  return serverReadOnly ? [] : ['logs', 'access'];
+  return serverReadOnly ? [] : ['access', 'logs'];
 }
 
 /** A tab of the Access server page. */
