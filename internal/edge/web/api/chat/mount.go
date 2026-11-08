@@ -67,6 +67,9 @@ type manager struct {
 	// with a scripted model (after the real registry has judged the request).
 	openModel func(ctx context.Context, provider, model string) (llm.ChatModel, error)
 	price     func(provider, model string) *llm.PriceCard
+	// titleStream sends a chat's auto-title request (title.go): the chat's own
+	// model by default. Nil turns auto-title off; tests replace it.
+	titleStream titleStreamer
 
 	mu     sync.Mutex
 	chats  map[string]*chat
@@ -115,7 +118,7 @@ func (m *manager) expectedFirstTokenMS(provider, model string) int64 {
 func newManager(ctx context.Context, srv *mcpserver.MCPServer, rm *repos.Manager, reg *llm.Registry, emb model.Embedder, sessionsDir, logDir string, released *sync.WaitGroup) *manager {
 	m := &manager{
 		life: ctx, srv: srv, rm: rm, reg: reg, emb: emb, base: sessionsDir, logDir: logDir,
-		chats: map[string]*chat{},
+		chats: map[string]*chat{}, titleStream: defaultTitleStream,
 	}
 	if reg != nil {
 		m.openModel = reg.Open

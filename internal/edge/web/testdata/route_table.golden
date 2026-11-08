@@ -134,6 +134,7 @@ OPTIONS /mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMid
 OPTIONS /mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > sessionBindingMiddleware | handlerFunc.ServeHTTP-fm
 OPTIONS /repos/{repo}/branches/{branch}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > scopedMountMiddleware | handlerFunc.ServeHTTP-fm
 OPTIONS /repos/{repo}/branches/{branch}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > fleetRepoRefused > repoMiddleware > branchMiddleware > scopedMountMiddleware | handlerFunc.ServeHTTP-fm
+PATCH /chats/{id} | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | mux
 PATCH /lenses/{lens}/ | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate | handleHALLensPatch
 PATCH /lenses/{lens}/experiments/{name}/mcp | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware | handlerFunc.ServeHTTP-fm
 PATCH /lenses/{lens}/experiments/{name}/mcp/* | requestID > recoverer > reportPanic > authMiddleware > metricsMiddleware > (*Compressor).Handler-fm > writeGate > lensExperimentMiddleware | handlerFunc.ServeHTTP-fm

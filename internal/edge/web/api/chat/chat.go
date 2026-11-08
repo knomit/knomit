@@ -239,7 +239,9 @@ type chat struct {
 	// only while that turn is the latest and no newer turn runs (see sendLocked).
 	missedTurn int
 	lastState  []byte    // the last chat_state frame body sent, to send only changes
-	title      string    // the first message, cut (see titleOf); empty until the first turn
+	title      string    // the first message, cut (see titleOf); empty until the first turn; then the auto title or the person's (title.go)
+	userTitled bool      // the person renamed the chat: auto-title never touches it again
+	titleTried bool      // the auto-title call was made (once per chat, no retry)
 	startedAt  time.Time // when the chat was made
 	lastActive time.Time // the last turn start or row change
 	// afterGraceStep is a test seam: graceFired calls it after clearing the
@@ -735,6 +737,8 @@ func (c *chat) finishTurn(ctx context.Context, res *llm.TurnResult, err error) {
 		hook()
 	}
 	if err == nil {
+		// The first completed turn names the chat (title.go); once per chat.
+		c.maybeAutoTitle(turn)
 		c.emitEnd("turn_done", map[string]any{
 			"turn": turn, "stop_reason": res.StopReason, "requests": res.Requests, "tool_calls": res.ToolCalls,
 			"usage": usageView(res.Usage), "cost_usd": res.Cost.USD,

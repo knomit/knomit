@@ -29,6 +29,7 @@ func (m *manager) routes(r chi.Router) {
 	r.Post("/chats", m.handleCreate)
 	r.Get("/chats/{id}", m.handleGet)
 	r.Delete("/chats/{id}", m.handleDelete)
+	r.Patch("/chats/{id}", m.handleRename)
 	r.Post("/chats/{id}/turns", m.handleTurn)
 	r.Post("/chats/{id}/cancel", m.handleCancel)
 	r.Post("/chats/{id}/approvals/{callId}", m.handleApproval)
@@ -331,6 +332,38 @@ func (m *manager) handleGet(w http.ResponseWriter, r *http.Request) {
 	c.mu.Unlock()
 	v.Grants = c.grantList()
 	hal.WriteHAL(w, http.StatusOK, v)
+}
+
+// renameRequest is PATCH /chats/{id}: the chat's new title.
+type renameRequest struct {
+	Title *string `json:"title"`
+}
+
+// handleRename renames a chat: its title becomes the person's, and auto-title
+// never touches it again. The answer is the chat's row; the change also goes out
+// as chat_state. An empty or whitespace-only title is a 400.
+func (m *manager) handleRename(w http.ResponseWriter, r *http.Request) {
+	c, ok := m.chatOf(w, r)
+	if !ok {
+		return
+	}
+	var req renameRequest
+	if !httpx.DecodeJSON(w, r, &req, 1<<16) {
+		return
+	}
+	if req.Title == nil {
+		hal.WriteProblem(w, http.StatusBadRequest, "Invalid request", "title is required", r.URL.Path)
+		return
+	}
+	switch _, err := c.setUserTitle(*req.Title); {
+	case errors.Is(err, errBadTitle):
+		hal.WriteProblem(w, http.StatusBadRequest, "Invalid request", "title must not be empty", r.URL.Path)
+		return
+	case err != nil:
+		hal.WriteProblem(w, http.StatusNotFound, "Not Found", "no such chat", r.URL.Path)
+		return
+	}
+	hal.WriteHAL(w, http.StatusOK, listItemOf(c))
 }
 
 func (m *manager) handleDelete(w http.ResponseWriter, r *http.Request) {

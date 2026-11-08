@@ -4367,6 +4367,32 @@ paths:
       responses:
         "204": { description: Ended }
         "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      tags: [chat]
+      summary: Rename a chat
+      description: |
+        Sets the chat's title to `title`, with its whitespace collapsed and cut
+        as a first-message title is (300 characters). The chat is then
+        user-titled: the automatic title, which the chat's own model writes
+        once after the first completed turn, never replaces it, even when
+        that request is already running. The answer is the chat's row as
+        `GET /chats` lists it; the change also goes out as `chat_state`. An
+        empty, blank or missing `title` is 400; another principal's chat is
+        404.
+      operationId: renameChat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+      responses:
+        "200": { description: The renamed chat's row }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
 
   /chats/events:
     get:
@@ -4387,7 +4413,9 @@ paths:
         the same values `GET /chats/{id}` lists; `title`, `key_arg`, `target` and `in_base` as
         `GET /chats/{id}` describes them), `approval`,
         `usage` (one request's `usage`, `cost_usd` and `cost_rows`; the two cost
-        fields are absent without a price card), `warning`, `turn_done`, `turn_error`, `chat_state` (the
+        fields are absent without a price card; `side: true` marks the chat's
+        own side request, the auto-title, whose cost is added to the turn it
+        followed but whose prompt is not the conversation's), `warning`, `turn_done`, `turn_error`, `chat_state` (the
         chat's rail row changed: `title`, `state` idle, running,
         awaiting_approval or error, `turns`, `cost_usd`, `last_activity`,
         `started_at`; the same row `GET /chats` lists) and `chat_end`. A chat ends 60 seconds
