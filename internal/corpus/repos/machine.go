@@ -262,20 +262,20 @@ func (m *Machine) Send(ctx context.Context, e MachineEvent) (Reply, error) {
 		st := sn.Status
 		switch {
 		case sn.terminal == termClosed:
-			return Reply{Status: st}, ErrClosed
+			return Reply{Status: st}, Refused(ErrClosed)
 		case sn.terminal == termUnavailable && e.kind != evMount:
-			return Reply{Status: st}, unavailableErr(st.Err)
+			return Reply{Status: st}, Refused(unavailableErr(st.Err))
 		case e.kind != evMount && !sn.open:
 			if st.Stage == "populate" {
-				return Reply{Status: st}, errNotOpenPopulating
+				return Reply{Status: st}, Refused(errNotOpenPopulating)
 			}
-			return Reply{Status: st}, ErrNotOpen
+			return Reply{Status: st}, Refused(ErrNotOpen)
 		}
 		if err := e.standingRefusal(m.r.lifeFacts()); err != nil {
-			return Reply{Status: st}, err
+			return Reply{Status: st}, Refused(err)
 		}
 		if e.exclusiveWithIndex() && st.IndexRunning {
-			return Reply{Status: st}, ErrIndexing
+			return Reply{Status: st}, Refused(ErrIndexing)
 		}
 	}
 	e.reply = make(chan reply, 1)
@@ -356,7 +356,7 @@ func (m *Machine) handleExternal(e *MachineEvent) bool {
 		e.reply <- reply{Reply: rep, err: err}
 	}
 	if m.term == termClosed {
-		answer(Reply{}, ErrClosed)
+		answer(Reply{}, Refused(ErrClosed))
 		return false
 	}
 	if e.kind == evUnmount {
@@ -365,19 +365,19 @@ func (m *Machine) handleExternal(e *MachineEvent) bool {
 		return true
 	}
 	if m.term == termUnavailable && e.kind != evMount {
-		answer(Reply{}, unavailableErr(m.termErr))
+		answer(Reply{}, Refused(unavailableErr(m.termErr)))
 		return false
 	}
 	if e.kind != evMount && m.lives[StageOpen] == nil {
-		answer(Reply{}, ErrNotOpen)
+		answer(Reply{}, Refused(ErrNotOpen))
 		return false
 	}
 	if err := e.standingRefusal(m.r.lifeFacts()); err != nil {
-		answer(Reply{}, err)
+		answer(Reply{}, Refused(err))
 		return false
 	}
 	if e.exclusiveWithIndex() && m.indexRunning() {
-		answer(Reply{}, ErrIndexing)
+		answer(Reply{}, Refused(ErrIndexing))
 		return false
 	}
 	switch e.kind {
@@ -397,7 +397,7 @@ func (m *Machine) handleExternal(e *MachineEvent) bool {
 	err := e.guard(gctx, m.r)
 	cancel()
 	if err != nil {
-		answer(Reply{}, err)
+		answer(Reply{}, Refused(err))
 		return false
 	}
 

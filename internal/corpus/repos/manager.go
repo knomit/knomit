@@ -920,14 +920,14 @@ func (m *Manager) Send(ctx context.Context, ri *RepoInstance, e MachineEvent) (R
 	case evAttachOrigin:
 		o, err := m.ResolveOrigin(ctx, e.origin)
 		if err != nil {
-			return Reply{}, err
+			return Reply{}, Refused(err)
 		}
 		e.origin = o
 	case evSwapStore:
 		if e.swap.Origin.URL != "" {
 			o, err := m.ResolveOrigin(ctx, e.swap.Origin)
 			if err != nil {
-				return Reply{}, err
+				return Reply{}, Refused(err)
 			}
 			e.swap.Origin = o
 		}
