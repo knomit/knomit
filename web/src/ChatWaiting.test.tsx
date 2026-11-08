@@ -60,6 +60,10 @@ afterEach(() => { vi.useRealTimers(); cleanup(); uninstallFakeEventSource(); vi.
 const type = (text: string) => fireEvent.change(screen.getByTestId('chat-input'), { target: { value: text } });
 const composer = () => screen.getByTestId('chat-input') as HTMLTextAreaElement;
 const send = (text: string) => { type(text); fireEvent.click(screen.getByTestId('chat-send')); };
+// findBy/waitFor resolve at the DOM commit, BEFORE its passive effects run. ChatPanel
+// registers its window Esc listener (and points stopRef at the current stop) in such an
+// effect, so an Esc fired straight after findBy can land before the chat listens. Flush first.
+const settled = () => act(async () => {});
 
 describe('Sending: the POST has not been answered', () => {
   it('draws the strip at 60% with a dashed rule and the #161718 ground, says Sending…, and offers Stop, not Cancel', async () => {
@@ -170,6 +174,7 @@ describe('Stop', () => {
   it('Esc anywhere in the chat stops a running turn: the body, and the composer', async () => {
     const { calls } = mount(snap([{ kind: 'user', text: 'q' }], { running: true }));
     await screen.findByTestId('chat-stop');
+    await settled();
     fireEvent.keyDown(document.body, { key: 'Escape' });
     await waitFor(() => expect(calls('/cancel')).toHaveLength(1));
     expect(calls('/cancel')[0].body).toBeUndefined();
@@ -180,6 +185,7 @@ describe('Stop', () => {
   it('Esc typed in the composer stops it too', async () => {
     const { calls } = mount(snap([{ kind: 'user', text: 'q' }], { running: true }));
     await screen.findByTestId('chat-stop');
+    await settled();
     fireEvent.keyDown(screen.getByTestId('chat-input'), { key: 'Escape' });
     await waitFor(() => expect(calls('/cancel')).toHaveLength(1));
   });
