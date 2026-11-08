@@ -14,9 +14,10 @@ import (
 	"knomit/internal/corpus/repos/events"
 )
 
-// The job routes read the repo's TaskHub and nothing else. These fixtures run
-// REAL hub tasks: a rebuild-op task that finished (rebuild-1) and one held
-// running (rebuild-2) until the test releases it. A hub keeps an op's running
+// The job routes read the repo's TaskHub and nothing else. These fixtures
+// record tasks through the hub's publisher, as the lifecycle machine does: a
+// rebuild-op task that finished (rebuild-1) and one held running (rebuild-2)
+// until the test releases it. A hub keeps an op's running
 // task and its last terminal one, so these are all it can hold of the op: two
 // states and ids that differ, so a route answering the wrong job or an
 // invented one fails.
@@ -59,62 +60,24 @@ func newJobsFixture(t *testing.T) jobsFixture {
 		Name: "beta", AgentBranch: "agent/test", Hub: testHub(),
 	}))
 
-	f := jobsFixture{r: (&Server{Manager: m}).NewAPIRouter(), hub: hub}
-	f.done = runToEnd(t, hub, "rebuild", events.TaskEvent{Status: "done", Message: "rebuild complete"})
+	f := jobsFixture{r: (&Server{Manager: m}).NewAPIRouter(), hub: hub, done: "rebuild-1", running: "rebuild-2"}
+	pub.PublishTask(events.TaskEvent{Op: "rebuild", ID: f.done, Status: "running", Phase: "start", Message: "rebuild starting"})
+	pub.PublishTask(events.TaskEvent{Op: "rebuild", ID: f.done, Status: "done", Message: "rebuild complete"})
+	pub.PublishTask(events.TaskEvent{Op: "rebuild", ID: f.running, Status: "running", Phase: "start", Message: "rebuild starting"})
 
-	gate := make(chan struct{})
-	failWith := make(chan string, 1)
-	started := make(chan struct{})
-	id, err := hub.Start("rebuild", func(ctx context.Context, emit func(events.TaskEvent)) {
-		emit(events.TaskEvent{Status: "running", Phase: "start", Message: "rebuild starting"})
-		close(started)
-		select {
-		case <-gate:
-			emit(events.TaskEvent{Status: "done", Message: "rebuild complete"})
-		case msg := <-failWith:
-			emit(events.TaskEvent{Status: "error", Message: msg})
-		case <-ctx.Done():
-			emit(events.TaskEvent{Status: "error", Message: ctx.Err().Error()})
+	var ended bool
+	end := func(ev events.TaskEvent) {
+		if !ended {
+			ended = true
+			pub.PublishTask(ev)
 		}
-	})
-	if err != nil {
-		t.Fatalf("start held rebuild: %v", err)
 	}
-	<-started
-	f.running = id
-	var once bool
 	f.release = func() {
-		if !once {
-			once = true
-			close(gate)
-		}
+		end(events.TaskEvent{Op: "rebuild", ID: f.running, Status: "done", Message: "rebuild complete"})
 	}
-	f.fail = func(msg string) { failWith <- msg }
+	f.fail = func(msg string) { end(events.TaskEvent{Op: "rebuild", ID: f.running, Status: "error", Message: msg}) }
 	t.Cleanup(f.release)
-	if f.done == f.running {
-		t.Fatalf("fixture ids collide: %s %s", f.done, f.running)
-	}
 	return f
-}
-
-// runToEnd runs one hub task of op that emits final at once, and waits until
-// the hub records it as op's last terminal task.
-func runToEnd(t *testing.T, hub *events.TaskHub, op string, final events.TaskEvent) string {
-	t.Helper()
-	id, err := hub.Start(op, func(_ context.Context, emit func(events.TaskEvent)) { emit(final) })
-	if err != nil {
-		t.Fatalf("start %s: %v", op, err)
-	}
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		if ev, ok := hub.Task(id); ok && ev.Status == final.Status {
-			return id
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("task %s never reached %s", id, final.Status)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
 }
 
 func (f jobsFixture) do(t *testing.T, method, path string) *httptest.ResponseRecorder {

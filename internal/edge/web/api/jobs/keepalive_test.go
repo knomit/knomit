@@ -83,21 +83,8 @@ func TestJobs_EventsKeepaliveOnAnIdleStream(t *testing.T) {
 		Name: "alpha", AgentBranch: "agent/test", Hub: hub,
 	}))
 
-	gate := make(chan struct{})
-	started := make(chan struct{})
-	id, err := hub.Start("rebuild", func(ctx context.Context, emit func(events.TaskEvent)) {
-		emit(events.TaskEvent{Status: "running", Phase: "start", Message: "rebuild starting"})
-		close(started)
-		select {
-		case <-gate:
-		case <-ctx.Done():
-		}
-	})
-	if err != nil {
-		t.Fatalf("start held rebuild: %v", err)
-	}
-	<-started
-	t.Cleanup(func() { close(gate) })
+	const id = "rebuild-1"
+	pub.PublishTask(events.TaskEvent{Op: "rebuild", ID: id, Status: "running", Phase: "start", Message: "rebuild starting"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rec := &streamRecorder{ResponseRecorder: httptest.NewRecorder()}

@@ -181,8 +181,8 @@ var jobEventsKeepalive = 30 * time.Second
 // handleJobEvents serves GET .../index-rebuilds/{id}/events.
 //
 // It subscribes FIRST and only then reads the job from the hub. The hub
-// records a terminal before it publishes it (TaskHub.Start's emit and
-// publishTask), so the read either already sees the terminal — the frame is
+// records a terminal before it publishes it (TaskPublisher.PublishTask), so
+// the read either already sees the terminal — the frame is
 // written and the stream ends — or sees the job running, and then the
 // terminal is published after the subscription and arrives on it. One
 // mechanism, no window. An id the hub does not hold is 404 before any stream

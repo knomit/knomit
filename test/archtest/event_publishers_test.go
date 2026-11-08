@@ -12,8 +12,8 @@ import (
 )
 
 // The repo event hubs are split: events.TaskHub and events.RepoEventHub let a
-// consumer subscribe, read and start tasks, and nothing else; the methods that
-// announce (BroadcastIndex, PublishTask, CancelTasks, RepoEventPublisher.Publish,
+// consumer subscribe and read, and nothing else; the methods that
+// announce (BroadcastIndex, PublishTask, RepoEventPublisher.Publish,
 // ...) live only on events.TaskPublisher and events.RepoEventPublisher, which
 // the owner (the repos Manager and RepoInstance) keeps in unexported fields.
 // That is what keeps invariant "IndexEvents are published only by

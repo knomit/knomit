@@ -54,19 +54,19 @@ func waitReturn(done <-chan struct{}) bool {
 	}
 }
 
-func branchEventsServer(t *testing.T) (*Server, *events.TaskHub) {
+func branchEventsServer(t *testing.T) (*Server, *events.TaskPublisher) {
 	t.Helper()
-	hub, _ := events.NewTaskHub(context.Background())
+	hub, pub := events.NewTaskHub(context.Background())
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "alpha", Hub: hub})
 	m := newTestManagerWithRepos(t)
 	m.Set("alpha", ri)
-	return &Server{Manager: m}, hub
+	return &Server{Manager: m}, pub
 }
 
 // The branch stream is the one every browser tab holds open, so it is the most
 // exposed of the lot.
 func TestBranchEvents_BoundsItsWrites(t *testing.T) {
-	s, hub := branchEventsServer(t)
+	s, pub := branchEventsServer(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -87,11 +87,7 @@ func TestBranchEvents_BoundsItsWrites(t *testing.T) {
 	}
 
 	rec.failWrites(errors.New("connection reset by peer"))
-	if _, err := hub.Start("synth", func(ctx context.Context, emit func(events.TaskEvent)) {
-		emit(events.TaskEvent{Status: "done"})
-	}); err != nil {
-		t.Fatal(err)
-	}
+	pub.PublishTask(events.TaskEvent{Op: "synth", ID: "synth-1", Status: "done"})
 
 	if !waitReturn(done) {
 		t.Fatal("handler kept running after a failed write — it will spin on a dead connection at full event rate")
@@ -101,25 +97,13 @@ func TestBranchEvents_BoundsItsWrites(t *testing.T) {
 // The jobs stream replays matching snapshot events and then follows the hub,
 // returning on the job's terminal event. The bound must not disturb that.
 func TestJobEvents_BoundsItsWrites(t *testing.T) {
-	s, hub := branchEventsServer(t)
+	s, pub := branchEventsServer(t)
 	// The watched job emits once, waits, then emits again — the second emit is
 	// what must find the dead socket. Emitting on a DIFFERENT job would prove
 	// nothing: this handler filters by job id, so it would never attempt a
 	// write at all.
-	fire := make(chan struct{})
-	id, err := hub.Start("rebuild", func(ctx context.Context, emit func(events.TaskEvent)) {
-		emit(events.TaskEvent{Status: "running"})
-		select {
-		case <-fire:
-			emit(events.TaskEvent{Status: "running", Message: "after the break"})
-		case <-ctx.Done():
-			return
-		}
-		<-ctx.Done()
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	const id = "rebuild-1"
+	pub.PublishTask(events.TaskEvent{Op: "rebuild", ID: id, Status: "running"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -140,7 +124,7 @@ func TestJobEvents_BoundsItsWrites(t *testing.T) {
 	}
 
 	rec.failWrites(errors.New("connection reset by peer"))
-	close(fire)
+	pub.PublishTask(events.TaskEvent{Op: "rebuild", ID: id, Status: "running", Message: "after the break"})
 
 	// The job's own terminal event is what this handler returns on normally;
 	// a dead socket must end it too, and sooner.
@@ -154,7 +138,7 @@ func TestJobEvents_BoundsItsWrites(t *testing.T) {
 // reaches the connection only through Unwrap — so a wrapper that stops
 // unwrapping would turn "refuse to start" into a silently dead endpoint.
 func TestBranchEvents_WorksThroughTheRealMiddlewareChain(t *testing.T) {
-	s, hub := branchEventsServer(t)
+	s, pub := branchEventsServer(t)
 	srv := httptest.NewServer(s.NewAPIRouter())
 	defer srv.Close()
 
@@ -198,11 +182,7 @@ func TestBranchEvents_WorksThroughTheRealMiddlewareChain(t *testing.T) {
 	}
 
 	want("the initial status frame", func(l string) bool { return l == "event: status" })
-	if _, err := hub.Start("synth", func(ctx context.Context, emit func(events.TaskEvent)) {
-		emit(events.TaskEvent{Status: "running", Message: "through the chain"})
-	}); err != nil {
-		t.Fatal(err)
-	}
+	pub.PublishTask(events.TaskEvent{Op: "synth", ID: "synth-1", Status: "running", Message: "through the chain"})
 	want("a live task frame", func(l string) bool { return strings.Contains(l, "through the chain") })
 }
 
