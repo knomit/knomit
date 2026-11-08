@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   WailsEventSource, WAILS_SSE_STREAM, openEventStream, streamErrorSuffix,
   RECONNECT_INITIAL_MS, RECONNECT_MAX_MS, EVENT_TRANSPORT_FLAG, WAILS_STREAM_TRANSPORT,
+  STALE_STREAM_MS,
 } from './eventStream';
 import type { WailsSocketLike } from './eventStream';
 
@@ -207,6 +208,61 @@ describe('WailsEventSource', () => {
     expect(socks).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(RECONNECT_INITIAL_MS);
     expect(socks).toHaveLength(1);
+  });
+
+  // The user-visible failure this guards: Wails reaped the page's stream session
+  // while the window was not polling, so the desktop dropped the chat page
+  // stream but the page's socket never closed. Every chat started afterwards got
+  // no event and was ended by the server's 60 s stream grace.
+  it('reopens a socket that carries no frame for STALE_STREAM_MS, with no close and no error from Wails', async () => {
+    vi.useFakeTimers();
+    const { es, socks, sock } = await make();
+    const seen: string[] = [];
+    es.onerror = () => seen.push(`error:${es.readyState}`);
+    sock().onopen?.({});
+    sock().push({ t: 'open' });
+    sock().push({ t: 'event', event: 'index', data: 'x', id: '9' });
+    const dead = sock();
+    // Silence: no frame, no onclose. Not reopened before the limit...
+    await vi.advanceTimersByTimeAsync(STALE_STREAM_MS - 1000);
+    expect(socks).toHaveLength(1);
+    expect(dead.closed).toBe(0);
+    // ...and reopened once it has passed, the dead socket closed, the caller told.
+    await vi.advanceTimersByTimeAsync(STALE_STREAM_MS / 9 + 1000 + RECONNECT_INITIAL_MS);
+    expect(dead.closed).toBe(1);
+    expect(seen).toEqual(['error:0']);
+    expect(socks).toHaveLength(2);
+    sock().onopen?.({});
+    expect(sock().sent).toEqual([JSON.stringify({ path: '/api/v1/repo-events?x=1', last_event_id: '9' })]);
+    sock().push({ t: 'open' });
+    expect(es.readyState).toBe(1);
+    // A frame on the dead socket after it was replaced changes nothing.
+    dead.push({ t: 'event', event: 'index', data: 'late' });
+    expect(es.readyState).toBe(1);
+  });
+
+  it('keeps a quiet stream that the desktop pings, however long nothing happens', async () => {
+    vi.useFakeTimers();
+    const { es, socks, sock } = await make();
+    let errors = 0;
+    es.onerror = () => { errors += 1; };
+    sock().push({ t: 'open' });
+    for (let i = 0; i < 20; i++) { // five minutes of pings every 15 s
+      await vi.advanceTimersByTimeAsync(15_000);
+      sock().push({ t: 'ping' });
+    }
+    expect(socks).toHaveLength(1);
+    expect(errors).toBe(0);
+    expect(es.readyState).toBe(1);
+  });
+
+  it('close() stops the stale watchdog', async () => {
+    vi.useFakeTimers();
+    const { es, socks } = await make();
+    es.close();
+    await vi.advanceTimersByTimeAsync(STALE_STREAM_MS * 3);
+    expect(socks).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('drops a malformed frame instead of throwing', async () => {

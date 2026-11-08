@@ -39,6 +39,17 @@ import (
 // connect wizard's apply and commit events too), a handful at a time.
 const sseStreamName = "knomit-sse"
 
+// ssePingInterval is how often the desktop tells the page a stream is still
+// held, whatever its upstream leg is doing. The page reopens a stream that has
+// carried no frame for several intervals (STALE_STREAM_MS in
+// web/src/eventStream.ts) because it cannot rely on onclose: Wails v3.0.0 reaps
+// a stream session that has not polled for streamSessionGrace (10 min), which
+// ends every handler here without a close frame reaching the page, and the
+// page's next poll recreates the session empty. The page's socket then stays
+// open with nothing behind it, and every chat the page starts ends on the
+// server's stream grace. A package variable so tests can shorten it.
+var ssePingInterval = 15 * time.Second
+
 // subscribeTimeout is how long a freshly opened stream may stay silent before
 // its first frame (the subscribe request) arrives.
 const subscribeTimeout = 10 * time.Second
@@ -54,6 +65,8 @@ type sseSubscribe struct {
 //
 //	open   the upstream answered 200: EventSource's open
 //	event  one dispatched SSE event
+//	ping   the desktop still holds this stream (every ssePingInterval; dropped,
+//	       not queued, while the page is not draining)
 //	error  the upstream leg failed. Closed false: the desktop is retrying
 //	       (EventSource's CONNECTING-with-error). Closed true: the desktop gave
 //	       up; Status carries the HTTP status when the server answered one.
@@ -71,6 +84,8 @@ type sseFrame struct {
 type streamConn interface {
 	Context() context.Context
 	Send(data []byte) error
+	// TrySend is Send that reports a full queue instead of waiting for room.
+	TrySend(data []byte) error
 	ReceiveJSON(v any) error
 	Close() error
 }
@@ -153,6 +168,7 @@ func serveSSEStream(c streamConn, open sseOpener, bo sseBackoff) {
 	lastID := sub.LastEventID
 	delay := bo.initial
 	log.Debug().Str("path", sub.Path).Msg("desktop sse stream: opened")
+	go pingStream(c)
 	defer func() { log.Debug().Str("path", sub.Path).Err(ctx.Err()).Msg("desktop sse stream: ended") }()
 	for ctx.Err() == nil {
 		resp, err := open(ctx, sub.Path, lastID)
@@ -195,6 +211,24 @@ func serveSSEStream(c streamConn, open sseOpener, bo sseBackoff) {
 			if delay > bo.max {
 				delay = bo.max
 			}
+		}
+	}
+}
+
+// pingStream sends a ping frame every ssePingInterval until the stream's context
+// ends (the page closed it, Wails closed it, or serveSSEStream returned and
+// closed it). TrySend, never Send: a ping is not queued behind the backlog of a
+// page that is not draining, and it never blocks.
+func pingStream(c streamConn) {
+	b, _ := json.Marshal(sseFrame{T: "ping"})
+	t := time.NewTicker(ssePingInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-c.Context().Done():
+			return
+		case <-t.C:
+			_ = c.TrySend(b)
 		}
 	}
 }

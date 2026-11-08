@@ -73,6 +73,7 @@ export type WailsStreamFactory = (name: string) => WailsSocketLike;
 export type DesktopFrame =
   | { t: 'event'; event?: string; data: string; id?: string }
   | { t: 'open' }
+  | { t: 'ping' }
   | { t: 'error'; closed?: boolean; status?: number };
 
 const CONNECTING = 0;
@@ -82,6 +83,19 @@ const CLOSED = 2;
 /** Reconnect schedule for the page-side leg: bounded, like EventSource's retry. */
 export const RECONNECT_INITIAL_MS = 500;
 export const RECONNECT_MAX_MS = 5000;
+
+/**
+ * A stream that has carried no frame for this long is treated as gone and
+ * reopened. The desktop pings every stream it holds every 15 s
+ * (ssePingInterval in tools/desktop/uistreams.go), so this is three missed
+ * pings. Needed because onclose is not reliable here: Wails reaps a stream
+ * session whose page has not polled for 10 minutes (a hidden or suspended
+ * window), ends its streams on the Go side without a close reaching the page,
+ * and the page's next poll quietly gets a new, empty session. Without this the
+ * page keeps a stream that is open with nothing behind it until reload, and
+ * every chat it starts sees no event and is ended by the server's stream grace.
+ */
+export const STALE_STREAM_MS = 45_000;
 
 type Listener = (e: MessageEvent) => void;
 
@@ -93,7 +107,10 @@ type Listener = (e: MessageEvent) => void;
  *  - the desktop's leg to the server: the desktop retries and says so with an
  *    `error` frame (readyState CONNECTING), then `open` when it is back;
  *  - the Wails stream itself ending unexpectedly: the page reopens it after a
- *    bounded backoff, resuming with the last event id.
+ *    bounded backoff, resuming with the last event id;
+ *  - the Wails stream dying with NO close reaching the page (a reaped session):
+ *    a socket that carries no frame, not even the desktop's ping, for
+ *    STALE_STREAM_MS is dropped and reopened the same way.
  * A refusal by the server (4xx/5xx) is final, as it is for EventSource: the
  * `error` event carries the status and readyState is CLOSED.
  */
@@ -111,6 +128,9 @@ export class WailsEventSource implements EventSourceLike {
   private path: string;
   private backoff = RECONNECT_INITIAL_MS;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** When the current socket was opened or last carried a frame. */
+  private lastFrameAt = 0;
+  private watchdog: ReturnType<typeof setInterval> | null = null;
   private loadStream: () => Promise<WailsStreamFactory>;
 
   /**
@@ -144,7 +164,18 @@ export class WailsEventSource implements EventSourceLike {
     this.listeners.clear();
     this.onopen = this.onmessage = this.onerror = null;
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    if (this.watchdog) { clearInterval(this.watchdog); this.watchdog = null; }
     this.dropSocket();
+  }
+
+  /** Reopen a socket that has carried nothing for STALE_STREAM_MS: see there. */
+  private checkStale(): void {
+    if (this.readyState === CLOSED || !this.sock) return;
+    if (Date.now() - this.lastFrameAt < STALE_STREAM_MS) return;
+    this.dropSocket();
+    this.readyState = CONNECTING;
+    this.dispatch('error', { type: 'error' });
+    this.scheduleReconnect();
   }
 
   private dropSocket(): void {
@@ -168,6 +199,8 @@ export class WailsEventSource implements EventSourceLike {
     if (this.readyState === CLOSED) return;
     const sock = factory(WAILS_SSE_STREAM);
     this.sock = sock;
+    this.lastFrameAt = Date.now();
+    this.watchdog ??= setInterval(() => this.checkStale(), STALE_STREAM_MS / 9);
     sock.binaryType = 'arraybuffer';
     sock.onopen = () => {
       const sub: { path: string; last_event_id?: string } = { path: this.path };
@@ -200,6 +233,8 @@ export class WailsEventSource implements EventSourceLike {
 
   private onFrame(raw: unknown): void {
     if (this.readyState === CLOSED) return;
+    // Anything the desktop sends, a ping included, proves the stream is held.
+    this.lastFrameAt = Date.now();
     let f: DesktopFrame;
     try {
       const text = typeof raw === 'string' ? raw : this.decoder.decode(raw as ArrayBuffer);
