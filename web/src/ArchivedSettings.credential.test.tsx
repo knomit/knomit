@@ -9,7 +9,7 @@ import { api, SecretRefusal, type ArchivedRepo } from './api';
 
 vi.mock('./api', async importOriginal => ({
   ...(await importOriginal<typeof import('./api')>()),
-  api: { restoreRepo: vi.fn(), purgeRepo: vi.fn(), listSecrets: vi.fn(), createSecret: vi.fn() },
+  api: { restoreRepo: vi.fn(), purgeRepo: vi.fn(), listSecrets: vi.fn() },
 }));
 
 const KB: ArchivedRepo = { id: 'u1', name: 'kb', origin: 'https://github.com/a/kb.git', archivedAt: '2026-10-01T00:00:00Z' };

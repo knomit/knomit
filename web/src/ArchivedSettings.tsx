@@ -132,7 +132,7 @@ export function ArchivedSettings({ info, serverReadOnly, activeNames, onRestored
                   </div>
                   {credChoice === 'secret' && (
                     <div style={{ marginTop: 10 }}>
-                      <SecretPicker url={info.origin} value={secretId} onChange={id => setSecretId(id)} allowCreate testid="restore-secret-picker" />
+                      <SecretPicker url={info.origin} value={secretId} onChange={id => setSecretId(id)} testid="restore-secret-picker" />
                     </div>
                   )}
                   {credChoice === 'pasted' && (

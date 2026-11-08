@@ -105,11 +105,11 @@ export function StepAccess({ state, dispatch, onProbe, onCancelProbe, probing, p
         <option value="secret">stored secret</option>
       </select>
       {/* A stored secret from Access → Secrets: only those that fit this
-          remote's host and scheme are offered, and one can be created here
-          with the host already allowed. No pasted field is sent with it. */}
+          remote's host and scheme are offered (none: a pointer to Access →
+          Secrets, the only place one is created). No pasted field is sent. */}
       {state.authMethod === 'secret' && (
         <div style={{ marginTop: 8 }}>
-          <SecretPicker url={state.url} value={state.secretId} allowCreate testid="create-secret-picker"
+          <SecretPicker url={state.url} value={state.secretId} testid="create-secret-picker"
             onChange={id => dispatch({ type: 'SET_SECRET', id })} />
         </div>
       )}

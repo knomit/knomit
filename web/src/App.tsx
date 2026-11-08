@@ -48,6 +48,7 @@ import { FleetSettings } from './FleetSettings';
 import { FleetWizard } from './FleetWizard';
 import type { FleetStatus } from './api';
 import { ErrorBoundary } from './ErrorBoundary';
+import { AccessSecretsLink } from './accessLink';
 import { StatusFooter } from './StatusFooter';
 import { useVersion } from './hooks';
 import { createOutageLog } from './streamOutage';
@@ -1209,6 +1210,17 @@ export default function App() {
     if (view.locked) return;
     dispatchView({ type: 'TOGGLE_SERVER' });
   }, [view.locked, dispatchView]);
+  // "Access → Secrets" from a credential picker (SecretPicker): the server
+  // pages on Access, Secrets picked. Not offered when there is no Access page
+  // (read-only server) or while the gear is locked by a connect commit.
+  const openAccessSecrets = useCallback(() => {
+    if (view.locked) return;
+    setAccessTab('secrets');
+    dispatchView({ type: 'SET_SERVER_PAGE', page: 'access' });
+  }, [view.locked, dispatchView]);
+  const accessSecretsLink = useMemo(() => ({
+    open: serverPages.includes('access') && !view.locked ? openAccessSecrets : null, serverOpen,
+  }), [serverPages, view.locked, openAccessSecrets, serverOpen]);
   const serverBar = useMemo(() => serverPage === null ? null : ({
     page: serverPage, pages: serverPages, onPage: onServerPage, authCount: oauth.count,
   }), [serverPage, serverPages, onServerPage, oauth.count]);
@@ -2035,6 +2047,7 @@ export default function App() {
               pages (hidden, as under another target), so nothing typed into
               one is lost by a look at the log. */}
           <FacetLayoutProvider value={facetLayout}>
+          <AccessSecretsLink.Provider value={accessSecretsLink}>
             {serverPage !== null && (
               // Keyed on the page so a tab switch remounts the boundary and
               // drops a crashed page's error; without it the card outlives
@@ -2170,6 +2183,7 @@ export default function App() {
                 />
               </ErrorBoundary>
             )}
+          </AccessSecretsLink.Provider>
           </FacetLayoutProvider>
         </div>
       </div>

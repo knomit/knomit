@@ -4,7 +4,7 @@ import { RemoteConnectWizard } from './RemoteConnectWizard';
 
 vi.mock('./api', async importOriginal => ({
   RepoIndexingError: (await importOriginal<typeof import('./api')>()).RepoIndexingError,
-  api: { getOrigin: vi.fn(), listSecrets: vi.fn(), createSecret: vi.fn() },
+  api: { getOrigin: vi.fn(), listSecrets: vi.fn() },
   createSession: vi.fn(),
   streamTest: vi.fn(),
   streamPreview: vi.fn(),
@@ -35,6 +35,21 @@ describe('RemoteConnectWizard: stored secret', () => {
     fireEvent.click(screen.getByRole('button', { name: /^test/i }));
     await waitFor(() => expect(createSession).toHaveBeenCalled());
     expect((createSession as unknown as Fn).mock.calls[0][1]).toEqual({ url: 'https://github.com/a/kb.git', secret_id: 's1' });
+  });
+
+  it('with no stored secret allowed for the host: no select, a pointer to Access → Secrets, Test stays disabled', async () => {
+    (api.getOrigin as unknown as Fn).mockResolvedValueOnce(null);
+    (api.listSecrets as unknown as Fn).mockResolvedValue([
+      { id: 's1', name: 'gl-pat', type: 'token', hosts: ['gitlab.com'], expires_at: null, status: 'none', created_at: '', updated_at: '', linked_repos: 0 },
+    ]);
+    render(<RemoteConnectWizard repo="kb" onCancel={() => {}} onDone={() => {}} />);
+    fireEvent.change(await screen.findByTestId('wizard-url'), { target: { value: 'https://github.com/a/kb.git' } });
+    fireEvent.change(screen.getByLabelText('Auth method'), { target: { value: 'secret' } });
+    expect(await screen.findByTestId('wizard-secret-picker-none'))
+      .toHaveTextContent('No stored secret is allowed for github.com. Add one in Access → Secrets.');
+    expect(screen.queryByTestId('wizard-secret-picker-select')).toBeNull();
+    expect(screen.queryByText(/create a new secret/i)).toBeNull();
+    expect(screen.getByRole('button', { name: /^test/i })).toBeDisabled();
   });
 
   it('a linked origin opens on Stored secret', async () => {

@@ -107,7 +107,7 @@ export function CredentialFields({ url, method, user, token, secretId = '', onMe
       {hint && <div style={fieldHint}>{hint}</div>}
       {method === 'secret' && onSecretId && (
         <div style={{ marginTop: 8 }}>
-          <SecretPicker url={url} value={secretId} onChange={id => onSecretId(id)} allowCreate testid={`${idPrefix}-secret-picker`} />
+          <SecretPicker url={url} value={secretId} onChange={id => onSecretId(id)} testid={`${idPrefix}-secret-picker`} />
         </div>
       )}
       {method === 'basic' && (

@@ -398,3 +398,27 @@ describe('a crashed server page', () => {
     expect(screen.queryByTestId('panel-error')).toBeNull();
   });
 });
+
+describe('a credential picker sends the reader to Access → Secrets', () => {
+  it('"Access → Secrets" in the connect wizard opens the Access page on Secrets, even when Authorizations was last picked', async () => {
+    await primeApi({ oauth: [pending('p1', 'alpha')] });
+    await mountApp();
+    // Leave Access on Authorizations, then go back to the target.
+    await openServer();
+    fireEvent.click(await screen.findByTestId('access-section-auth'));
+    await waitFor(() => expect(screen.getByTestId('access-section-auth')).toHaveAttribute('aria-current', 'true'));
+    await act(async () => { fireEvent.click(gear()); });
+
+    fireEvent.click(screen.getByTestId('facet-tab-settings'));
+    await screen.findByTestId('repo-settings');
+    await act(async () => { fireEvent.click(await screen.findByTestId('remote-connect')); });
+    await act(async () => { fireEvent.change(await screen.findByTestId('wizard-url'), { target: { value: 'https://github.com/a/kb.git' } }); });
+    fireEvent.change(screen.getByLabelText('Auth method'), { target: { value: 'secret' } });
+    expect(await screen.findByTestId('wizard-secret-picker-none')).toHaveTextContent('No stored secret is allowed for github.com.');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Access → Secrets' })); });
+
+    expect(await screen.findByTestId('access-page')).toBeInTheDocument();
+    expect(screen.getByTestId('access-section-secrets')).toHaveAttribute('aria-current', 'true');
+    expect(await screen.findByTestId('secrets-overview')).toBeInTheDocument();
+  });
+});
