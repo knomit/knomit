@@ -291,7 +291,9 @@ describe('TopBar — the gear', () => {
   });
 
   // The lit state IS the indicator: same glyph both ways, no exit icon.
-  it('is lit over the server pages with the rail toggle\'s treatment, and plain elsewhere', () => {
+  // Lit = the accent the open tab's underline carries, on the glyph only: no
+  // fill behind it (a filled square read as a stray background).
+  it('is lit over the server pages in the accent with no fill, and plain elsewhere', () => {
     const { unmount } = render(bar());
     const plain = screen.getByTestId('server-toggle');
     expect(plain).toHaveAttribute('aria-pressed', 'false');
@@ -302,7 +304,8 @@ describe('TopBar — the gear', () => {
     render(bar({ server: { page: 'logs', pages: ['logs', 'access'], onPage: vi.fn(), authCount: null } }));
     const lit = screen.getByTestId('server-toggle');
     expect(lit).toHaveAttribute('aria-pressed', 'true');
-    expect(lit).toHaveStyle({ color: '#dfe9e2', background: '#1a231d', width: '26px', height: '26px' });
+    expect(lit).toHaveStyle({ color: '#7c9', background: 'transparent', width: '26px', height: '26px' });
+    expect(lit).not.toHaveStyle({ background: '#1a231d' });
     expect(lit.innerHTML).toBe(glyph);
     // The tooltip names where it returns to.
     expect(lit.getAttribute('title')).toBe('Back to alpha');

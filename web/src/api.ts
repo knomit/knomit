@@ -2096,6 +2096,44 @@ async function denyOAuthPending(id: string): Promise<void> {
   if (!r.ok) throw await oauthFailure(r);
 }
 
+// OAuthGrant is one approved login: a token family (internal/edge/oauth
+// Login) that can still be used. client_name is what the client called itself
+// when it asked ('' for a login approved before that was recorded: show the
+// client id); last_used_at is when it last got a token (the code exchange or
+// a refresh), null before its first. Revoking it ends the family, so its
+// access and refresh tokens stop working at once.
+export interface OAuthGrant {
+  id: string;
+  client_id: string;
+  client_name: string;
+  subject: string;
+  scopes: string[];
+  resource: string;
+  approved_by: string;
+  created_at: string;
+  last_used_at: string | null;
+  refresh_expires_at: string;
+}
+
+// listOAuthGrants returns the approved logins, or null when this server has
+// no OAuth issuer (404), the same rule as listOAuthPending.
+async function listOAuthGrants(): Promise<OAuthGrant[] | null> {
+  const r = await fetch(apiUrl('/api/v1/oauth/grants'), { headers: oauthHeaders(false) });
+  if (r.status === 404) return null;
+  if (!r.ok) throw await oauthFailure(r);
+  const data = (await r.json()) as { grants?: OAuthGrant[] };
+  return data.grants ?? [];
+}
+
+async function revokeOAuthGrant(id: string): Promise<void> {
+  const r = await fetch(apiUrl(`/api/v1/oauth/grants/${encodeURIComponent(id)}/revoke`), {
+    method: 'POST',
+    headers: oauthHeaders(true),
+    body: '{}',
+  });
+  if (!r.ok) throw await oauthFailure(r);
+}
+
 // ─── Fleet (F09) ────────────────────────────────────────────────────────────
 // This instance's fleet membership state: standalone, registering (a forge
 // create whose publish of main is pending) or registered. record_state is this agent's
@@ -2617,6 +2655,8 @@ export const api = {
   dropFleetCommit,
   approveOAuthPending,
   denyOAuthPending,
+  listOAuthGrants,
+  revokeOAuthGrant,
   listClientSessions,
   getAgentBranch,
   getRepo,

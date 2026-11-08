@@ -82,3 +82,46 @@ describe('OAuth approval api', () => {
     await expect(api.approveOAuthPending('p1', 'bad subject', ['read'])).rejects.toThrow(/subject must be/);
   });
 });
+
+// The approved logins (GET /api/v1/oauth/grants, POST .../{id}/revoke): the
+// same gate as the queue, so the same header, and the same 404 rule.
+describe('OAuth approved logins api', () => {
+  it('lists the logins with the header and unwraps them', async () => {
+    const f = mockFetch(200, { grants: [{ id: 'g1', client_name: 'Claude Code', last_used_at: null }] });
+    await expect(api.listOAuthGrants()).resolves.toEqual([{ id: 'g1', client_name: 'Claude Code', last_used_at: null }]);
+    const [url, init] = f.mock.calls[0];
+    expect(url).toBe('/api/v1/oauth/grants');
+    expect(new Headers(init.headers).get('X-Knomit-Client')).toBe('web');
+  });
+
+  it('reads 404 as "no issuer here" (null), which hides the Approved group', async () => {
+    mockFetch(404, { title: 'Not Found' });
+    await expect(api.listOAuthGrants()).resolves.toBeNull();
+  });
+
+  it('reads a body with no grants as an empty list', async () => {
+    mockFetch(200, {});
+    await expect(api.listOAuthGrants()).resolves.toEqual([]);
+  });
+
+  it('surfaces a 403 with the server\'s reason', async () => {
+    mockFetch(403, { title: 'Permission denied', detail: 'the anonymous loopback principal does not hold admin' });
+    await expect(api.listOAuthGrants()).rejects.toThrow(/does not hold admin/);
+  });
+
+  it('revokes with POST, the JSON type and the header, escaping the id', async () => {
+    const f = mockFetch(204, null);
+    await api.revokeOAuthGrant('g/1');
+    const [url, init] = f.mock.calls[0];
+    expect(url).toBe('/api/v1/oauth/grants/g%2F1/revoke');
+    expect(init.method).toBe('POST');
+    const h = new Headers(init.headers);
+    expect(h.get('Content-Type')).toBe('application/json');
+    expect(h.get('X-Knomit-Client')).toBe('web');
+  });
+
+  it('surfaces a refused revoke', async () => {
+    mockFetch(404, { title: 'Not Found', detail: 'oauth: no such approved login' });
+    await expect(api.revokeOAuthGrant('gone')).rejects.toThrow(/no such approved login/);
+  });
+});

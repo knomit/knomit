@@ -159,3 +159,13 @@ a { color: inherit; }
 
 /* The streaming caret: until the turn ends. */
 .k-chat-caret { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: #e8c27a; border-radius: 1px; }
+
+/* Access: a list row's keyboard ring sits inside the row (the list column
+   clips anything outside it), and at a phone width a detail's property label
+   goes above its value. */
+[data-testid="access-page"] [data-item]:focus-visible,
+[data-testid="access-sections"] button:focus-visible { outline-offset: -2px; border-radius: 0; }
+[data-testid="access-page"] input[type="date"] { color-scheme: dark; }
+@media (max-width: 640px) {
+  .k-access-prop .k-access-prop-label { width: 100% !important; }
+}
