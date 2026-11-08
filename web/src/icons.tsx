@@ -532,6 +532,17 @@ export const ClockIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
+// A clock face with its rim turned back into an arrow: open the fact's history.
+// Drawn in the same 24-unit, 2-stroke family as NewspaperIcon beside it, so the
+// two buttons in the fact band read at the same size and weight.
+export const HistoryIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+    <path d="M3 3v5h5"/>
+    <path d="M12 7v5l4 2"/>
+  </svg>
+);
+
 // A server stack: the repositories that use a secret.
 export const ServerIcon = ({ color, size = 14 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

@@ -89,8 +89,8 @@ describe('ChatSidePanel', () => {
     expect(screen.getByTestId('fact-band-path')).toHaveTextContent('kb/decisions/web/one.md');
     await waitFor(() => expect(screen.getByTestId('connections-in')).toHaveTextContent('2'));
     expect(screen.getByTestId('connections-out')).toHaveTextContent('1');
-    // The history button counts nothing: a bare ↺, named by its aria-label.
-    await waitFor(() => expect(screen.getByTestId('version-walker').textContent).toBe('↺'));
+    // The history button counts nothing: a bare history icon, named by its aria-label.
+    await waitFor(() => expect(screen.getByTestId('version-walker').textContent).toBe(''));
     expect(screen.getByTestId('version-walker')).toHaveAccessibleName('Open history');
     expect(screen.getByTestId('fact-body').querySelector('strong')).toHaveTextContent('SSE');
     // The band is the chrome: there is no row above it, and the × sits in its actions.

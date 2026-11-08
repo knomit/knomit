@@ -16,13 +16,21 @@ beforeEach(() => {
   ]});
 });
 
-// A jump point to history, nothing more (user, 2026-11-08): no "vN" count, the
-// ↺ glyph as plain text (not the ⏱ that macOS draws as a colour emoji), named by
-// aria-label and title. SABOTAGE: render a count, or drop the aria-label.
-it('is a bare ↺ named "Open history", with no count', async () => {
+// A jump point to history, nothing more (user, 2026-11-08): no "vN" count, a
+// history (clock-rewind) icon at the newspaper glyph's size and stroke weight
+// (chat review, 2026-11-08: the 10px text ↺ read as a small hook), named by
+// aria-label and title. SABOTAGE: render a count or the old ↺ text, shrink the
+// icon, or drop the aria-label.
+it('is a bare history icon named "Open history", the newspaper glyph\'s size and weight, with no count', async () => {
   render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" onScrub={vi.fn()} />);
   const btn = await screen.findByTestId('version-walker');
-  expect(btn.textContent).toBe('↺');
+  expect(btn.textContent).toBe('');
+  const svg = btn.querySelector('svg')!;
+  expect(svg).not.toBeNull();
+  expect(svg.getAttribute('width')).toBe('15');
+  expect(svg.getAttribute('height')).toBe('15');
+  expect(svg.getAttribute('viewBox')).toBe('0 0 24 24');
+  expect(svg.getAttribute('stroke-width')).toBe('2');
   expect(btn).not.toHaveTextContent(/v\d/);
   expect(btn).toHaveAccessibleName('Open history');
   // Pinned as attributes: title alone also names the button, so the name

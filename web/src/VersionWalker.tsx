@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
-import { HISTORY_GLYPH } from './utils';
+import { HistoryIcon } from './icons';
 
 interface Entry {
   commit: string;
@@ -27,10 +27,17 @@ interface Props {
 // branches and deletes, and is capped at 50, so N was not the number of
 // versions. The glyph alone is the button; aria-label names it.
 //
+// The glyph is HistoryIcon, an SVG at the materialize button's size (15) and
+// stroke weight. It was the text arrow ↺ at 10px until the chat review of
+// 2026-11-08, which read as a small hook beside the newspaper glyph.
+//
 // The fetch stays: it is how the newest version commit is found. The fact read
 // does not carry it (a live read's as_of.commit is the branch tip, an anchored
 // read's is the anchor), and the fetch also hides the button for a fact with
 // no recorded versions.
+/** The history glyph's size: the materialize (newspaper) glyph's, so the two match. */
+const HISTORY_ICON_SIZE = 15;
+
 export function VersionWalker({ repo, branch, factPath, onScrub }: Props) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -71,11 +78,11 @@ export function VersionWalker({ repo, branch, factPath, onScrub }: Props) {
         // hairlines, not by each child re-stating its own outline.
         background: 'none', border: 'none', borderRadius: 0,
         outline: 'none',
-        padding: '2px 7px', cursor: 'pointer',
-        color: '#7c9', fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1.4,
+        padding: 2, cursor: 'pointer',
+        color: '#7c9',
       }}
     >
-      <span aria-hidden="true" style={{ fontSize: 10, opacity: 0.9 }}>{HISTORY_GLYPH}</span>
+      <HistoryIcon color="currentColor" size={HISTORY_ICON_SIZE} />
     </button>
   );
 }
