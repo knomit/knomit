@@ -39,6 +39,7 @@ vi.mock('./api', async (importOriginal) => {
       search: vi.fn(), stats: vi.fn(), activity: vi.fn(), explain: vi.fn(), completions: vi.fn(),
       fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(), getRepo: vi.fn(), listBranchNames: vi.fn(),
       lensSearch: vi.fn(), listLensFacts: vi.fn(), lensBrowse: vi.fn(), listExperiments: vi.fn(),
+      getLensStats: vi.fn(), getLensFact: vi.fn(),
     },
   };
 });
@@ -331,5 +332,98 @@ describe('the list search in the URL', () => {
 
     expect(query().get('ctx_repo')).toBe('u-b');
     expect(query().get('ctx_branch')).toBe('machine/test');
+  });
+});
+
+// Back to a lens from a repo (fix/back-restores-repo). The lens's entry is the
+// branch of its write repo; switching back keeps the repo's branch on screen until
+// the entry's branch is read again.
+describe('Back to a lens', () => {
+  beforeEach(() => {
+    installFakeEventSource(); localStorage.clear();
+    window.history.replaceState(null, '', '/');
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+  });
+  afterEach(() => {
+    cleanup();
+    factsetView.close();
+    uninstallFakeEventSource(); vi.clearAllMocks(); vi.unstubAllGlobals(); localStorage.clear();
+  });
+  const pickBranch = async (name: string) => {
+    fireEvent.click(await screen.findByTestId('toknomitr-branch'));
+    fireEvent.click(await screen.findByTestId(`toknomitr-branch-option-${name}`));
+  };
+  const back = async () => {
+    fireEvent.keyDown(window, { key: '[', metaKey: true });
+    await flush();
+  };
+  // What a lens's Browse reads besides the list, so its fact view does not fall over.
+  const primeLensBrowse = (api: Mocks) => {
+    api.getAgentBranch.mockResolvedValue('machine/test');
+    api.getLensFact.mockReturnValue(new Promise(() => {}));
+    api.getLensStats.mockResolvedValue({ total: 0, avg_confidence: 0, domains: {}, entities: {}, types: {}, highlights: [], default_axis: 'impact', repos: [] });
+  };
+
+  // SABOTAGE: the navReturn landing does not re-read the entry's branch.
+  it('whose write repo is the repo on screen: the reader lands on the branch they left, with their search', async () => {
+    const api = await primeApi();
+    primeLensBrowse(api);
+    // No write_branch on the lens doc: resolving it then keeps the write repo's
+    // branch on screen (SET_LENS), which is the case the re-read is for.
+    const bare = { ...LENS, write_branch: undefined };
+    api.listLenses.mockResolvedValue([bare]);
+    api.getLens.mockResolvedValue(bare);
+    remember({ kind: 'lens', name: 'eng' });
+    render(<App />);
+    await waitFor(() => expect(query().get('ctx_lens')).toBe('L1'));
+    await typeSearch('needle');
+    await waitFor(() => expect(query().get('l_q')).toBe('needle'));
+    fireEvent.click(screen.getByTestId('rail-toggle'));
+    await act(async () => { fireEvent.click(screen.getByTestId('rail-repo-alpha')); });
+    await waitFor(() => expect(query().get('ctx_repo')).toBe('u-a'));
+    await pickBranch('try');
+    await waitFor(() => expect(query().get('ctx_branch')).toBe('exp/try'));
+    api.status.mockClear();
+    await back();
+    await waitFor(() => expect(query().get('ctx_lens')).toBe('L1'));
+    await waitFor(() => expect(api.status).toHaveBeenCalledWith('alpha', 'machine/test'));
+    await waitFor(() => expect(query().get('l_q')).toBe('needle'));
+    // Back on the lens: its write repo's branch is the one left, not the experiment.
+    fireEvent.click(screen.getByTestId('rail-repo-alpha'));
+    await waitFor(() => expect(query().get('ctx_repo')).toBe('u-a'));
+    expect(query().get('ctx_branch')).toBe('machine/test');
+  });
+
+  // An entry left in a lens before the lens resolved names the repo that was on
+  // screen then, not the lens's write repo: its branch is not a branch of the
+  // write repo, so it is not asked about, and the rest of the stack stays.
+  // SABOTAGE: no entry.repo === state.repo check in the navReturn landing.
+  it('left before the lens resolved: the lens\'s normal view, no read of a branch the write repo lacks, and the trail kept', async () => {
+    const api = await primeApi();
+    primeLensBrowse(api);
+    remember({ kind: 'repo', repo: 'beta' });
+    render(<App />);
+    await waitFor(() => expect(query().get('ctx_repo')).toBe('u-b'));
+    await pickBranch('try');
+    await waitFor(() => expect(query().get('ctx_branch')).toBe('exp/try'));
+    let resolveLens!: (v: unknown) => void;
+    api.getLens.mockImplementation(() => new Promise(r => { resolveLens = r; }));
+    fireEvent.click(screen.getByTestId('rail-toggle'));
+    await act(async () => { fireEvent.click(screen.getByTestId('rail-lens-eng')); });
+    await act(async () => { fireEvent.click(screen.getByTestId('rail-repo-alpha')); });
+    await waitFor(() => expect(query().get('ctx_repo')).toBe('u-a'));
+    await act(async () => { resolveLens(LENS); });
+    api.getLens.mockResolvedValue(LENS);
+    api.status.mockImplementation(async (r: string, b: string) => {
+      if (b === 'exp/try') { if (r === 'alpha') throw Object.assign(new Error('HTTP 404'), { status: 404 }); return EXP_STATUS; }
+      if (b === 'machine/test') return EMBEDDED;
+      throw new Error('HTTP 404');
+    });
+    api.status.mockClear();
+    await back();
+    await waitFor(() => expect(query().get('ctx_lens')).toBe('L1'));
+    await flush();
+    expect(api.status).not.toHaveBeenCalledWith('alpha', 'exp/try');
+    expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled();
   });
 });

@@ -1402,6 +1402,9 @@ export default function App() {
    */
   const enterBranch = useCallback((branch: string) => {
     if (!branch) return;
+    // A branch picked is the reader's move: a Back to another context still on its
+    // way would otherwise land its own branch over this one.
+    dispatch({ type: 'NAV_RETURN_DROP' });
     dispatchView({ type: 'SET_FACET', facet: 'browse' });
     const repo = stateRef.current.repo;
     api.status(repo, branch)
@@ -1599,14 +1602,18 @@ export default function App() {
   // and the entry lands on it in the same flushed render as its status, for the
   // reason openPendingBrowse flushes (a list read in flight would select row 0
   // over the fact). On the branch already on screen it lands at once, in this
-  // layout effect. A branch that is gone (404) is BRANCH_GONE, as for a return to
-  // a chat: Browse's normal view on the branch on screen, not an error. Any other
+  // layout effect. A branch that is gone (404) is NAV_RETURN_BRANCH_GONE, as for a
+  // return to a chat: Browse's normal view on the branch on screen, not an error. Any other
   // failure lands nothing either: the reader is on the context's normal view.
+  // The entry's branch is a branch of the entry's repo. A context whose repo is not
+  // that one now (a lens whose write repo changed) has no such branch to ask about:
+  // the context's normal view, and nothing else in the stack is touched.
   const navReturnAsked = useRef<object | null>(null);
   useLayoutEffect(() => {
     const r = state.navReturn;
     if (!r || !r.entered || !state.branch || lensResolutionPending(state)) return;
     if (!sameContext(state.context, r.entry.context)) return;
+    if (r.entry.repo !== state.repo) { dispatch({ type: 'NAV_RETURN_DROP' }); return; }
     const want = r.entry.branch;
     if (!want || want === state.branch) { dispatch({ type: 'NAV_RETURN_LAND' }); return; }
     if (navReturnAsked.current === r) return;
@@ -1623,7 +1630,7 @@ export default function App() {
       })
       .catch(e => {
         if (!still()) return;
-        dispatch(isNotFound(e) ? { type: 'BRANCH_GONE' } : { type: 'NAV_RETURN_DROP' });
+        dispatch(isNotFound(e) ? { type: 'NAV_RETURN_BRANCH_GONE' } : { type: 'NAV_RETURN_DROP' });
       });
   }, [state.navReturn, state.context, state.branch, state.lens]); // eslint-disable-line react-hooks/exhaustive-deps
   // The fleet row: the fleet target, pinned over the context with its own

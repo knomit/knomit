@@ -202,6 +202,7 @@ export type Action =
   // the landing (the branch could not be read) and stay on the context's view.
   | { type: 'NAV_RETURN_ENTER' }
   | { type: 'NAV_RETURN_GONE' }
+  | { type: 'NAV_RETURN_BRANCH_GONE' }
   | { type: 'NAV_RETURN_LAND' }
   | { type: 'NAV_RETURN_DROP' }
   | { type: 'CACHE_FACT_TITLE'; key: string; title: string }
@@ -322,8 +323,10 @@ export function sameContext(a: BrowseContext, b: BrowseContext): boolean {
 // canGoBack reports whether NAV_BACK has anywhere to go. There is no forward:
 // NAV_BACK pops, so the entries ahead of the cursor do not exist to return to.
 // A back-only history is the whole model here — see the Library header.
+// While a Back to another context is under way (navReturn) there is nowhere to
+// go back to yet: NAV_BACK ignores itself then, so the control says so.
 export function canGoBack(state: AppState): boolean {
-  return state.navStack.length > 0;
+  return state.navStack.length > 0 && !state.navReturn;
 }
 
 export function currentPath(state: AppState): string {
@@ -563,7 +566,9 @@ function applyAction(s: AppState, a: Action): AppState {
         // A move the reader made keeps where they were, so Back returns there
         // (navReturn). Every other entry (a fallback off a deleted repo, a boot
         // restore, a create landing) is not a move of theirs and drops the stack.
-        navStack: a.push && s.repo && s.branch ? pushNav(s, a.fromChat) : [],
+        // A pick before the branch is known (the last switch still opening) has
+        // nothing of its own to push: the stack is kept as it is, not dropped.
+        navStack: a.push ? (s.repo && s.branch ? pushNav(s, a.fromChat) : s.navStack) : [],
         remoteSyncError: '',
         remotePushError: '',
         rightPanelFocused: false,
@@ -817,6 +822,18 @@ function applyAction(s: AppState, a: Action): AppState {
       while (stack.length > 0 && sameContext(stack[stack.length - 1].context, r.entry.context)) stack.pop();
       return { ...s, navReturn: null, navStack: stack };
     }
+    case 'NAV_RETURN_BRANCH_GONE': {
+      // The branch the entry was left on is gone. The context is entered and its
+      // status is the branch on screen: its normal view, with that branch's own
+      // experiment and since-fork as its status set them. The entries left on the
+      // dead branch of this context go; entries of other contexts stay.
+      const r = s.navReturn;
+      if (!r) return s;
+      const stack = [...s.navStack];
+      const onDead = (e: NavEntry) => sameContext(e.context, r.entry.context) && e.branch === r.entry.branch;
+      while (stack.length > 0 && onDead(stack[stack.length - 1])) stack.pop();
+      return { ...s, navReturn: null, navStack: stack, view: 'library', factPath: null, asOf: { mode: 'live' }, filters: [], freeText: '' };
+    }
     case 'NAV_RETURN_LAND': {
       // The entry's branch is the one on screen now: put back what the reader left.
       // Not a move, so nothing is pushed. Since-fork holds only in an experiment.
@@ -867,7 +884,21 @@ function applyAction(s: AppState, a: Action): AppState {
 // observe stale data. Centralizing this here means new fact-close paths inherit
 // the guarantee for free. Referential identity is preserved for the common case
 // (already-null factSource), so no-op arms that `return s` stay ===.
+// The reader's own moves. One made while a Back to another context is still on its
+// way (navReturn) wins: the return is dropped, or its landing would overwrite
+// what the reader just chose. Not AMEND_NAV or RESTORE_LIST: those are the app's
+// own (a list selecting its first row, a reload), not the reader's.
+const READER_MOVES: ReadonlySet<Action['type']> = new Set<Action['type']>([
+  'NAVIGATE', 'GO_UP', 'ADD_FILTER', 'REMOVE_FILTER', 'SET_FREE_TEXT', 'CLEAR_FILTERS', 'APPLY_NAV',
+  'FOCUS_LENS_SOURCE', 'PIVOT_MOTIF', 'EXIT_SEARCH', 'EXIT_MOTIF', 'SET_LIBRARY_SORT', 'SET_LENS_SOURCES',
+  'SET_SINCE_FORK', 'SET_AS_OF',
+]);
+
 export function reducer(s: AppState, a: Action): AppState {
+  return reduce(s.navReturn && READER_MOVES.has(a.type) ? { ...s, navReturn: null } : s, a);
+}
+
+function reduce(s: AppState, a: Action): AppState {
   const next = applyAction(s, a);
   if (next.factPath === null && next.factSource !== null) {
     return { ...next, factSource: null };
