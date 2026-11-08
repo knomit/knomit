@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -171,10 +172,33 @@ func TestSecretsAPI_Errors(t *testing.T) {
 
 // No response body and no log line carries a value, password, key or
 // passphrase, whatever the type and whichever endpoint answered.
+// syncBuf is a bytes.Buffer safe for a logger written from background
+// goroutines while the test reads it (zerolog does not lock a plain writer).
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
 func TestSecretsAPI_NeverReturnsValue(t *testing.T) {
-	var logs bytes.Buffer
+	// The fixture's Manager runs a session-reaper goroutine that logs through
+	// the global logger, so the sink locks Write AND String. The restore is
+	// registered BEFORE the fixture: t.Cleanup is LIFO, so it runs after the
+	// fixture's m.Close has joined those goroutines.
+	logs := &syncBuf{}
 	prev := log.Logger
-	log.Logger = zerolog.New(&logs).Level(zerolog.DebugLevel)
+	log.Logger = zerolog.New(logs).Level(zerolog.DebugLevel)
 	t.Cleanup(func() { log.Logger = prev })
 
 	f := newSecretsFixture(t, true)
