@@ -90,9 +90,31 @@ describe('Access → Secrets', () => {
     expect(screen.getByTestId('secrets-list')).toHaveTextContent('Nothing matches “nothing”');
   });
 
-  it('says what a secret is for when there are none, and offers to add one', async () => {
+  it('says what a secret is for when there are none, and points at the + rather than offering a second button', async () => {
     renderSecrets();
-    expect(await screen.findByTestId('secrets-empty')).toHaveTextContent('No stored secrets yet');
+    const empty = await screen.findByTestId('secrets-empty');
+    expect(empty).toHaveTextContent('No stored secrets yet');
+    expect(empty).toHaveTextContent('Add one with the + button above.');
+    expect(within(empty).queryByRole('button')).toBeNull();
+    expect(within(screen.getByTestId('secrets-overview')).queryByRole('button', { name: /add/i })).toBeNull();
+    // The + is the one way to add: a named, focusable button, with nothing else in the page called that.
+    const add = screen.getByRole('button', { name: 'Add a secret' });
+    expect(add).toBe(screen.getByTestId('secret-add'));
+    expect(add).toHaveAttribute('title', 'Add a secret');
+    add.focus();
+    expect(add).toHaveFocus();
+    fireEvent.click(add);
+    expect(screen.getByTestId('secret-create')).toBeInTheDocument();
+  });
+
+  it('offers no add button on the overview, only the + in the list header', async () => {
+    const api = await mocked();
+    api.listSecrets.mockResolvedValue([secret({ id: 'a', name: 'gh' })]);
+    renderSecrets();
+    const o = await screen.findByTestId('secrets-overview');
+    await screen.findByTestId('secret-row-gh');
+    expect(within(o).queryByRole('button', { name: /add/i })).toBeNull();
+    expect(screen.getAllByRole('button', { name: /add a secret/i })).toEqual([screen.getByTestId('secret-add')]);
   });
 
   it('counts what needs attention on the overview, and opens one from there', async () => {

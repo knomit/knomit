@@ -276,17 +276,17 @@ const itemMeta: CSSProperties = {
   ...mono, fontSize: 10.5, color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
 };
 
-/** ListEmpty: what a list says with nothing in it — a glyph, a line, and the
- *  way to add one. */
-export function ListEmpty({ icon, title, children, action, testid }: {
-  icon: ReactNode; title: string; children?: ReactNode; action?: ReactNode; testid?: string;
+/** ListEmpty: what a list says with nothing in it — a glyph, a line, and a
+ *  note. It holds no button: a section that can create has one way to, the
+ *  `+` in its ListHeader, and its note points there. */
+export function ListEmpty({ icon, title, children, testid }: {
+  icon: ReactNode; title: string; children?: ReactNode; testid?: string;
 }) {
   return (
     <div data-testid={testid} style={{ padding: '40px 24px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 8 }}>
       <span style={{ display: 'inline-flex', width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', background: '#171717', border: '1px solid #242424', marginBottom: 4 }}>{icon}</span>
       <div style={{ fontSize: 13, color: '#ccc' }}>{title}</div>
       {children && <div style={{ ...dim, lineHeight: 1.55, maxWidth: 260 }}>{children}</div>}
-      {action && <div style={{ marginTop: 8 }}>{action}</div>}
     </div>
   );
 }

@@ -15,7 +15,6 @@ vi.mock('./api', async importOriginal => ({
     createRepo: vi.fn(),
     repos: vi.fn(async () => [{ name: 'kb' }]),
     listSecrets: vi.fn(),
-    createSecret: vi.fn(),
     ontologyPresets: vi.fn(async () => [{ name: 'default', id: 'general', title: 'General', description: 'd', topics: ['people'] }]),
     ontologyPresetYAML: vi.fn(async () => 'id: general\nname: General\ntopics:\n  people:\n'),
     validateOntology: vi.fn(async () => ({ ok: true, id: 'general', name: 'General', topics: ['people'], rule_count: 0 })),
@@ -58,7 +57,7 @@ describe('StepAccess: stored secret', () => {
     await toAccess();
     fireEvent.change(screen.getByTestId('create-auth-method'), { target: { value: 'secret' } });
     expect(screen.queryByTestId('create-token')).toBeNull();
-    // Next waits for a secret to be chosen.
+    // Next waits for the secrets to load (the first fitting one is then chosen).
     expect(screen.getByRole('button', { name: /^next$/i })).toBeDisabled();
     fireEvent.change(await screen.findByTestId('create-secret-picker-select'), { target: { value: 's1' } });
     fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
@@ -80,20 +79,26 @@ describe('StepAccess: stored secret', () => {
     expect(origin.auth_token).toBeFalsy();
   });
 
-  it('creating a secret inline selects it', async () => {
+  it('preselects the first fitting secret, so Next is ready, and offers no way to create one here', async () => {
     fn(api.probeOrigin).mockResolvedValue(probed());
-    fn(api.listSecrets).mockResolvedValue([]);
-    const created = secret('new', 'new-pat');
-    fn(api.createSecret).mockResolvedValue(created);
+    fn(api.listSecrets).mockResolvedValue([secret('s1', 'gh-pat'), secret('s2', 'gh-pat-2'), { ...secret('gl', 'gl-pat'), hosts: ['gitlab.com'] }]);
     await toAccess();
     fireEvent.change(screen.getByTestId('create-auth-method'), { target: { value: 'secret' } });
-    fireEvent.change(await screen.findByTestId('create-secret-picker-select'), { target: { value: '\u0000new' } });
-    expect(screen.getByTestId('secret-hosts')).toHaveValue('github.com');
-    fireEvent.change(screen.getByTestId('secret-name'), { target: { value: 'new-pat' } });
-    fireEvent.change(screen.getByTestId('secret-value'), { target: { value: 'v' } });
-    fn(api.listSecrets).mockResolvedValue([created]);
-    fireEvent.click(screen.getByTestId('secret-form-submit'));
-    await waitFor(() => expect(screen.getByTestId('create-secret-picker-select')).toHaveValue('new'));
+    const select = await screen.findByTestId('create-secret-picker-select');
+    await waitFor(() => expect(select).toHaveValue('s1'));
+    expect(Array.from(select.querySelectorAll('option')).map(o => o.textContent)).toEqual(['gh-pat', 'gh-pat-2']);
+    expect(screen.queryByText(/create a new secret/i)).toBeNull();
+    expect(screen.queryByTestId('secret-form-create')).toBeNull();
     expect(screen.getByRole('button', { name: /^next$/i })).not.toBeDisabled();
+  });
+
+  it('with no fitting secret shows no select, points at Access → Secrets, and keeps Next disabled', async () => {
+    fn(api.probeOrigin).mockResolvedValue(probed());
+    fn(api.listSecrets).mockResolvedValue([{ ...secret('gl', 'gl-pat'), hosts: ['gitlab.com'] }]);
+    await toAccess();
+    fireEvent.change(screen.getByTestId('create-auth-method'), { target: { value: 'secret' } });
+    expect(await screen.findByTestId('create-secret-picker-none')).toHaveTextContent('No token or username + password secret is allowed for github.com. Add one in Access → Secrets.');
+    expect(screen.queryByTestId('create-secret-picker-select')).toBeNull();
+    expect(screen.getByRole('button', { name: /^next$/i })).toBeDisabled();
   });
 });

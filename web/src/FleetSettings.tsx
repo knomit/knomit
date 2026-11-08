@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { AccessSecretsLink } from './accessLink';
 import { api, FleetRefusal, type FleetDropResult, type FleetRoot, type FleetStatus } from './api';
 import { SettingsPage, type Section } from './SettingsPage';
 import { OutcomeCard } from './OutcomeCard';
@@ -64,6 +65,7 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
   // the notice, and the outcome must still be seen (#533 review N1).
   const [dropped, setDropped] = useState<{ short: string; result: FleetDropResult } | null>(null);
   const originKey = hub || !fleet.fleet_repo ? '' : `${fleet.fleet_repo} ${fleet.hosting}`;
+  const { returns: accessReturns } = useContext(AccessSecretsLink);
   const [peerRead, setPeerRead] = useState<{ key: string; peer: boolean | null; method: string; secret?: { name: string; status?: string } }>({ key: '', peer: null, method: '' });
   useEffect(() => {
     if (!originKey || !fleet.fleet_repo) return;
@@ -81,7 +83,9 @@ export function FleetSettings({ fleet, onChanged, onBusyChange }: {
       })
       .catch(() => { if (live) setPeerRead({ key: originKey, peer: null, method: '' }); });
     return () => { live = false; };
-  }, [originKey, originRev, fleet.fleet_repo]);
+  // returns: back from the server pages, where the linked secret may have
+  // been renamed, replaced or deleted, the Access row re-reads it.
+  }, [originKey, originRev, fleet.fleet_repo, accessReturns]);
   const peerOrigin = originKey && peerRead.key === originKey ? peerRead.peer : null;
   const forge = !hub && peerOrigin === false;
   const storedMethod = forge ? peerRead.method : '';

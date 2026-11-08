@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup, act } from '@testing-library/react';
 import { ArchivedSettings } from './ArchivedSettings';
 import { api, SecretRefusal, type ArchivedRepo } from './api';
 
@@ -9,7 +9,7 @@ import { api, SecretRefusal, type ArchivedRepo } from './api';
 
 vi.mock('./api', async importOriginal => ({
   ...(await importOriginal<typeof import('./api')>()),
-  api: { restoreRepo: vi.fn(), purgeRepo: vi.fn(), listSecrets: vi.fn(), createSecret: vi.fn() },
+  api: { restoreRepo: vi.fn(), purgeRepo: vi.fn(), listSecrets: vi.fn() },
 }));
 
 const KB: ArchivedRepo = { id: 'u1', name: 'kb', origin: 'https://github.com/a/kb.git', archivedAt: '2026-10-01T00:00:00Z' };
@@ -37,6 +37,19 @@ describe('Restore asks for the credential', () => {
     open();
     for (const c of ['secret', 'pasted', 'none']) expect(screen.getByTestId(`restore-choice-${c}`)).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByTestId('restore-confirm-u1')).toBeDisabled();
+    expect(api.restoreRepo).not.toHaveBeenCalled();
+  });
+
+  it('choosing Stored secret chooses no secret: Restore stays disabled until one is picked', async () => {
+    renderPage();
+    open();
+    fireEvent.click(screen.getByTestId('restore-choice-secret'));
+    const select = await screen.findByTestId('restore-secret-picker-select');
+    await act(async () => { await Promise.resolve(); });
+    expect(select).toHaveValue('');
+    expect(screen.getByTestId('restore-confirm-u1')).toBeDisabled();
+    fireEvent.change(select, { target: { value: 's1' } });
+    expect(screen.getByTestId('restore-confirm-u1')).toBeEnabled();
     expect(api.restoreRepo).not.toHaveBeenCalled();
   });
 

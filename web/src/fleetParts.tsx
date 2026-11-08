@@ -75,13 +75,17 @@ export function Refusal({ err, note, testid = 'fleet-refusal' }: { err: Error | 
  *  repo Connect wizard's method, username and token fields, with the same
  *  rule for which appear (no token for ssh, none or an SSH URL under
  *  auto-detect). hint sits under the method, where the repo step puts it. */
-export function CredentialFields({ url, method, user, token, secretId = '', onMethod, onUser, onToken, onSecretId, hint, idPrefix = 'fleet', disabled }: {
+export function CredentialFields({ url, method, user, token, secretId = '', preselectSecret = false, onMethod, onUser, onToken, onSecretId, hint, idPrefix = 'fleet', disabled }: {
   url: string;
   method: FleetAuthMethod;
   user: string;
   token: string;
   /** The stored secret chosen under method 'secret'. */
   secretId?: string;
+  /** Let SecretPicker choose a fitting secret by itself: only where a check
+   *  still runs before anything is saved (New fleet), never in Update access,
+   *  where no secret means "keep the stored one". */
+  preselectSecret?: boolean;
   onMethod: (m: FleetAuthMethod) => void;
   onUser: (u: string) => void;
   onToken: (t: string) => void;
@@ -107,7 +111,7 @@ export function CredentialFields({ url, method, user, token, secretId = '', onMe
       {hint && <div style={fieldHint}>{hint}</div>}
       {method === 'secret' && onSecretId && (
         <div style={{ marginTop: 8 }}>
-          <SecretPicker url={url} value={secretId} onChange={id => onSecretId(id)} allowCreate testid={`${idPrefix}-secret-picker`} />
+          <SecretPicker url={url} value={secretId} onChange={id => onSecretId(id)} preselect={preselectSecret} testid={`${idPrefix}-secret-picker`} />
         </div>
       )}
       {method === 'basic' && (

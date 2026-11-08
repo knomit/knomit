@@ -4,8 +4,8 @@ import { btn, fieldInput, fieldLabel, fieldHint, wizardErr } from './manageStyle
 import { SECRET_TYPE_LABEL, expiryFromDate, parseHosts } from './secrets';
 
 // SecretForm creates a stored secret, or replaces one's value. It is the
-// Secrets tab's Add and Replace value, and the inline "Create a new secret"
-// of the repo settings, wizard, fleet and restore pickers.
+// Secrets tab's Add and Replace value, and nothing else: a secret is created
+// only in Access → Secrets, never inline from a remote's credential picker.
 //
 // Values are write-only: the inputs are never prefilled, never echoed, and
 // cleared once the server has the value (whatever the outcome, a failed
@@ -13,20 +13,16 @@ import { SECRET_TYPE_LABEL, expiryFromDate, parseHosts } from './secrets';
 
 const ALL_TYPES: SecretType[] = ['token', 'basic', 'ssh_key'];
 
-export function SecretForm({ mode, secret, types = ALL_TYPES, defaultHosts = [], onDone, onCancel }: {
+export function SecretForm({ mode, secret, onDone, onCancel }: {
   mode: 'create' | 'replace';
   /** replace: the secret whose value is replaced (its type decides the fields). */
   secret?: Pick<SecretView, 'id' | 'name' | 'type'>;
-  /** create: the types offered (a picker offers only those that fit its remote). */
-  types?: SecretType[];
-  /** create: the allowed hosts to start from (a picker's remote host). */
-  defaultHosts?: string[];
   onDone: (view: SecretView) => void;
   onCancel: () => void;
 }) {
   const [name, setName] = useState('');
-  const [type, setType] = useState<SecretType>(secret?.type ?? types[0] ?? 'token');
-  const [hosts, setHosts] = useState(defaultHosts.join(', '));
+  const [type, setType] = useState<SecretType>(secret?.type ?? 'token');
+  const [hosts, setHosts] = useState('');
   const [expiry, setExpiry] = useState('');
   const [value, setValue] = useState('');
   const [username, setUsername] = useState('');
@@ -76,15 +72,11 @@ export function SecretForm({ mode, secret, types = ALL_TYPES, defaultHosts = [],
           <label style={fieldLabel} htmlFor="secret-name">Name</label>
           <input id="secret-name" data-testid="secret-name" style={fieldInput} value={name}
             onChange={e => setName(e.target.value)} placeholder="e.g. github-pat" autoComplete="off" />
-          {types.length > 1 && (
-            <>
-              <label style={fieldLabel} htmlFor="secret-type">Type</label>
-              <select id="secret-type" data-testid="secret-type" style={fieldInput} value={type}
-                onChange={e => setType(e.target.value as SecretType)}>
-                {types.map(x => <option key={x} value={x}>{SECRET_TYPE_LABEL[x]}</option>)}
-              </select>
-            </>
-          )}
+          <label style={fieldLabel} htmlFor="secret-type">Type</label>
+          <select id="secret-type" data-testid="secret-type" style={fieldInput} value={type}
+            onChange={e => setType(e.target.value as SecretType)}>
+            {ALL_TYPES.map(x => <option key={x} value={x}>{SECRET_TYPE_LABEL[x]}</option>)}
+          </select>
           <label style={fieldLabel} htmlFor="secret-hosts">Allowed hosts</label>
           <input id="secret-hosts" data-testid="secret-hosts" style={fieldInput} value={hosts}
             onChange={e => setHosts(e.target.value)} placeholder="github.com" autoComplete="off" />

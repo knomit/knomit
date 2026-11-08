@@ -5,6 +5,7 @@ import { FleetWizard } from './FleetWizard';
 import { FacetLayoutProvider } from './facetLayout';
 import type { FleetStatus } from './api';
 import { stubFleetFetch } from './fleetTestFetch';
+import { AccessSecretsLink } from './accessLink';
 
 // Stored secrets on the fleet's forge flows: Update access, New fleet
 // (create) and join send secret_id and no pasted credential.
@@ -46,6 +47,25 @@ describe('fleet: stored secrets', () => {
     fireEvent.click(screen.getByTestId('fleet-follow-submit'));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     expect(calls.find(c => c.route === 'POST /api/v1/fleet/follow')?.body).toEqual({ secret_id: 's1' });
+  });
+
+  it('the Access row re-reads the linked secret when the server pages close', async () => {
+    const f = stubFleetFetch({
+      'GET /api/v1/repos/fleet/origin': { body: { name: 'origin', url: FORGE, branch: 'main', auth_method: 'token', secret_name: 'gh-pat', secret_status: 'expired' } },
+    });
+    const tree = (serverOpen: boolean, returns: number) => (
+      <AccessSecretsLink.Provider value={{ exists: true, open: null, serverOpen, returns }}>
+        <FleetSettings fleet={forgeMember} onChanged={() => {}} />
+      </AccessSecretsLink.Provider>
+    );
+    const { rerender } = render(tree(false, 0));
+    await waitFor(() => expect(screen.getByTestId('fleet-origin-access')).toHaveTextContent('stored secret: gh-pat'));
+    // Replaced and renamed in Access while the server pages show.
+    rerender(tree(true, 0));
+    f.set('GET /api/v1/repos/fleet/origin', { body: { name: 'origin', url: FORGE, branch: 'main', auth_method: 'token', secret_name: 'gh-pat-2', secret_status: 'ok' } });
+    rerender(tree(false, 1));
+    await waitFor(() => expect(screen.getByTestId('fleet-origin-access')).toHaveTextContent('stored secret: gh-pat-2'));
+    expect(screen.queryByTestId('fleet-origin-secret-chip')?.textContent ?? '').not.toContain('expired');
   });
 
   it('a linked fleet origin names its secret and expiry in the Access row', async () => {

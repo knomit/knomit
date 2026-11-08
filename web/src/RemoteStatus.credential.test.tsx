@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import { RemoteCard } from './RemoteStatus';
 import { useRemote } from './useRemote';
+import { AccessSecretsLink } from './accessLink';
 import type { OriginResponse, SecretView } from './api';
 
 vi.mock('./api', async (importOriginal) => {
@@ -10,7 +11,7 @@ vi.mock('./api', async (importOriginal) => {
     ...actual,
     api: {
       getOrigin: vi.fn(), listBranchNames: vi.fn(), setOriginUpstream: vi.fn(),
-      setOriginCredential: vi.fn(), listSecrets: vi.fn(), createSecret: vi.fn(),
+      setOriginCredential: vi.fn(), listSecrets: vi.fn(),
     },
   };
 });
@@ -72,6 +73,94 @@ describe('RemoteCard credential row', () => {
     fireEvent.change(select, { target: { value: 's1' } });
     fireEvent.click(screen.getByTestId('credential-link-save'));
     await waitFor(() => expect(api.setOriginCredential).toHaveBeenCalledWith('kb', { secret_id: 's1' }));
+  });
+
+  it('lists only the fitting secrets, chooses none by itself, and offers no way to create one', async () => {
+    const api = await mocked();
+    api.getOrigin.mockResolvedValue(base);
+    api.listSecrets.mockResolvedValue([secret({ id: 's1', name: 'a' }), secret({ id: 's2', name: 'b' }), secret({ id: 'gl', name: 'gl', hosts: ['gitlab.com'] })]);
+    render(<Harness />);
+    fireEvent.click(await screen.findByTestId('credential-link'));
+    const select = await screen.findByTestId('credential-picker-select');
+    expect(Array.from(select.querySelectorAll('option:not([disabled])')).map(o => (o as HTMLOptionElement).value)).toEqual(['s1', 's2']);
+    expect(select).toHaveValue('');
+    expect(screen.queryByText(/create a new secret/i)).toBeNull();
+    expect(screen.getByTestId('credential-link-save')).toBeDisabled();
+  });
+
+  it('"Use another secret…" on a linked repo starts with nothing chosen, not the current secret', async () => {
+    const api = await mocked();
+    api.getOrigin.mockResolvedValue({ ...linkedOrigin(), secret_id: 's1' });
+    api.listSecrets.mockResolvedValue([secret({ id: 's1', name: 'gh-pat' }), secret({ id: 's2', name: 'other' })]);
+    render(<Harness />);
+    fireEvent.click(await screen.findByTestId('credential-link'));
+    const select = await screen.findByTestId('credential-picker-select');
+    await act(async () => { await Promise.resolve(); });
+    expect(select).toHaveValue('');
+    expect(screen.getByTestId('credential-link-save')).toBeDisabled();
+    fireEvent.change(select, { target: { value: 's2' } });
+    expect(screen.getByTestId('credential-link-save')).toBeEnabled();
+  });
+
+
+  it('with no secret allowed for the host: the pointer to Access → Secrets, and Use this secret disabled', async () => {
+    const api = await mocked();
+    api.getOrigin.mockResolvedValue(base);
+    api.listSecrets.mockResolvedValue([secret({ id: 'gl', name: 'gl', hosts: ['gitlab.com'] })]);
+    render(<Harness />);
+    fireEvent.click(await screen.findByTestId('credential-link'));
+    expect(await screen.findByTestId('credential-picker-none')).toHaveTextContent(/No token or username \+ password secret is allowed for .+\. Add one in Access → Secrets\./);
+    expect(screen.queryByTestId('credential-picker-select')).toBeNull();
+    expect(screen.getByTestId('credential-link-save')).toBeDisabled();
+  });
+
+  it('re-reads the linked secret quietly when the server pages close: new name and status, open box kept', async () => {
+    const api = await mocked();
+    api.getOrigin.mockResolvedValue(linkedOrigin('expired'));
+    const tree = (serverOpen: boolean, returns: number) => (
+      <AccessSecretsLink.Provider value={{ exists: true, open: null, serverOpen, returns }}><Harness /></AccessSecretsLink.Provider>
+    );
+    const { rerender } = render(tree(false, 0));
+    expect(await screen.findByTestId('credential-warning')).toHaveTextContent('gh-pat has expired');
+    // The reader opens "Use another secret…", then goes to Access, replaces
+    // the value and renames the secret.
+    fireEvent.click(screen.getByTestId('credential-link'));
+    expect(screen.getByTestId('credential-link-box')).toBeInTheDocument();
+    rerender(tree(true, 0));
+    api.getOrigin.mockResolvedValue({ ...linkedOrigin('ok'), secret_name: 'gh-pat-2' });
+    rerender(tree(false, 1));
+    await waitFor(() => expect(screen.getByTestId('credential-secret-name')).toHaveTextContent('gh-pat-2'));
+    expect(screen.queryByTestId('credential-warning')).toBeNull();
+    // Quiet: no "Loading…", and the open box survived it.
+    expect(screen.getByTestId('credential-link-box')).toBeInTheDocument();
+    expect(api.getOrigin).toHaveBeenCalledTimes(2);
+  });
+
+  it('a return while the first read is still in flight does not leave the card on Loading…', async () => {
+    const api = await mocked();
+    api.getOrigin.mockReturnValueOnce(new Promise(() => {})).mockResolvedValue(base);
+    const tree = (serverOpen: boolean, returns: number) => (
+      <AccessSecretsLink.Provider value={{ exists: true, open: null, serverOpen, returns }}><Harness /></AccessSecretsLink.Provider>
+    );
+    const { rerender } = render(tree(false, 0));
+    expect(await screen.findByText('Loading…')).toBeInTheDocument();
+    rerender(tree(true, 0));
+    rerender(tree(false, 1));
+    expect(await screen.findByTestId('credential-link')).toBeInTheDocument();
+    expect(screen.queryByText('Loading…')).toBeNull();
+  });
+
+  it('a quiet re-read that succeeds clears an earlier load error', async () => {
+    const api = await mocked();
+    api.getOrigin.mockRejectedValueOnce(new Error('down')).mockResolvedValue(base);
+    const tree = (returns: number) => (
+      <AccessSecretsLink.Provider value={{ exists: true, open: null, serverOpen: false, returns }}><Harness /></AccessSecretsLink.Provider>
+    );
+    const { rerender } = render(tree(0));
+    expect(await screen.findByText(/could not load remote status/)).toBeInTheDocument();
+    rerender(tree(1));
+    expect(await screen.findByTestId('credential-link')).toBeInTheDocument();
+    expect(screen.queryByText(/could not load remote status/)).toBeNull();
   });
 
   it('shows the linked secret, and Unlink cannot be confirmed until a replacement is chosen', async () => {

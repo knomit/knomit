@@ -62,9 +62,8 @@ export function SecretsList({ list, err, selected, onSelect, focusOnly, adding, 
         )}
         {list === null && !err && <div style={{ ...dim, padding: 16 }}>Loading…</div>}
         {list !== null && list.length === 0 && !adding && (
-          <ListEmpty testid="secrets-empty" icon={<KeyIcon color="#666" size={18} />} title="No stored secrets yet"
-            action={<button type="button" style={btn(false, 'primary')} onClick={onAdd}>Add a secret</button>}>
-            Store a token, a username and password, or an SSH key once, and link repositories to it instead of pasting it into each.
+          <ListEmpty testid="secrets-empty" icon={<KeyIcon color="#666" size={18} />} title="No stored secrets yet">
+            Store a token, a username and password, or an SSH key once, and link repositories to it instead of pasting it into each. Add one with the + button above.
           </ListEmpty>
         )}
         {list !== null && list.length > 0 && shown.length === 0 && (
@@ -88,7 +87,7 @@ export function SecretsList({ list, err, selected, onSelect, focusOnly, adding, 
 
 // ─── Overview (nothing picked) ───────────────────────────────────────────────
 
-export function SecretsOverview({ list, onAdd, onPick }: { list: SecretView[] | null; onAdd: () => void; onPick: (id: string) => void }) {
+export function SecretsOverview({ list, onPick }: { list: SecretView[] | null; onPick: (id: string) => void }) {
   const l = list ?? [];
   const attention = l.filter(s => s.status === 'expired' || s.status === 'expiring')
     .sort((a, b) => (a.expires_at ?? '').localeCompare(b.expires_at ?? ''));
@@ -96,8 +95,7 @@ export function SecretsOverview({ list, onAdd, onPick }: { list: SecretView[] | 
     <div data-testid="secrets-overview">
       <DetailHeader kindIcon={<KeyIcon color="#7c9" size={12} />} kind="secrets" kindColor="#7c9"
         title="Stored credentials"
-        sub="Credentials repositories use instead of a pasted token. Replace a value once here and every repository using it picks it up. Values are never shown again after you save them."
-        actions={<button type="button" style={{ ...btn(false, 'primary'), flexShrink: 0 }} onClick={onAdd}>Add a secret</button>} />
+        sub="Credentials repositories use instead of a pasted token. Replace a value once here and every repository using it picks it up. Values are never shown again after you save them." />
       <div style={{ marginTop: 22 }}>
         <Stats items={[
           { n: l.length, label: 'secrets' },

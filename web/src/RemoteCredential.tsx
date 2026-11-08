@@ -115,7 +115,7 @@ export function RemoteCredential({ repo, origin, readOnly, onChanged }: {
           <div style={{ fontSize: 13, marginBottom: 8 }}>
             {linked ? 'Switch to another stored secret.' : 'Use a stored secret instead of the pasted credential. The pasted credential is removed.'}
           </div>
-          <SecretPicker url={url} value={secretId} onChange={id => setSecretId(id)} allowCreate testid="credential-picker" />
+          <SecretPicker url={url} value={secretId} onChange={id => setSecretId(id)} testid="credential-picker" />
           <Actions busy={busy} ready={secretId !== ''} label="Use this secret" onCancel={close}
             onConfirm={() => send({ secret_id: secretId })} testid="credential-link-save" />
         </div>

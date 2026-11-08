@@ -48,6 +48,8 @@ import { FleetSettings } from './FleetSettings';
 import { FleetWizard } from './FleetWizard';
 import type { FleetStatus } from './api';
 import { ErrorBoundary } from './ErrorBoundary';
+import { AccessSecretsLink } from './accessLink';
+import { restoreReturnPoint, takeReturnPoint, type ReturnPoint } from './serverReturn';
 import { StatusFooter } from './StatusFooter';
 import { useVersion } from './hooks';
 import { createOutageLog } from './streamOutage';
@@ -1205,10 +1207,41 @@ export default function App() {
   const onServerPage = useCallback((p: ServerPage) => dispatchView({ type: 'SET_SERVER_PAGE', page: p }), [dispatchView]);
   // The gear refuses while a connect commit runs in the Settings facet:
   // opening the server pages over it would unmount the wizard.
+  // What the server pages hide (Settings, the drafts) loses its scroll
+  // positions and the focus while display:none; they are taken just before
+  // the pages open and put back when they close (serverReturn.ts).
+  const returnPoint = useRef<ReturnPoint | null>(null);
   const onGear = useCallback(() => {
     if (view.locked) return;
+    if (view.server === null) returnPoint.current = takeReturnPoint();
     dispatchView({ type: 'TOGGLE_SERVER' });
-  }, [view.locked, dispatchView]);
+  }, [view.locked, view.server, dispatchView]);
+  useLayoutEffect(() => {
+    if (serverOpen || !returnPoint.current) return;
+    restoreReturnPoint(returnPoint.current);
+    returnPoint.current = null;
+  }, [serverOpen]);
+  // Each close of the server pages counts one return: what stayed mounted
+  // under them re-reads what Access may have changed (AccessSecretsLink).
+  const [serverReturns, setServerReturns] = useState(0);
+  const [wasServerOpen, setWasServerOpen] = useState(serverOpen);
+  if (wasServerOpen !== serverOpen) {
+    setWasServerOpen(serverOpen);
+    if (!serverOpen) setServerReturns(n => n + 1);
+  }
+  // "Access → Secrets" from a credential picker (SecretPicker): the server
+  // pages on Access, Secrets picked. Not offered when there is no Access page
+  // (read-only server) or while the gear is locked by a connect commit.
+  const openAccessSecrets = useCallback((from?: HTMLElement) => {
+    if (view.locked) return;
+    if (view.server === null) returnPoint.current = takeReturnPoint(from);
+    setAccessTab('secrets');
+    dispatchView({ type: 'SET_SERVER_PAGE', page: 'access' });
+  }, [view.locked, view.server, dispatchView]);
+  const accessSecretsLink = useMemo(() => ({
+    exists: serverPages.includes('access'),
+    open: serverPages.includes('access') && !view.locked ? openAccessSecrets : null, serverOpen, returns: serverReturns,
+  }), [serverPages, view.locked, openAccessSecrets, serverOpen, serverReturns]);
   const serverBar = useMemo(() => serverPage === null ? null : ({
     page: serverPage, pages: serverPages, onPage: onServerPage, authCount: oauth.count,
   }), [serverPage, serverPages, onServerPage, oauth.count]);
@@ -2035,6 +2068,7 @@ export default function App() {
               pages (hidden, as under another target), so nothing typed into
               one is lost by a look at the log. */}
           <FacetLayoutProvider value={facetLayout}>
+          <AccessSecretsLink.Provider value={accessSecretsLink}>
             {serverPage !== null && (
               // Keyed on the page so a tab switch remounts the boundary and
               // drops a crashed page's error; without it the card outlives
@@ -2048,7 +2082,7 @@ export default function App() {
                 rather than unmounted, so a half-filled form and a probe or a
                 create in flight survive a detour through the rail. */}
             {drafts.repo && (
-              <div data-testid="draft-repo" style={draftBody(!serverOpen && draftShownKind === 'repo')}>
+              <div data-testid="draft-repo" data-under-server="" style={draftBody(!serverOpen && draftShownKind === 'repo')}>
                 <ErrorBoundary variant="inline" label="New repository hit an error">
                   {state.serverReadOnly ? <CreateBlocked what="repository" /> : (
                     <CreateRepoWizard
@@ -2062,7 +2096,7 @@ export default function App() {
               </div>
             )}
             {drafts.lens && (
-              <div data-testid="draft-lens" style={draftBody(!serverOpen && draftShownKind === 'lens')}>
+              <div data-testid="draft-lens" data-under-server="" style={draftBody(!serverOpen && draftShownKind === 'lens')}>
                 <ErrorBoundary variant="inline" label="New lens hit an error">
                   {state.serverReadOnly ? <CreateBlocked what="lens" /> : (
                     <CreateLensForm
@@ -2077,14 +2111,14 @@ export default function App() {
               </div>
             )}
             {drafts.chat && (
-              <div data-testid="draft-chat" style={draftBody(!serverOpen && draftShownKind === 'chat')}>
+              <div data-testid="draft-chat" data-under-server="" style={draftBody(!serverOpen && draftShownKind === 'chat')}>
                 <ErrorBoundary variant="inline" label={NEW_CHAT_ERROR}>
                   <ChatStartForm providers={chatProviders ?? []} onCreated={onChatCreated} onCancel={onCancelDraft} />
                 </ErrorBoundary>
               </div>
             )}
             {drafts.fleet && (
-              <div data-testid="draft-fleet" style={draftBody(!serverOpen && draftShownKind === 'fleet')}>
+              <div data-testid="draft-fleet" data-under-server="" style={draftBody(!serverOpen && draftShownKind === 'fleet')}>
                 <ErrorBoundary variant="inline" label="New fleet hit an error">
                   {/* The fleet `+` is off on a read-only server, so no fleet
                       draft opens there. */}
@@ -2092,8 +2126,10 @@ export default function App() {
                 </ErrorBoundary>
               </div>
             )}
-            {/* The fleet target's pages. */}
-            {!serverOpen && displayed.kind === 'fleet' && fleet?.fleet_repo && (
+            {/* The fleet target's pages. Its Settings stays MOUNTED (hidden)
+                under the server pages, like Settings below. */}
+            {(!serverOpen || shownFacet === 'settings') && displayed.kind === 'fleet' && fleet?.fleet_repo && (
+              <div data-testid="fleet-body" data-under-server="" style={underServer(serverOpen)}>
               <ErrorBoundary variant="inline" label="The fleet hit an error">
                 {shownFacet === 'members' && (
                   <FleetMembers fleet={fleet} landing={fleetLanding} onDismissLanding={() => setFleetLanding(null)} onChanged={onFleetChanged} />
@@ -2103,13 +2139,14 @@ export default function App() {
                   <FleetSettings fleet={fleet as FleetStatus} onChanged={onFleetChanged} onBusyChange={setLocked} />
                 )}
               </ErrorBoundary>
+              </div>
             )}
             {/* Every live chat stays mounted (hidden when it is not the
                 displayed target), so its stream, transcript and any waiting
                 approval survive a detour to a repository: a chat lives as long
                 as its tab. */}
             {chats.map(c => (
-              <div key={c.id} data-testid={`chat-body-${c.id}`}
+              <div key={c.id} data-testid={`chat-body-${c.id}`} data-under-server=""
                 style={draftBody(!serverOpen && displayed.kind === 'chat' && displayed.id === c.id)}>
                 <ErrorBoundary variant="inline" label="The chat hit an error">
                   <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} onBrowseFact={onBrowseFact} repos={repos} repoNames={repoNames} serverReadOnly={state.serverReadOnly}
@@ -2145,7 +2182,12 @@ export default function App() {
                 />
               </ErrorBoundary>
             )}
-            {!serverOpen && pinnedOrContext && pinnedOrContext.kind !== 'fleet' && pinnedOrContext.kind !== 'chat' && shownFacet === 'settings' && (
+            {/* Settings stays MOUNTED (hidden) under the server pages: a
+                credential picker's "Access → Secrets" opens them, and coming
+                back must find the half-filled connect wizard, credential box
+                or restore prompt exactly as it was left. */}
+            {pinnedOrContext && pinnedOrContext.kind !== 'fleet' && pinnedOrContext.kind !== 'chat' && shownFacet === 'settings' && (
+              <div data-testid="settings-body" data-under-server="" style={underServer(serverOpen)}>
               <ErrorBoundary variant="inline" label="Settings hit an error">
                 <SettingsFacet
                   target={pinnedOrContext}
@@ -2169,7 +2211,9 @@ export default function App() {
                   onCreateRegistered={onCreateRegistered}
                 />
               </ErrorBoundary>
+              </div>
             )}
+          </AccessSecretsLink.Provider>
           </FacetLayoutProvider>
         </div>
       </div>
@@ -2184,6 +2228,10 @@ export default function App() {
     </div>
   );
 }
+
+/** A facet kept mounted under the server pages: laid out as if the wrapper
+ *  were not there while it shows, gone from the page while they do. */
+const underServer = (serverOpen: boolean): React.CSSProperties => ({ display: serverOpen ? 'none' : 'contents' });
 
 // A draft's body: mounted always, shown only while it is the displayed target.
 const draftBody = (shown: boolean): React.CSSProperties => ({
