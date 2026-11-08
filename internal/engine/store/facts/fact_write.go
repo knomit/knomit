@@ -398,8 +398,19 @@ func (fi *Index) batchWrite(ctx context.Context, branch string, files map[string
 
 // batchWriteLocked performs the actual batchWrite work. Caller must hold the branch lock.
 func (fi *Index) batchWriteLocked(ctx context.Context, branch string, files map[string]string, deletes, mustExist []string, message, operation string) (plumbing.Hash, map[string]string, error) {
-	// Before any object is written: a refused batch must leave nothing behind.
+	// Before any object is written: a refused batch must leave nothing behind
+	// (objects are never deleted). That covers BOTH the signer (ErrNoSigner)
+	// and the commit identity: CommitSigs refuses an experiment write whose
+	// owning agent cannot be named (orphan ref, non-agent recorded parent,
+	// stale parent), so it is resolved here and not after the blobs and trees
+	// below are stored (#554). The signatures' When is therefore stamped
+	// before the tree work instead of after; it is only a commit timestamp
+	// and nothing orders or compares it against the work in between.
 	signer, err := fi.rh.vr.CommitSigner()
+	if err != nil {
+		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: %w", err)
+	}
+	author, committer, err := fi.rh.vr.CommitSigs(ctx, branch, operation)
 	if err != nil {
 		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: %w", err)
 	}
@@ -515,11 +526,7 @@ func (fi *Index) batchWriteLocked(ctx context.Context, branch string, files map[
 		}
 	}
 
-	// Create single commit.
-	author, committer, err := fi.rh.vr.CommitSigs(ctx, branch, operation)
-	if err != nil {
-		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: %w", err)
-	}
+	// Create single commit (author and committer resolved at the top).
 	commit := &object.Commit{
 		Author:    author,
 		Committer: committer,
