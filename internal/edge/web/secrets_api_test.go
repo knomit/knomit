@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -169,10 +170,31 @@ func TestSecretsAPI_Errors(t *testing.T) {
 	}
 }
 
+// lockedBuffer is a log sink safe for concurrent use. The started Manager runs
+// background goroutines (the session reaper) that log through the global
+// logger while the test reads the captured output, so a bare bytes.Buffer is a
+// data race.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // No response body and no log line carries a value, password, key or
 // passphrase, whatever the type and whichever endpoint answered.
 func TestSecretsAPI_NeverReturnsValue(t *testing.T) {
-	var logs bytes.Buffer
+	var logs lockedBuffer
 	prev := log.Logger
 	log.Logger = zerolog.New(&logs).Level(zerolog.DebugLevel)
 	t.Cleanup(func() { log.Logger = prev })
