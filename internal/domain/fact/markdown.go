@@ -95,7 +95,7 @@ func CheckWikiLinks(body string) error {
 	if len(links) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%w: the body contains %s; %s", ErrWikiLinkInBody, listWikiLinks(links), wikiLinkAdvice)
+	return fmt.Errorf("%w: the body contains %s. %s", ErrWikiLinkInBody, listWikiLinks(links), wikiLinkAdvice)
 }
 
 // CheckWikiLinkEdit refuses an edit whose result carries MORE `[[...]]` in
@@ -123,7 +123,7 @@ func CheckWikiLinkEdit(before, after string) error {
 		}
 		added = append(added, l)
 	}
-	return fmt.Errorf("%w: the edit adds %s (the body would hold %d [[...]] outside code, it holds %d now). Existing ones may stay or be removed, but none may be added; %s",
+	return fmt.Errorf("%w: the edit adds %s, so the body would hold %d [[...]] outside code where it holds %d now. Ones the body already has may stay or be removed, but none may be added. %s",
 		ErrWikiLinkInBody, listWikiLinks(added), len(now), len(was), wikiLinkAdvice)
 }
 

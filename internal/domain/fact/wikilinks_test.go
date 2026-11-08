@@ -86,8 +86,8 @@ func TestCheckWikiLinkEdit_NoMoreThanBefore(t *testing.T) {
 	require.True(t, errors.Is(err, ErrWikiLinkInBody))
 	require.Contains(t, err.Error(), "the edit adds [[new]] (line 1)")
 	require.NotContains(t, err.Error(), "[[slug]] (line", "only the added occurrence is named")
-	require.Contains(t, err.Error(), "would hold 3")
-	require.Contains(t, err.Error(), "holds 2 now")
+	require.Contains(t, err.Error(), "so the body would hold 3 [[...]] outside code where it holds 2 now")
+	require.Contains(t, err.Error(), "none may be added")
 	require.Contains(t, err.Error(), "refs")
 
 	err = CheckWikiLinkEdit("clean", "clean [[x]]")
