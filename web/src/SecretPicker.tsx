@@ -52,12 +52,21 @@ export function SecretPicker({ url, value, onChange, preselect = false, testid =
   const [pick, setPick] = useState(value);
   const link = useContext(AccessSecretsLink);
 
+  // fromLink: this picker's "Access → Secrets" opened the server pages.
+  // handoff: they have just closed after that trip, so the list now being
+  // read may replace the link (focused again by App) with a select.
+  const fromLink = useRef(false);
+  const handoff = useRef(false);
   const load = useCallback(() => api.listSecrets()
     .then(l => { setErr(''); setAll(l); })
-    .catch(e => { setErr(e instanceof Error ? e.message : String(e)); }), []);
+    .catch(e => { handoff.current = false; setErr(e instanceof Error ? e.message : String(e)); }), []);
   // Read on mount, and again each time the server pages close: a picker kept
   // mounted under them sees the secret just added there.
-  useEffect(() => { load(); }, [load, link.returns]);
+  useEffect(() => {
+    handoff.current = fromLink.current;
+    fromLink.current = false;
+    load();
+  }, [load, link.returns]);
 
   const host = remoteHost(url);
   const fitting = (all ?? []).filter(s => secretFits(s, url));
@@ -80,18 +89,17 @@ export function SecretPicker({ url, value, onChange, preselect = false, testid =
 
   const kind = kindFor(typesForURL(url));
 
-  // Focus came back to the "Access → Secrets" link, and the re-read then
-  // replaced the link with a select: the select takes the focus, rather than
-  // the page dropping it.
+  // Back from a trip through this picker's link, the first list read decides:
+  // if it replaced the link (where App put the focus back) with a select, the
+  // select takes the focus rather than the page dropping it. Once only.
   const selectRef = useRef<HTMLSelectElement>(null);
-  const linkFocused = useRef(false);
   const hasSelect = all !== null && fitting.length > 0;
   useEffect(() => {
-    if (!hasSelect || !linkFocused.current) return;
-    linkFocused.current = false;
+    if (!handoff.current || all === null) return;
+    handoff.current = false;
     const a = document.activeElement;
-    if (!a || a === document.body) selectRef.current?.focus();
-  }, [hasSelect]);
+    if (hasSelect && (!a || a === document.body)) selectRef.current?.focus();
+  }, [all, hasSelect]);
 
   return (
     <div data-testid={testid} data-return-focus="">
@@ -127,8 +135,7 @@ export function SecretPicker({ url, value, onChange, preselect = false, testid =
             <>
               {' Add one in '}
               {link.open
-                ? <button type="button" data-testid={`${testid}-access-link`} onClick={e => link.open?.(e.currentTarget)}
-                    onFocus={() => { linkFocused.current = true; }} onBlur={e => { if (e.relatedTarget) linkFocused.current = false; }}
+                ? <button type="button" data-testid={`${testid}-access-link`} onClick={e => { fromLink.current = true; link.open?.(e.currentTarget); }}
                     style={{ ...linkBtn, fontSize: 'inherit', fontFamily: 'inherit' }}>Access → Secrets</button>
                 : 'Access → Secrets'}
               .

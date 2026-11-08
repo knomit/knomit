@@ -1213,7 +1213,7 @@ export default function App() {
   const returnPoint = useRef<ReturnPoint | null>(null);
   const onGear = useCallback(() => {
     if (view.locked) return;
-    if (view.server === null) returnPoint.current = takeReturnPoint(document);
+    if (view.server === null) returnPoint.current = takeReturnPoint();
     dispatchView({ type: 'TOGGLE_SERVER' });
   }, [view.locked, view.server, dispatchView]);
   useLayoutEffect(() => {
@@ -1234,7 +1234,7 @@ export default function App() {
   // (read-only server) or while the gear is locked by a connect commit.
   const openAccessSecrets = useCallback((from?: HTMLElement) => {
     if (view.locked) return;
-    if (view.server === null) returnPoint.current = takeReturnPoint(document, from);
+    if (view.server === null) returnPoint.current = takeReturnPoint(from);
     setAccessTab('secrets');
     dispatchView({ type: 'SET_SERVER_PAGE', page: 'access' });
   }, [view.locked, view.server, dispatchView]);
@@ -2082,7 +2082,7 @@ export default function App() {
                 rather than unmounted, so a half-filled form and a probe or a
                 create in flight survive a detour through the rail. */}
             {drafts.repo && (
-              <div data-testid="draft-repo" style={draftBody(!serverOpen && draftShownKind === 'repo')}>
+              <div data-testid="draft-repo" data-under-server="" style={draftBody(!serverOpen && draftShownKind === 'repo')}>
                 <ErrorBoundary variant="inline" label="New repository hit an error">
                   {state.serverReadOnly ? <CreateBlocked what="repository" /> : (
                     <CreateRepoWizard
@@ -2096,7 +2096,7 @@ export default function App() {
               </div>
             )}
             {drafts.lens && (
-              <div data-testid="draft-lens" style={draftBody(!serverOpen && draftShownKind === 'lens')}>
+              <div data-testid="draft-lens" data-under-server="" style={draftBody(!serverOpen && draftShownKind === 'lens')}>
                 <ErrorBoundary variant="inline" label="New lens hit an error">
                   {state.serverReadOnly ? <CreateBlocked what="lens" /> : (
                     <CreateLensForm
@@ -2111,14 +2111,14 @@ export default function App() {
               </div>
             )}
             {drafts.chat && (
-              <div data-testid="draft-chat" style={draftBody(!serverOpen && draftShownKind === 'chat')}>
+              <div data-testid="draft-chat" data-under-server="" style={draftBody(!serverOpen && draftShownKind === 'chat')}>
                 <ErrorBoundary variant="inline" label={NEW_CHAT_ERROR}>
                   <ChatStartForm providers={chatProviders ?? []} onCreated={onChatCreated} onCancel={onCancelDraft} />
                 </ErrorBoundary>
               </div>
             )}
             {drafts.fleet && (
-              <div data-testid="draft-fleet" style={draftBody(!serverOpen && draftShownKind === 'fleet')}>
+              <div data-testid="draft-fleet" data-under-server="" style={draftBody(!serverOpen && draftShownKind === 'fleet')}>
                 <ErrorBoundary variant="inline" label="New fleet hit an error">
                   {/* The fleet `+` is off on a read-only server, so no fleet
                       draft opens there. */}
@@ -2129,7 +2129,7 @@ export default function App() {
             {/* The fleet target's pages. Its Settings stays MOUNTED (hidden)
                 under the server pages, like Settings below. */}
             {(!serverOpen || shownFacet === 'settings') && displayed.kind === 'fleet' && fleet?.fleet_repo && (
-              <div data-testid="fleet-body" style={underServer(serverOpen)}>
+              <div data-testid="fleet-body" data-under-server="" style={underServer(serverOpen)}>
               <ErrorBoundary variant="inline" label="The fleet hit an error">
                 {shownFacet === 'members' && (
                   <FleetMembers fleet={fleet} landing={fleetLanding} onDismissLanding={() => setFleetLanding(null)} onChanged={onFleetChanged} />
@@ -2146,7 +2146,7 @@ export default function App() {
                 approval survive a detour to a repository: a chat lives as long
                 as its tab. */}
             {chats.map(c => (
-              <div key={c.id} data-testid={`chat-body-${c.id}`}
+              <div key={c.id} data-testid={`chat-body-${c.id}`} data-under-server=""
                 style={draftBody(!serverOpen && displayed.kind === 'chat' && displayed.id === c.id)}>
                 <ErrorBoundary variant="inline" label="The chat hit an error">
                   <ChatFacet chat={c} facet={displayed.kind === 'chat' && displayed.id === c.id && shownFacet === 'settings' ? 'settings' : 'chat'} onGone={onChatGone} onNewChat={onNewChatLike} onBrowseFact={onBrowseFact} repos={repos} repoNames={repoNames} serverReadOnly={state.serverReadOnly}
@@ -2187,7 +2187,7 @@ export default function App() {
                 back must find the half-filled connect wizard, credential box
                 or restore prompt exactly as it was left. */}
             {pinnedOrContext && pinnedOrContext.kind !== 'fleet' && pinnedOrContext.kind !== 'chat' && shownFacet === 'settings' && (
-              <div data-testid="settings-body" style={underServer(serverOpen)}>
+              <div data-testid="settings-body" data-under-server="" style={underServer(serverOpen)}>
               <ErrorBoundary variant="inline" label="Settings hit an error">
                 <SettingsFacet
                   target={pinnedOrContext}

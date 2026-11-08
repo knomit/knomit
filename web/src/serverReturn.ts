@@ -12,12 +12,17 @@ export type ReturnPoint = {
   within: HTMLElement | null;
 };
 
-/** takeReturnPoint records the scroll positions under `root`, and, when the
- *  trip starts from an element (`from`), where focus should come back to. */
-export function takeReturnPoint(root: ParentNode, from?: HTMLElement | null): ReturnPoint {
+/** takeReturnPoint records the scroll positions inside the containers about
+ *  to be hidden (App marks them data-under-server; one already hidden has
+ *  none to keep), and, when the trip starts from an element (`from`), where
+ *  focus should come back to. */
+export function takeReturnPoint(from?: HTMLElement | null): ReturnPoint {
   const scrolled: ReturnPoint['scrolled'] = [];
-  root.querySelectorAll('*').forEach(el => {
-    if (el.scrollTop > 0 || el.scrollLeft > 0) scrolled.push([el, el.scrollTop, el.scrollLeft]);
+  document.querySelectorAll<HTMLElement>('[data-under-server]').forEach(box => {
+    if (box.style.display === 'none') return;
+    box.querySelectorAll('*').forEach(el => {
+      if (el.scrollTop > 0 || el.scrollLeft > 0) scrolled.push([el, el.scrollTop, el.scrollLeft]);
+    });
   });
   return { scrolled, focus: from ?? null, within: from?.closest<HTMLElement>('[data-return-focus]') ?? null };
 }

@@ -30,20 +30,23 @@ export function useRemote(repo: string, enabled = true): RemoteState {
   // deleted in Access, but the card stays as it is meanwhile (no "Loading…",
   // which would unmount an open credential box), and a failed re-read keeps
   // what was shown.
+  // Only when nothing is loading: a quiet re-read that cancels a load in
+  // flight would leave `loading` set for good.
   const { returns } = useContext(AccessSecretsLink);
   const readFor = useRef({ repo, enabled, nonce, returns });
+  const loadingRef = useRef(false);
 
   useEffect(() => {
     if (!enabled) return;
     const last = readFor.current;
-    const quiet = last.returns !== returns && last.repo === repo && last.enabled === enabled && last.nonce === nonce;
+    const quiet = !loadingRef.current && last.returns !== returns && last.repo === repo && last.enabled === enabled && last.nonce === nonce;
     readFor.current = { repo, enabled, nonce, returns };
     let cancelled = false;
-    if (!quiet) { setLoading(true); setErr(''); }
+    if (!quiet) { loadingRef.current = true; setLoading(true); setErr(''); }
     api.getOrigin(repo)
-      .then(o => { if (!cancelled) setOrigin(o); })
+      .then(o => { if (cancelled) return; setOrigin(o); if (quiet) setErr(''); })
       .catch(() => { if (!cancelled && !quiet) setErr('could not load remote status'); })
-      .finally(() => { if (!cancelled && !quiet) setLoading(false); });
+      .finally(() => { if (!cancelled && !quiet) { loadingRef.current = false; setLoading(false); } });
     return () => { cancelled = true; };
   }, [repo, enabled, nonce, returns]);
 

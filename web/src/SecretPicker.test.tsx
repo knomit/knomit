@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import { useState } from 'react';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -197,11 +197,37 @@ describe('SecretPicker: none fit', () => {
     );
     const { rerender } = render(tree(0));
     const a = await screen.findByTestId('secret-picker-access-link');
+    fireEvent.click(a);
+    // App puts the focus back on the link as the server pages close.
     a.focus();
-    expect(a).toHaveFocus();
     api.listSecrets.mockResolvedValue([secret({ id: 'added', name: 'added' })]);
     rerender(tree(1));
     await waitFor(() => expect(screen.getByTestId('secret-picker-select')).toHaveFocus());
+  });
+
+  it('moves no focus after a trip that did not start from its link (a gear trip later on)', async () => {
+    const api = await mocked();
+    api.listSecrets.mockResolvedValue([]);
+    const tree = (returns: number) => (
+      <AccessSecretsLink.Provider value={link({ open: () => {}, returns })}>
+        <Held url="https://github.com/a/b.git" />
+      </AccessSecretsLink.Provider>
+    );
+    const { rerender } = render(tree(0));
+    const a = await screen.findByTestId('secret-picker-access-link');
+    // A trip through the link that adds nothing: the link stays.
+    fireEvent.click(a);
+    a.focus();
+    rerender(tree(1));
+    await waitFor(() => expect(api.listSecrets).toHaveBeenCalledTimes(2));
+    await act(async () => { await Promise.resolve(); });
+    // The reader clicks blank space, then goes through the gear and adds one.
+    a.blur();
+    api.listSecrets.mockResolvedValue([secret({ id: 'added', name: 'added' })]);
+    rerender(tree(2));
+    const select = await screen.findByTestId('secret-picker-select');
+    await act(async () => { await Promise.resolve(); });
+    expect(select).not.toHaveFocus();
   });
 
   it('passes the link itself to open, so focus can come back to it', async () => {

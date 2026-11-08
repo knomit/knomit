@@ -136,6 +136,33 @@ describe('RemoteCard credential row', () => {
     expect(api.getOrigin).toHaveBeenCalledTimes(2);
   });
 
+  it('a return while the first read is still in flight does not leave the card on Loading…', async () => {
+    const api = await mocked();
+    api.getOrigin.mockReturnValueOnce(new Promise(() => {})).mockResolvedValue(base);
+    const tree = (serverOpen: boolean, returns: number) => (
+      <AccessSecretsLink.Provider value={{ exists: true, open: null, serverOpen, returns }}><Harness /></AccessSecretsLink.Provider>
+    );
+    const { rerender } = render(tree(false, 0));
+    expect(await screen.findByText('Loading…')).toBeInTheDocument();
+    rerender(tree(true, 0));
+    rerender(tree(false, 1));
+    expect(await screen.findByTestId('credential-link')).toBeInTheDocument();
+    expect(screen.queryByText('Loading…')).toBeNull();
+  });
+
+  it('a quiet re-read that succeeds clears an earlier load error', async () => {
+    const api = await mocked();
+    api.getOrigin.mockRejectedValueOnce(new Error('down')).mockResolvedValue(base);
+    const tree = (returns: number) => (
+      <AccessSecretsLink.Provider value={{ exists: true, open: null, serverOpen: false, returns }}><Harness /></AccessSecretsLink.Provider>
+    );
+    const { rerender } = render(tree(0));
+    expect(await screen.findByText(/could not load remote status/)).toBeInTheDocument();
+    rerender(tree(1));
+    expect(await screen.findByTestId('credential-link')).toBeInTheDocument();
+    expect(screen.queryByText(/could not load remote status/)).toBeNull();
+  });
+
   it('shows the linked secret, and Unlink cannot be confirmed until a replacement is chosen', async () => {
     const api = await mocked();
     api.getOrigin.mockResolvedValue(linkedOrigin());
