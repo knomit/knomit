@@ -220,7 +220,8 @@ func (s *Store) Collect(ctx context.Context, id string) (string, Pending, error)
 	}
 	var code string
 	if p.Decision == DecisionApproved {
-		f, err := s.createFamilyTx(ctx, tx, FamilySpec{ClientID: p.ClientID, Subject: p.Subject, Scopes: p.Ceiling, Resource: p.Resource, ApprovedBy: p.DecidedBy})
+		f, err := s.createFamilyTx(ctx, tx, FamilySpec{ClientID: p.ClientID, Subject: p.Subject, Scopes: p.Ceiling, Resource: p.Resource,
+			ApprovedBy: p.DecidedBy, ClientName: p.ClientName})
 		if err != nil {
 			return "", Pending{}, err
 		}
