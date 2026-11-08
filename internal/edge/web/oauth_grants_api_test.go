@@ -102,8 +102,13 @@ func TestGrantsAPI_LocalListsAndRevokes(t *testing.T) {
 
 	id, _ := row["id"].(string)
 	rec := serve(h, localPeer(httptest.NewRequest(http.MethodPost, "/api/v1/oauth/grants/"+id+"/revoke", nil)))
-	if rec.Code != http.StatusNoContent {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("revoke: %d %s", rec.Code, rec.Body.String())
+	}
+	// The revoker is recorded and answered back.
+	var rv map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &rv); err != nil || rv["id"] != id || rv["revoked_by"] != "bridge:uid:501@"+string(auth.LocalVia) || rv["revoked_at"] == nil {
+		t.Fatalf("revoke body %s: %v", rec.Body.String(), err)
 	}
 	if c := bearer(tok); c != http.StatusUnauthorized {
 		t.Fatalf("token after revoke: %d, want 401", c)
@@ -134,8 +139,9 @@ func TestGrantsAPI_BrowserProofAdmits(t *testing.T) {
 		t.Fatalf("list body %s: %v", rec.Body.String(), err)
 	}
 	id, _ := list.Grants[0]["id"].(string)
-	if rec := serve(h, browserReq(http.MethodPost, "/api/v1/oauth/grants/"+id+"/revoke", "{}", "127.0.0.1")); rec.Code != http.StatusNoContent {
-		t.Fatalf("revoke: %d %s", rec.Code, rec.Body.String())
+	rec = serve(h, browserReq(http.MethodPost, "/api/v1/oauth/grants/"+id+"/revoke", "{}", "127.0.0.1"))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"revoked_by":"anonymous@none"`) {
+		t.Fatalf("revoke must record the browser principal: %d %s", rec.Code, rec.Body.String())
 	}
 }
 

@@ -387,10 +387,12 @@ func (i *Issuer) Pending(ctx context.Context) ([]Pending, error) { return i.stor
 // Logins lists the approved logins that can still be used.
 func (i *Issuer) Logins(ctx context.Context) ([]Login, error) { return i.store.ListLogins(ctx) }
 
-// RevokeLogin signs one approved login out: its family is revoked, so its
-// access and refresh tokens stop working at once (ErrUnknownFamily for an
-// unknown id).
-func (i *Issuer) RevokeLogin(ctx context.Context, id string) error { return i.store.RevokeFamily(ctx, id) }
+// RevokeLogin signs one approved login out on behalf of by: its family is
+// revoked, so its access and refresh tokens stop working at once, and by is
+// recorded as the revoker (ErrUnknownFamily for an unknown id).
+func (i *Issuer) RevokeLogin(ctx context.Context, id, by string) (Revocation, error) {
+	return i.store.RevokeFamily(ctx, id, by)
+}
 
 // Approve decides a request in favour of subject. The ceiling is scopes when
 // given (any supported permission name, never admin), else the requested

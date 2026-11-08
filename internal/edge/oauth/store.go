@@ -76,6 +76,8 @@ type FamilySpec struct {
 	// ClientName is the client_name of the request the family came from, as
 	// the CLIENT gave it: a label for the operator's list, never an identity
 	// ("" for a family minted before 000020, or a request that named none).
+	// Written at creation; read back only by ListLogins, never on the
+	// per-request token lookups.
 	ClientName string
 }
 
@@ -216,8 +218,7 @@ type querier interface {
 }
 
 const familyCols = `f.id, f.client_id, f.subject, f.scope, f.resource, f.created_at, f.refresh_expires_at, f.revoked_at,
-  COALESCE((SELECT approved_by FROM oauth_family_approvals a WHERE a.family_id = f.id), ''),
-  COALESCE((SELECT client_name FROM oauth_family_clients c WHERE c.family_id = f.id), '')`
+  COALESCE((SELECT approved_by FROM oauth_family_approvals a WHERE a.family_id = f.id), '')`
 
 func scanFamily(scan func(...any) error, extra ...any) (Family, error) {
 	var (
@@ -226,7 +227,7 @@ func scanFamily(scan func(...any) error, extra ...any) (Family, error) {
 		created, refreshTo int64
 		revoked            sql.NullInt64
 	)
-	dest := append([]any{&f.ID, &f.ClientID, &f.Subject, &scope, &f.Resource, &created, &refreshTo, &revoked, &f.ApprovedBy, &f.ClientName}, extra...)
+	dest := append([]any{&f.ID, &f.ClientID, &f.Subject, &scope, &f.Resource, &created, &refreshTo, &revoked, &f.ApprovedBy}, extra...)
 	if err := scan(dest...); err != nil {
 		return Family{}, err
 	}

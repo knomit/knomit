@@ -10,12 +10,14 @@ import (
 	"knomit/internal/edge/oauth"
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/edge/web/httpx"
+	"knomit/internal/foundation/auth"
 )
 
 // mountOAuthGrants adds the approved logins to the PLAIN API router, beside
 // the pending requests and behind the same gate: list the token families that
 // can still be used, and revoke one. A revoke ends the whole family, as a
-// replayed refresh token does, so the client is signed out at once.
+// replayed refresh token does, so the client is signed out at once, and
+// records who revoked it.
 func (s *Server) mountOAuthGrants(r chi.Router) {
 	iss := s.OAuthIssuer
 	r.Route("/oauth/grants", func(r chi.Router) {
@@ -35,15 +37,24 @@ func (s *Server) mountOAuthGrants(r chi.Router) {
 				"grants": out,
 			})
 		})
+		// The revoking principal is recorded (oauth_family_revocations) and
+		// answered back, so the operator who ended a login can be named
+		// later. A second revoke answers the first one's record.
 		r.Post("/{id}/revoke", func(w http.ResponseWriter, req *http.Request) {
-			err := iss.RevokeLogin(req.Context(), chi.URLParam(req, "id"))
+			by, _ := auth.FromContext(req.Context())
+			rv, err := iss.RevokeLogin(req.Context(), chi.URLParam(req, "id"), by.String())
 			switch {
 			case errors.Is(err, oauth.ErrUnknownFamily):
 				hal.WriteProblem(w, http.StatusNotFound, "Not Found", err.Error(), req.URL.Path)
 			case err != nil:
 				hal.WriteProblem(w, http.StatusInternalServerError, "Internal Server Error", err.Error(), req.URL.Path)
 			default:
-				w.WriteHeader(http.StatusNoContent)
+				hal.WriteHAL(w, http.StatusOK, map[string]any{
+					"_links":     map[string]any{"grants": map[string]string{"href": httpx.APIBase + "/oauth/grants"}},
+					"id":         rv.FamilyID,
+					"revoked_at": rv.RevokedAt.UTC(),
+					"revoked_by": rv.RevokedBy,
+				})
 			}
 		})
 	})
