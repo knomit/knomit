@@ -97,7 +97,7 @@ describe('StepAccess: stored secret', () => {
     fn(api.listSecrets).mockResolvedValue([{ ...secret('gl', 'gl-pat'), hosts: ['gitlab.com'] }]);
     await toAccess();
     fireEvent.change(screen.getByTestId('create-auth-method'), { target: { value: 'secret' } });
-    expect(await screen.findByTestId('create-secret-picker-none')).toHaveTextContent('No stored secret is allowed for github.com. Add one in Access → Secrets.');
+    expect(await screen.findByTestId('create-secret-picker-none')).toHaveTextContent('No token or username + password secret is allowed for github.com. Add one in Access → Secrets.');
     expect(screen.queryByTestId('create-secret-picker-select')).toBeNull();
     expect(screen.getByRole('button', { name: /^next$/i })).toBeDisabled();
   });

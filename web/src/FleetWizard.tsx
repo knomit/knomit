@@ -385,7 +385,7 @@ function StepAccess({ s, checking, err, dispatch, onCheck }: {
           <OutcomeCard tone="bad" testid="fleet-access-refused" headline={`${host || 'The remote'} refused those credentials`} url={url} detail={err.message} />
         </div>
       )}
-      <CredentialFields url={url} method={s.authMethod} user={s.authUser} token={s.authToken} secretId={s.secretId}
+      <CredentialFields url={url} method={s.authMethod} user={s.authUser} token={s.authToken} secretId={s.secretId} preselectSecret
         onSecretId={id => dispatch({ type: 'SET_SECRET', id })}
         onMethod={method => dispatch({ type: 'SET_AUTH_METHOD', method })}
         onUser={user => dispatch({ type: 'SET_AUTH_USER', user })}

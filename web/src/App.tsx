@@ -1219,6 +1219,7 @@ export default function App() {
     dispatchView({ type: 'SET_SERVER_PAGE', page: 'access' });
   }, [view.locked, dispatchView]);
   const accessSecretsLink = useMemo(() => ({
+    exists: serverPages.includes('access'),
     open: serverPages.includes('access') && !view.locked ? openAccessSecrets : null, serverOpen,
   }), [serverPages, view.locked, openAccessSecrets, serverOpen]);
   const serverBar = useMemo(() => serverPage === null ? null : ({
@@ -2105,8 +2106,10 @@ export default function App() {
                 </ErrorBoundary>
               </div>
             )}
-            {/* The fleet target's pages. */}
-            {!serverOpen && displayed.kind === 'fleet' && fleet?.fleet_repo && (
+            {/* The fleet target's pages. Its Settings stays MOUNTED (hidden)
+                under the server pages, like Settings below. */}
+            {(!serverOpen || shownFacet === 'settings') && displayed.kind === 'fleet' && fleet?.fleet_repo && (
+              <div data-testid="fleet-body" style={underServer(serverOpen)}>
               <ErrorBoundary variant="inline" label="The fleet hit an error">
                 {shownFacet === 'members' && (
                   <FleetMembers fleet={fleet} landing={fleetLanding} onDismissLanding={() => setFleetLanding(null)} onChanged={onFleetChanged} />
@@ -2116,6 +2119,7 @@ export default function App() {
                   <FleetSettings fleet={fleet as FleetStatus} onChanged={onFleetChanged} onBusyChange={setLocked} />
                 )}
               </ErrorBoundary>
+              </div>
             )}
             {/* Every live chat stays mounted (hidden when it is not the
                 displayed target), so its stream, transcript and any waiting
@@ -2158,7 +2162,12 @@ export default function App() {
                 />
               </ErrorBoundary>
             )}
-            {!serverOpen && pinnedOrContext && pinnedOrContext.kind !== 'fleet' && pinnedOrContext.kind !== 'chat' && shownFacet === 'settings' && (
+            {/* Settings stays MOUNTED (hidden) under the server pages: a
+                credential picker's "Access → Secrets" opens them, and coming
+                back must find the half-filled connect wizard, credential box
+                or restore prompt exactly as it was left. */}
+            {pinnedOrContext && pinnedOrContext.kind !== 'fleet' && pinnedOrContext.kind !== 'chat' && shownFacet === 'settings' && (
+              <div data-testid="settings-body" style={underServer(serverOpen)}>
               <ErrorBoundary variant="inline" label="Settings hit an error">
                 <SettingsFacet
                   target={pinnedOrContext}
@@ -2182,6 +2191,7 @@ export default function App() {
                   onCreateRegistered={onCreateRegistered}
                 />
               </ErrorBoundary>
+              </div>
             )}
           </AccessSecretsLink.Provider>
           </FacetLayoutProvider>
@@ -2200,6 +2210,10 @@ export default function App() {
 }
 
 // A draft's body: mounted always, shown only while it is the displayed target.
+/** A facet kept mounted under the server pages: laid out as if the wrapper
+ *  were not there while it shows, gone from the page while they do. */
+const underServer = (serverOpen: boolean): React.CSSProperties => ({ display: serverOpen ? 'none' : 'contents' });
+
 const draftBody = (shown: boolean): React.CSSProperties => ({
   flex: '1 1 0', minHeight: 0, flexDirection: 'column', overflow: 'hidden',
   display: shown ? 'flex' : 'none',

@@ -372,7 +372,8 @@ describe('a pinned target under the server pages', () => {
     expect(await screen.findByTestId('lens-broken-callout')).toBeInTheDocument();
 
     await openServer();
-    expect(screen.queryByTestId('lens-broken-callout')).toBeNull();
+    // Settings stays mounted under the server pages, hidden.
+    expect(screen.getByTestId('lens-broken-callout')).not.toBeVisible();
     // The rail is hidden under the server pages, the pinned row with it.
     expect(screen.queryByTestId('rail-lens-haunted')).toBeNull();
 
@@ -414,11 +415,37 @@ describe('a credential picker sends the reader to Access → Secrets', () => {
     await act(async () => { fireEvent.click(await screen.findByTestId('remote-connect')); });
     await act(async () => { fireEvent.change(await screen.findByTestId('wizard-url'), { target: { value: 'https://github.com/a/kb.git' } }); });
     fireEvent.change(screen.getByLabelText('Auth method'), { target: { value: 'secret' } });
-    expect(await screen.findByTestId('wizard-secret-picker-none')).toHaveTextContent('No stored secret is allowed for github.com.');
+    expect(await screen.findByTestId('wizard-secret-picker-none')).toHaveTextContent('No token or username + password secret is allowed for github.com.');
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Access → Secrets' })); });
 
     expect(await screen.findByTestId('access-page')).toBeInTheDocument();
     expect(screen.getByTestId('access-section-secrets')).toHaveAttribute('aria-current', 'true');
     expect(await screen.findByTestId('secrets-overview')).toBeInTheDocument();
+  });
+
+  it('coming back from Access finds the half-filled connect wizard exactly as it was left', async () => {
+    const m = await primeApi({ oauth: [] });
+    await mountApp();
+    fireEvent.click(screen.getByTestId('facet-tab-settings'));
+    await screen.findByTestId('repo-settings');
+    await act(async () => { fireEvent.click(await screen.findByTestId('remote-connect')); });
+    await act(async () => { fireEvent.change(await screen.findByTestId('wizard-url'), { target: { value: 'https://github.com/a/kb.git' } }); });
+    fireEvent.change(screen.getByLabelText('Auth method'), { target: { value: 'secret' } });
+    await screen.findByTestId('wizard-secret-picker-none');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Access → Secrets' })); });
+    expect(await screen.findByTestId('access-page')).toBeInTheDocument();
+    // Settings is still there, hidden, under the server pages.
+    expect(screen.getByTestId('wizard-url')).not.toBeVisible();
+
+    // A secret is added in Access; the gear goes back.
+    m.listSecrets.mockResolvedValue([
+      { id: 's1', name: 'gh-pat', type: 'token', hosts: ['github.com'], expires_at: null, status: 'none', created_at: '', updated_at: '', linked_repos: 0 },
+    ]);
+    await act(async () => { fireEvent.click(gear()); });
+    expect(screen.getByTestId('wizard-url')).toBeVisible();
+    expect(screen.getByTestId('wizard-url')).toHaveValue('https://github.com/a/kb.git');
+    expect(screen.getByLabelText('Auth method')).toHaveValue('secret');
+    // The picker re-read the secrets, and the wizard preselects the new one.
+    await waitFor(() => expect(screen.getByTestId('wizard-secret-picker-select')).toHaveValue('s1'));
   });
 });

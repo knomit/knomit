@@ -109,7 +109,7 @@ export function StepAccess({ state, dispatch, onProbe, onCancelProbe, probing, p
           Secrets, the only place one is created). No pasted field is sent. */}
       {state.authMethod === 'secret' && (
         <div style={{ marginTop: 8 }}>
-          <SecretPicker url={state.url} value={state.secretId} testid="create-secret-picker"
+          <SecretPicker url={state.url} value={state.secretId} preselect testid="create-secret-picker"
             onChange={id => dispatch({ type: 'SET_SECRET', id })} />
         </div>
       )}

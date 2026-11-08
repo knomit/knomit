@@ -46,7 +46,7 @@ describe('RemoteConnectWizard: stored secret', () => {
     fireEvent.change(await screen.findByTestId('wizard-url'), { target: { value: 'https://github.com/a/kb.git' } });
     fireEvent.change(screen.getByLabelText('Auth method'), { target: { value: 'secret' } });
     expect(await screen.findByTestId('wizard-secret-picker-none'))
-      .toHaveTextContent('No stored secret is allowed for github.com. Add one in Access → Secrets.');
+      .toHaveTextContent('No token or username + password secret is allowed for github.com. Add one in Access → Secrets.');
     expect(screen.queryByTestId('wizard-secret-picker-select')).toBeNull();
     expect(screen.queryByText(/create a new secret/i)).toBeNull();
     expect(screen.getByRole('button', { name: /^test/i })).toBeDisabled();

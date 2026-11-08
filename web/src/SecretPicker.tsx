@@ -1,63 +1,101 @@
 import { useCallback, useContext, useEffect, useState } from 'react';
-import { api, type SecretView } from './api';
+import { api, type SecretType, type SecretView } from './api';
 import { fieldInput, fieldHint, linkBtn, wizardErr } from './manageStyles';
 import { CredentialChip } from './CredentialChip';
 import { AccessSecretsLink } from './accessLink';
-import { remoteHost, secretFits } from './secrets';
+import { remoteHost, secretFits, typesForURL } from './secrets';
 
 // SecretPicker chooses the stored secret a remote uses. It lists ONLY the
 // secrets that fit the remote (a type that fits the URL's scheme, and a hosts
 // list that allows its host); the server checks the fit again when it links.
-//
-// - Some fit: the select holds just those, and the first is chosen as soon as
-//   the list arrives (or when the chosen one stops fitting). Nothing links on
-//   that: the caller still asks the reader to test and save.
-// - None fit: there is no select, only a line pointing at Access → Secrets,
-//   and the value is cleared, so a caller that gates on it stays disabled.
-//
 // It never creates a secret: that happens only in Access → Secrets.
+//
+// The value is always '' or a fitting secret:
+// - A chosen secret (picked by the reader, or the value the caller started
+//   with) that stops fitting is cleared, with a line saying why, and comes
+//   back by itself if it fits again (a URL being typed passes through hosts
+//   that fit nothing). It is never swapped for another secret.
+// - With `preselect`, and only while nothing is chosen and the reader never
+//   picked, the first fitting secret that has not expired is chosen (an
+//   expired one only when nothing else fits). Only the wizards ask for this:
+//   they still test before anything is saved. A surface whose confirm saves
+//   at once (the credential box, Restore, Update access) starts empty.
+// - None fit: there is no select, only a line naming the kind of secret the
+//   URL needs, pointing at Access → Secrets where the server has that page.
 
-export function SecretPicker({ url, value, onChange, testid = 'secret-picker' }: {
+const KIND: Record<string, string> = {
+  ssh_key: 'SSH-key',
+  'token,basic': 'token or username + password',
+};
+
+/** The kind of secret a URL takes, in words; '' when it takes none. */
+function kindFor(types: SecretType[]): string {
+  return KIND[types.join(',')] ?? '';
+}
+
+const lostStyle = { fontSize: 12, color: '#e8c98a', margin: '0 0 6px', lineHeight: 1.5 };
+
+export function SecretPicker({ url, value, onChange, preselect = false, testid = 'secret-picker' }: {
   /** The remote the secret is for. */
   url: string;
   /** The chosen secret's id, '' for none. */
   value: string;
   onChange: (id: string, secret: SecretView | null) => void;
+  /** Choose a fitting secret by itself while nothing is chosen (see above). */
+  preselect?: boolean;
   testid?: string;
 }) {
   const [all, setAll] = useState<SecretView[] | null>(null);
   const [err, setErr] = useState('');
+  // The secret the reader chose (or the caller started with), '' for none.
+  // It outlives the value, which is cleared while it does not fit.
+  const [pick, setPick] = useState(value);
   const link = useContext(AccessSecretsLink);
 
   const load = useCallback(() => api.listSecrets()
     .then(l => { setErr(''); setAll(l); })
     .catch(e => { setErr(e instanceof Error ? e.message : String(e)); }), []);
   // Read on mount, and again each time the server pages close: a picker kept
-  // mounted under them (a draft wizard) sees the secret just added there.
+  // mounted under them sees the secret just added there.
   useEffect(() => { if (!link.serverOpen) load(); }, [link.serverOpen, load]);
 
   const host = remoteHost(url);
   const fitting = (all ?? []).filter(s => secretFits(s, url));
   const chosen = fitting.find(s => s.id === value) ?? null;
-  const first = fitting[0] ?? null;
+  const kept = pick ? fitting.find(s => s.id === pick) ?? null : null;
+  const best = fitting.find(s => s.status !== 'expired') ?? fitting[0] ?? null;
+  const next = kept ?? (preselect && pick === '' ? best : null);
 
-  // Keep the value one of the fitting secrets: the first when no fitting one
-  // is chosen, '' when none fit.
   useEffect(() => {
     if (all === null) return;
-    if (first && !chosen) onChange(first.id, first);
-    else if (!first && value !== '') onChange('', null);
-  }, [all, first, chosen, value, onChange]);
+    if (value !== '' && !chosen) onChange('', null);
+    else if (value === '' && next) onChange(next.id, next);
+  }, [all, value, chosen, next, onChange]);
+
+  // Why the reader's choice is not in force.
+  const lost = all !== null && pick !== '' && !kept ? all.find(s => s.id === pick) ?? null : null;
+  const lostWhy = all === null || pick === '' || kept ? ''
+    : lost ? `${lost.name} isn't allowed for ${host || 'this URL'}; pick another.`
+      : 'The chosen stored secret no longer exists; pick another.';
+
+  const kind = kindFor(typesForURL(url));
 
   return (
     <div data-testid={testid}>
       {err && <div role="alert" data-testid={`${testid}-error`} style={wizardErr}>{err}</div>}
       {all === null && !err && <div style={fieldHint}>Loading stored secrets…</div>}
-      {all !== null && first && (
+      {lostWhy && <div data-testid={`${testid}-lost`} style={lostStyle}>{lostWhy}</div>}
+      {all !== null && fitting.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <select data-testid={`${testid}-select`} aria-label="Stored secret" style={{ ...fieldInput, maxWidth: 360 }}
-            value={(chosen ?? first).id}
-            onChange={e => onChange(e.target.value, fitting.find(s => s.id === e.target.value) ?? null)}>
+            value={chosen ? chosen.id : ''}
+            onChange={e => {
+              const s = fitting.find(x => x.id === e.target.value) ?? null;
+              setPick(s ? s.id : '');
+              onChange(s ? s.id : '', s);
+            }}>
+            {/* Shown only while nothing is chosen, and never choosable. */}
+            {!chosen && <option value="" disabled>Choose a stored secret…</option>}
             {fitting.map(s => (
               <option key={s.id} value={s.id}>
                 {s.name}{s.status === 'expired' ? ' (expired)' : s.status === 'expiring' ? ' (expiring)' : ''}
@@ -67,14 +105,21 @@ export function SecretPicker({ url, value, onChange, testid = 'secret-picker' }:
           {chosen && <CredentialChip status={chosen.status} name={chosen.name} />}
         </div>
       )}
-      {all !== null && !first && (
+      {all !== null && fitting.length === 0 && (
         <div style={fieldHint} data-testid={`${testid}-none`}>
-          {host ? `No stored secret is allowed for ${host}. Add one in ` : 'Enter a remote URL first. Stored secrets are added in '}
-          {link.open
-            ? <button type="button" data-testid={`${testid}-access-link`} onClick={link.open}
-                style={{ ...linkBtn, fontSize: 'inherit', fontFamily: 'inherit' }}>Access → Secrets</button>
-            : 'Access → Secrets'}
-          .
+          {!host ? 'Enter a remote URL first.'
+            : kind ? `No ${kind} secret is allowed for ${host}.`
+              : 'A stored secret cannot be used with this URL.'}
+          {host && kind && link.exists && (
+            <>
+              {' Add one in '}
+              {link.open
+                ? <button type="button" data-testid={`${testid}-access-link`} onClick={link.open}
+                    style={{ ...linkBtn, fontSize: 'inherit', fontFamily: 'inherit' }}>Access → Secrets</button>
+                : 'Access → Secrets'}
+              .
+            </>
+          )}
         </div>
       )}
     </div>

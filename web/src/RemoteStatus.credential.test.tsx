@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import { RemoteCard } from './RemoteStatus';
 import { useRemote } from './useRemote';
 import type { OriginResponse, SecretView } from './api';
@@ -68,26 +68,39 @@ describe('RemoteCard credential row', () => {
     render(<Harness />);
     fireEvent.click(await screen.findByTestId('credential-link'));
     const select = await screen.findByTestId('credential-picker-select');
+    expect(screen.getByTestId('credential-link-save')).toBeDisabled();
     fireEvent.change(select, { target: { value: 's1' } });
     fireEvent.click(screen.getByTestId('credential-link-save'));
     await waitFor(() => expect(api.setOriginCredential).toHaveBeenCalledWith('kb', { secret_id: 's1' }));
   });
 
-  it('preselects the first fitting secret, lists only those that fit, and offers no way to create one', async () => {
+  it('lists only the fitting secrets, chooses none by itself, and offers no way to create one', async () => {
     const api = await mocked();
     api.getOrigin.mockResolvedValue(base);
     api.listSecrets.mockResolvedValue([secret({ id: 's1', name: 'a' }), secret({ id: 's2', name: 'b' }), secret({ id: 'gl', name: 'gl', hosts: ['gitlab.com'] })]);
     render(<Harness />);
     fireEvent.click(await screen.findByTestId('credential-link'));
     const select = await screen.findByTestId('credential-picker-select');
-    await waitFor(() => expect(select).toHaveValue('s1'));
-    expect(Array.from(select.querySelectorAll('option')).map(o => o.value)).toEqual(['s1', 's2']);
+    expect(Array.from(select.querySelectorAll('option:not([disabled])')).map(o => (o as HTMLOptionElement).value)).toEqual(['s1', 's2']);
+    expect(select).toHaveValue('');
     expect(screen.queryByText(/create a new secret/i)).toBeNull();
-    // Chosen, not linked: the reader still saves.
-    expect(api.setOriginCredential).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId('credential-link-save'));
-    await waitFor(() => expect(api.setOriginCredential).toHaveBeenCalledWith('kb', { secret_id: 's1' }));
+    expect(screen.getByTestId('credential-link-save')).toBeDisabled();
   });
+
+  it('"Use another secret…" on a linked repo starts with nothing chosen, not the current secret', async () => {
+    const api = await mocked();
+    api.getOrigin.mockResolvedValue({ ...linkedOrigin(), secret_id: 's1' });
+    api.listSecrets.mockResolvedValue([secret({ id: 's1', name: 'gh-pat' }), secret({ id: 's2', name: 'other' })]);
+    render(<Harness />);
+    fireEvent.click(await screen.findByTestId('credential-link'));
+    const select = await screen.findByTestId('credential-picker-select');
+    await act(async () => { await Promise.resolve(); });
+    expect(select).toHaveValue('');
+    expect(screen.getByTestId('credential-link-save')).toBeDisabled();
+    fireEvent.change(select, { target: { value: 's2' } });
+    expect(screen.getByTestId('credential-link-save')).toBeEnabled();
+  });
+
 
   it('with no secret allowed for the host: the pointer to Access → Secrets, and Use this secret disabled', async () => {
     const api = await mocked();
@@ -95,7 +108,7 @@ describe('RemoteCard credential row', () => {
     api.listSecrets.mockResolvedValue([secret({ id: 'gl', name: 'gl', hosts: ['gitlab.com'] })]);
     render(<Harness />);
     fireEvent.click(await screen.findByTestId('credential-link'));
-    expect(await screen.findByTestId('credential-picker-none')).toHaveTextContent(/No stored secret is allowed for .+\. Add one in Access → Secrets\./);
+    expect(await screen.findByTestId('credential-picker-none')).toHaveTextContent(/No token or username \+ password secret is allowed for .+\. Add one in Access → Secrets\./);
     expect(screen.queryByTestId('credential-picker-select')).toBeNull();
     expect(screen.getByTestId('credential-link-save')).toBeDisabled();
   });

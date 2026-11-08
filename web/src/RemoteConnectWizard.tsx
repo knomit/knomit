@@ -396,7 +396,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
                 </select>
                 {authMethod === 'secret' && (
                   <div style={{ marginTop: 8 }}>
-                    <SecretPicker url={sendURL} value={secretId} testid="wizard-secret-picker"
+                    <SecretPicker url={sendURL} value={secretId} preselect testid="wizard-secret-picker"
                       onChange={(id, s) => { setSecretId(id); setSecretType(s?.type ?? null); }} />
                   </div>
                 )}
