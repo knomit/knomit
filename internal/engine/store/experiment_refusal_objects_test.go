@@ -66,8 +66,13 @@ func TestExperimentWriteRefused_LeavesNoObjects(t *testing.T) {
 			check("BatchWriteFacts writes", err)
 			_, _, err = svc.Facts().BatchWriteFacts(ctx, branch, map[string]string{"kb/x.md": content}, []string{"kb/base.md"}, "move: x", "move")
 			check("BatchWriteFacts write+delete", err)
+			// CONTROL, not a regression guard for #554: it passes even on the
+			// unfixed code, because the trees it rebuilds were already stored
+			// by the write+delete case above, so it adds no rows either way.
+			// It keeps the error and head-unchanged assertions for a
+			// delete-only batch.
 			_, _, err = svc.Facts().BatchWriteFacts(ctx, branch, nil, []string{"kb/base.md"}, "retract: base", "retract")
-			check("BatchWriteFacts delete-only", err)
+			check("BatchWriteFacts delete-only (control)", err)
 		})
 	}
 }
