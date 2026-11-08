@@ -109,7 +109,7 @@ export function AccessPage({ tab, onTab, oauthAvailable, authCount, onAuthCount 
       <SecretDetail key={current.id} secret={current} onChanged={loadSecrets}
         onDeleted={() => { pick(null); loadSecrets(); }} />
     ) : (
-      <SecretsOverview list={secrets} onAdd={startAdd} onPick={pick} />
+      <SecretsOverview list={secrets} onPick={pick} />
     );
   } else {
     list = <AuthSection.List selected={sel} onSelect={pick} focusOnly={narrow} onLeft={focusRail} onRight={focusDetail} />;
