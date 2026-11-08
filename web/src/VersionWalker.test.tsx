@@ -25,6 +25,9 @@ it('is a bare ↺ named "Open history", with no count', async () => {
   expect(btn.textContent).toBe('↺');
   expect(btn).not.toHaveTextContent(/v\d/);
   expect(btn).toHaveAccessibleName('Open history');
+  // Pinned as attributes: title alone also names the button, so the name
+  // check above would pass without the aria-label.
+  expect(btn).toHaveAttribute('aria-label', 'Open history');
   expect(btn).toHaveAttribute('title', 'Open history');
 });
 
