@@ -40,9 +40,11 @@ func TestChat_EveryTurnEndReachesTheClientOnce(t *testing.T) {
 			// with no turn field would read as 0.
 			h.queue("a1", textStep("first", usage), step{fn: func(llm.Snapshot) step { <-release; return tc.end }})
 			id := h.create("uid:501", "a1")
+			ended := endsOf(t, h, id)
 			s := h.attach("uid:501", id)
 			require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "first"))
 			s.until("turn_done")
+			waitEnd(t, ended, "the first turn's end")
 			code, body := h.do("uid:501", http.MethodPost, "/chats/"+id+"/turns", map[string]string{"text": "go"})
 			require.Equal(t, http.StatusAccepted, code)
 			var accepted struct {
@@ -51,12 +53,15 @@ func TestChat_EveryTurnEndReachesTheClientOnce(t *testing.T) {
 			require.NoError(t, json.Unmarshal(body, &accepted))
 			require.Greater(t, accepted.Turn, 0)
 			s.close() // the stream is gone while the model runs
-			time.Sleep(50 * time.Millisecond)
+			// The server notices the closed connection on its own goroutine;
+			// until it detaches the stream, a broadcast still "reaches" it.
+			h.waitDetached(writer.String())
 			close(release)
-			eventually(t, "the turn to end", func() bool {
-				code, body := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
-				return code == http.StatusOK && !contains(body, `"running":true`)
-			})
+			// Wait for the end to have been SENT, not for running=false: a
+			// snapshot shows running=false before finishTurn sends chat_state
+			// and the end, and a stream attaching in that gap gets chat_state
+			// first and the end live instead of replayed.
+			waitEnd(t, ended, "the turn under test's end")
 
 			s2 := h.attach("uid:501", id)
 			got := s2.next("terminal", 3*time.Second)
@@ -99,6 +104,28 @@ func TestChat_EveryTurnEndReachesTheClientOnce(t *testing.T) {
 }
 
 func contains(b []byte, s string) bool { return len(s) > 0 && strings.Contains(string(b), s) }
+
+// endsOf returns a channel that gets one value each time a turn of chat id has
+// sent its terminal event (finishTurn's afterEnd seam).
+func endsOf(t *testing.T, h *harness, id string) <-chan struct{} {
+	t.Helper()
+	c := h.mgr.find(id, writer.String())
+	require.NotNil(t, c)
+	ch := make(chan struct{}, 16)
+	c.mu.Lock()
+	c.afterEnd = func() { ch <- struct{}{} }
+	c.mu.Unlock()
+	return ch
+}
+
+func waitEnd(t *testing.T, ended <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s to be sent", what)
+	}
+}
 
 // startTurn forgets the previous turn's undelivered end: a stream that attaches
 // while the next turn runs is not handed the last turn's turn_done first, which
@@ -170,8 +197,8 @@ func TestChat_AnEndThatLandsAfterTheNextTurnStartedIsNotParked(t *testing.T) {
 		textStep("one", usage),
 		step{fn: func(llm.Snapshot) step { <-release; return step{resp: done("two")} }})
 	id := h.create("uid:501", "a1")
+	ended := endsOf(t, h, id)
 	c := h.mgr.find(id, writer.String())
-	require.NotNil(t, c)
 	started := make(chan int, 1)
 	c.mu.Lock()
 	c.betweenRunAndEnd = func() {
@@ -198,6 +225,11 @@ func TestChat_AnEndThatLandsAfterTheNextTurnStartedIsNotParked(t *testing.T) {
 		t.Fatal("turn two never started in the gap")
 	}
 	require.Greater(t, second, first.Turn)
+	// Turn one's end goes out after the seam returns. A stream attached before
+	// that gets it LIVE (correctly: it names turn one), which this test would
+	// misread as a parked end handed over on attach; so attach only once it
+	// has been sent to nobody.
+	waitEnd(t, ended, "turn one's end")
 
 	s := h.attach("uid:501", id)
 	select {

@@ -414,6 +414,19 @@ func (s *stream) close() {
 	<-s.done
 }
 
+// waitDetached waits until the server has no page stream of owner left.
+// stream.close returns when the CLIENT side is done; the handler detaches the
+// stream when it notices, on its own goroutine, and until then a broadcast
+// still counts the stream as having taken a frame.
+func (h *harness) waitDetached(owner string) {
+	h.t.Helper()
+	eventually(h.t, "the page stream to be detached", func() bool {
+		h.mgr.pageMu.Lock()
+		defer h.mgr.pageMu.Unlock()
+		return len(h.mgr.pages[owner]) == 0
+	})
+}
+
 // next returns the next event, which must arrive within d.
 func (s *stream) next(_ string, d time.Duration) sseEvent {
 	s.t.Helper()

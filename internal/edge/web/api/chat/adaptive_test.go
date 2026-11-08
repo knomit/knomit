@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -68,7 +69,7 @@ func (h *harness) createAdaptive(who string) string {
 
 // fakeEmb is a deterministic, goroutine-safe embedder: a tool's document vector
 // is one-hot at its place in names, and the query vector is the one given. The
-// cache of tool vectors is process-wide and keyed by ID, so ID is the test's.
+// cache of tool vectors is process-wide and keyed by ID, so each fake has its own.
 type fakeEmb struct {
 	id    string
 	names []string
@@ -80,8 +81,14 @@ type fakeEmb struct {
 	queries []string
 }
 
+// fakeEmbSeq numbers fakes so each has its own embedder id.
+var fakeEmbSeq atomic.Int64
+
 func newFakeEmb(t *testing.T, names []string, target string) *fakeEmb {
-	e := &fakeEmb{id: t.Name(), names: names, query: e1hot(names, target)}
+	// The id is unique per fake, not per test name: the cache outlives the
+	// test, so under -count=N a later run of the same test would find every
+	// vector cached by the earlier one and its fake would count no embeds.
+	e := &fakeEmb{id: fmt.Sprintf("%s#%d", t.Name(), fakeEmbSeq.Add(1)), names: names, query: e1hot(names, target)}
 	return e
 }
 

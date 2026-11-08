@@ -3,7 +3,9 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -50,9 +52,15 @@ func rankToolset() []llm.ToolDef {
 	}
 }
 
+// rankEmbedderSeq numbers fakes so each has its own embedder id: the tool
+// vector cache is process-wide and keyed by it, so an id shared across -count
+// runs of one test would hand a later run the earlier run's vectors and its
+// fake would record no EmbedDocument calls.
+var rankEmbedderSeq atomic.Int64
+
 func newRankEmbedder(t *testing.T) *rankEmbedder {
 	return &rankEmbedder{
-		id: t.Name(),
+		id: fmt.Sprintf("%s#%d", t.Name(), rankEmbedderSeq.Add(1)),
 		docs: map[string][]float32{
 			"tool_a": {1, 0, 0},
 			"tool_b": {0, 1, 0},

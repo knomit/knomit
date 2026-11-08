@@ -250,6 +250,11 @@ type chat struct {
 	// the turn not running and released c.mu, and before it sends the turn's
 	// end, which is where the next turn can start.
 	betweenRunAndEnd func()
+	// afterEnd is a test seam: finishTurn calls it once the turn's terminal
+	// event has been sent (broadcast, and parked if no stream took it). A test
+	// that must observe "the end has gone out" waits on it: running=false in a
+	// snapshot is set before noteState and the end are sent, so it is not that.
+	afterEnd func()
 
 	// Per-request flags the truncation wording needs: whether the last
 	// request streamed text, and whether it streamed reasoning.
@@ -715,12 +720,15 @@ func (c *chat) finishTurn(ctx context.Context, res *llm.TurnResult, err error) {
 		}
 	}
 	ended := c.ended
-	hook := c.betweenRunAndEnd
+	hook, after := c.betweenRunAndEnd, c.afterEnd
 	c.mu.Unlock()
 	c.store.appendTranscript(map[string]any{"turn_end": true, "error": errString(err)})
 	c.logPreload(turn, res)
 	if ended {
 		return
+	}
+	if after != nil {
+		defer after()
 	}
 	c.noteState()
 	if hook != nil {
