@@ -394,6 +394,12 @@ func ApplyDiscoveredProposals(
 			continue
 		}
 
+		// A discovered fact is a new body: the knomit_learn rule.
+		if err := fact.CheckWikiLinks(p.Body); err != nil {
+			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery rejected: %s: %v", p.Path, err)})
+			continue
+		}
+
 		path := step.NormalizeFactPath(p.Path)
 		localRefs := step.LocalFactRefPaths(p.Refs, localRepoID)
 		weight := step.ComputeWeight(ctx, gs, branch, localRepoID, localRefs)

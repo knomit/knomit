@@ -202,6 +202,7 @@ Consumers act on the slogan they compress a fact into, not on the fact itself. A
 - **State the operational consequence** — what should a reader do, or never do, because this fact is true?
 - **Name the foreseeable misreading** — for rules and policies, if there is an attractive-but-false corollary a hurried reader would draw, add a line saying explicitly what the fact does NOT mean.
 - **Anchor high-confidence rules in refs** — a rule should reference the authoritative source that verifies it; a rule with no anchor cannot be checked and earns less trust.
+- **Link only through refs** — a body has no link syntax. `+"`[[...]]`"+` outside an inline code span or fenced code block is refused on write; put the other fact's path in refs instead.
 
 Discipline: do not drown facts in speculative caveats — name only misreadings you can actually foresee.
 

@@ -86,6 +86,6 @@ NEVER write bare paths like `internal/store/service.go` — knomit's ref resolve
 
 ## Linking to another fact
 
-To reference another knomit fact, put its fact path (the `kb/<topic>/<category>/<uuid>.md` shown in query results) in `refs` — same field as source refs, no scheme. There is NO inline link syntax: `[[name]]` and `[text](path)` are stored as literal body text and resolve to nothing.
+To reference another knomit fact, put its fact path (the `kb/<topic>/<category>/<uuid>.md` shown in query results) in `refs` — same field as source refs, no scheme. There is NO inline link syntax: `[[name]]` outside a code span or fenced block is refused on write, and `[text](path)` is stored as literal body text and resolves to nothing.
 
 (`[[name]]` is the *file-based auto-memory* convention — a different system. Don't carry it into knomit facts.)

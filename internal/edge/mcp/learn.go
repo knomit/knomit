@@ -117,7 +117,7 @@ func learnToolSchemaProperties() map[string]any {
 		"category": map[string]any{"type": "string", "description": "Category path within the topic. Required unless you give path."},
 		"path":     map[string]any{"type": "string", "description": "ARTIFACTS ONLY. An explicit repo path under " + fact.ArtifactsRoot + "/<area>/, e.g. " + fact.ArtifactsRoot + "/<area>/<name>.md, for an agent's working file that is not knowledge — a periodic job's bookkeeping. At least one folder deep; no segment may be empty or begin with a dot, and no \"..\". Mutually exclusive with topic/category: supply one or the other, never both. A file written here is INVISIBLE to knomit_query, knomit_changes, triggers, the UI and export, by design; address it later by this exact path. " + fact.PrivateRoot + "/ (the system: ontology, triggers, recipes, skills) and every path with a segment beginning with a dot are closed to the fact tools — they change only through git. Fails if the path already exists — use knomit_update to write a new revision."},
 		"title":    map[string]any{"type": "string", "description": "Fact title (short, descriptive)."},
-		"body":     map[string]any{"type": "string", "description": "Fact body in natural language. State compound conditions in full — name every component; never abbreviate a multi-part condition into a catchier summary. Include the consequence a consumer should act on. For rules and policies, name the foreseeable misreading (what the fact does NOT mean) if you can see one."},
+		"body":     map[string]any{"type": "string", "description": "Fact body in natural language. State compound conditions in full — name every component; never abbreviate a multi-part condition into a catchier summary. Include the consequence a consumer should act on. For rules and policies, name the foreseeable misreading (what the fact does NOT mean) if you can see one. " + bodyLinkRule + "`[[...]]` outside an inline code span or fenced code block is refused."},
 		// kind/type/origin come from the shared fragments in
 		// factschema.go so this schema, knomit_update's, and the
 		// server instructions cannot disagree. knomit_learn mints
@@ -147,6 +147,11 @@ func learnToolSchemaProperties() map[string]any {
 			"(5) A system file in THIS repo: `.knomit/<path>` — any file type, its EXACT path with case kept (`SKILL.md`), never a directory. It MUST exist at the branch tip or the whole call is refused; the server rewrites it to `kb://<repo-id>/.knomit/<path>`. knomit_explain then shows the file as it stood when this fact was written. `.knomit/` stays read-only: a ref reads it, nothing writes it."},
 	}
 }
+
+// bodyLinkRule opens the link rule in the body descriptions of knomit_learn
+// and knomit_update; each ends it with what that tool refuses
+// (fact.CheckWikiLinks, fact.CheckWikiLinkEdit).
+const bodyLinkRule = "There is no inline link syntax: link another fact only by putting its path in refs. "
 
 // learnFactInput is the JSON shape of a single fact in the input array.
 type learnFactInput struct {
@@ -341,6 +346,12 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 			if fact.IsPrivatePath(path) {
 				return nil, nil, nil, nil, fmt.Errorf(
 					"fact %d: topic/category resolves to %s; a path segment beginning with '.' is private and cannot hold a fact", i, path)
+			}
+			// No [[...]] in a fact body's prose: refs are the only link
+			// channel. Artifacts are exempt — they are a job's bookkeeping,
+			// not knowledge, and may discuss the notation.
+			if err := fact.CheckWikiLinks(fi.Body); err != nil {
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
 			}
 		}
 		topicCategories[i] = topicCategory
