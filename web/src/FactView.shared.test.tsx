@@ -155,7 +155,8 @@ describe('a fact in Browse and in the chat panel', () => {
     const corner = within(p.parentElement!).getByTestId('fact-corner-action');
     const close = within(corner).getByTestId('chat-panel-close');
     expect(within(p).getByTestId('fact-band')).not.toContainElement(close);
-    expect(within(p).getByTestId('fact-band-actions')).not.toContainElement(close);
+    expect(within(within(p).getByTestId('fact-band')).queryByTestId('chat-panel-close')).toBeNull();
+    expect(within(p.parentElement!).getAllByTestId('chat-panel-close')).toHaveLength(1);
     expect(corner.style.position).toBe('absolute');
     expect(corner.style.top).toBe('4px');
     expect(corner.style.right).toBe('2px');
