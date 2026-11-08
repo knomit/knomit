@@ -83,14 +83,14 @@ func Refused(err error) error {
 
 // IsRefused reports whether err is a Send refusal that changed nothing: the
 // machine's own checks (closed, unavailable, not open, indexing, standing
-// refusals), a guard's verdict, or an origin that could not be classified. It
-// is FALSE for a cancelled or expired context, because Send returns those
-// when it stopped waiting, and the event may already have been applied. It is
-// also false for any failure after the guard (a failed install).
+// refusals), a guard's verdict, or an origin that could not be classified.
+// The marker is applied only where the event has not yet been queued or
+// applied, so it holds even when the cause is a context error (a guard or
+// classification that timed out). A BARE context error is not marked: Send
+// returns those unwrapped when it merely stopped waiting, and the event may
+// already have been applied. A failure after the guard (a failed install) is
+// never marked either.
 func IsRefused(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
 	var r *refusedError
 	return errors.As(err, &r)
 }

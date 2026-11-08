@@ -1032,9 +1032,12 @@ func TestIsRefused(t *testing.T) {
 	require.ErrorIs(t, err, ErrIndexing)
 	require.True(t, IsRefused(err))
 
-	// Context errors are never refusals, wrapped or not.
-	for _, ce := range []error{context.Canceled, context.DeadlineExceeded, Refused(context.Canceled)} {
+	// A bare context error is no refusal (Send returns it when it stopped
+	// waiting); one the marker wraps (a guard or classification timeout,
+	// before the event was queued) is.
+	for _, ce := range []error{context.Canceled, context.DeadlineExceeded} {
 		require.False(t, IsRefused(ce), ce.Error())
+		require.True(t, IsRefused(Refused(ce)), ce.Error())
 	}
 	cctx, cancel := context.WithCancel(context.Background())
 	cancel()
