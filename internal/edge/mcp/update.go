@@ -48,17 +48,7 @@ func updateTool() mcpgo.Tool {
 		),
 		mcpgo.WithArray("ops",
 			mcpgo.Description(opsDescription),
-			mcpgo.Items(map[string]any{
-				"type":                 "object",
-				"additionalProperties": false,
-				"required":             []string{"op"},
-				"properties": map[string]any{
-					"op":      map[string]any{"type": "string", "enum": []string{fact.OpStrReplace, fact.OpAppend}, "description": "str_replace or append."},
-					"old_str": map[string]any{"type": "string", "description": "str_replace: the exact text to replace. Must occur exactly once in the current body."},
-					"new_str": map[string]any{"type": "string", "description": `str_replace: the replacement. Required; "" deletes old_str.`},
-					"text":    map[string]any{"type": "string", "description": "append: the text to add at the end of the body."},
-				},
-			}),
+			mcpgo.Items(opsItemSchema()),
 		),
 		mcpgo.WithString("if_commit",
 			mcpgo.Description(ifCommitDescription),
@@ -67,12 +57,59 @@ func updateTool() mcpgo.Tool {
 	)
 }
 
+// Agent-facing descriptions of one op's properties, shared by both branches
+// of opsItemSchema.
+const (
+	opOpDescription     = "str_replace (send old_str and new_str, never text) or append (send text only)."
+	opOldStrDescription = "str_replace only, required there: the exact text to replace. Must occur exactly once in the current body. Never sent with append."
+	opNewStrDescription = `str_replace only, required there: the replacement; "" deletes old_str. Never sent with append.`
+	opTextDescription   = "append only, required there: the paragraph to add at the end of the body. Never sent with str_replace: to change existing text, use str_replace with old_str and new_str."
+)
+
+// opsItemSchema is the JSON Schema of one element of knomit_update's ops: an
+// anyOf with one closed branch per op, discriminated by a const on op, so a
+// schema-aware client or model sees which fields each op takes and which it
+// requires. anyOf, not oneOf: the branches are disjoint on op, so the two mean
+// the same here, and anyOf is the combinator more tool-schema consumers
+// accept. It is guidance, not the gate: providers do not validate tool input,
+// and fact.ApplyBodyOps refuses a mixed op on the server.
+func opsItemSchema() map[string]any {
+	opProp := func(name string) map[string]any {
+		return map[string]any{"type": "string", "const": name, "description": opOpDescription}
+	}
+	return map[string]any{
+		"anyOf": []any{
+			map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"required":             []string{"op", "old_str", "new_str"},
+				"properties": map[string]any{
+					"op":      opProp(fact.OpStrReplace),
+					"old_str": map[string]any{"type": "string", "description": opOldStrDescription},
+					"new_str": map[string]any{"type": "string", "description": opNewStrDescription},
+				},
+			},
+			map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"required":             []string{"op", "text"},
+				"properties": map[string]any{
+					"op":   opProp(fact.OpAppend),
+					"text": map[string]any{"type": "string", "description": opTextDescription},
+				},
+			},
+		},
+	}
+}
+
 // opsDescription is the agent-facing contract for knomit_update's ops.
 const opsDescription = `Edit the body in place instead of resending it. Use ops, not updates.body, for any edit to a large fact. Send ops OR updates.body, never both; ops may be combined with every other updates field.
 
 Each op is one of:
 - {"op": "str_replace", "old_str": "...", "new_str": "..."} — old_str must occur EXACTLY ONCE in the body, byte for byte. new_str "" deletes it.
 - {"op": "append", "text": "..."} — adds text at the end of the body as a new paragraph: knomit inserts only the newlines needed for one blank line before it and removes nothing you send. To extend the last line or list instead, str_replace it.
+
+The two shapes do not mix: str_replace refuses text, and append refuses old_str and new_str.
 
 Ops apply in order, each to the body the previous op produced, so a later op may anchor on text an earlier one inserted. All ops land as ONE revision or none do: if any op fails, nothing is written and the error names the op by its zero-based index.
 

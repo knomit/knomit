@@ -391,10 +391,8 @@ func TestUpdateTool_ServesOpsAndIfCommit(t *testing.T) {
 			Required   []string `json:"required"`
 			Properties struct {
 				Ops struct {
-					Description string `json:"description"`
-					Items       struct {
-						Properties map[string]any `json:"properties"`
-					} `json:"items"`
+					Description string                     `json:"description"`
+					Items       map[string]json.RawMessage `json:"items"`
 				} `json:"ops"`
 				IfCommit struct {
 					Description string `json:"description"`
@@ -406,9 +404,41 @@ func TestUpdateTool_ServesOpsAndIfCommit(t *testing.T) {
 	d := tool.InputSchema.Properties.Ops.Description
 	require.Contains(t, strings.ToLower(d), "exactly once")
 	require.Contains(t, d, "updates.body")
-	for _, k := range []string{"op", "old_str", "new_str", "text"} {
-		require.Contains(t, tool.InputSchema.Properties.Ops.Items.Properties, k)
+	require.Contains(t, d, "The two shapes do not mix")
+
+	// One closed branch per op, under anyOf (not oneOf), and nothing else at
+	// the items level: a flat object beside the anyOf would let a mixed op
+	// back through.
+	items := tool.InputSchema.Properties.Ops.Items
+	require.Equal(t, []string{"anyOf"}, sortedKeys(items), "ops.items must be only the anyOf of the op branches")
+	var branches []struct {
+		Type                 string                     `json:"type"`
+		AdditionalProperties *bool                      `json:"additionalProperties"`
+		Required             []string                   `json:"required"`
+		Properties           map[string]json.RawMessage `json:"properties"`
 	}
+	require.NoError(t, json.Unmarshal(items["anyOf"], &branches))
+	require.Len(t, branches, 2)
+	want := map[string][]string{
+		fact.OpStrReplace: {"new_str", "old_str", "op"},
+		fact.OpAppend:     {"op", "text"},
+	}
+	seen := map[string]bool{}
+	for _, b := range branches {
+		require.Equal(t, "object", b.Type)
+		require.NotNil(t, b.AdditionalProperties)
+		require.False(t, *b.AdditionalProperties, "each branch must be closed")
+		var op struct {
+			Const string `json:"const"`
+		}
+		require.NoError(t, json.Unmarshal(b.Properties["op"], &op))
+		fields, ok := want[op.Const]
+		require.True(t, ok, "branch const %q is not an op", op.Const)
+		seen[op.Const] = true
+		require.ElementsMatch(t, fields, b.Required, "%s requires every field it takes", op.Const)
+		require.Equal(t, fields, sortedKeys(b.Properties), "%s declares exactly its own fields", op.Const)
+	}
+	require.Len(t, seen, 2, "one branch per op")
 	require.Contains(t, tool.InputSchema.Properties.IfCommit.Description, "current_commit")
 	require.NotContains(t, tool.InputSchema.Required, "updates",
 		"an ops-only call must be expressible")
