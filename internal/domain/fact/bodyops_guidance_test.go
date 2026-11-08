@@ -25,6 +25,10 @@ func TestApplyBodyOps_CrossOpFieldErrorsSayWhatToSend(t *testing.T) {
 		// all three fields: the text check fires first, so the same error.
 		{"str_replace with text and anchors", BodyOp{Op: OpStrReplace, OldStr: "a", NewStr: strp("b"), Text: "t"},
 			[]string{"old_str", "new_str", "append"}},
+		// the next error a text-only str_replace caller hits once text is
+		// dropped: it must say what old_str has to be.
+		{"str_replace with empty old_str", BodyOp{Op: OpStrReplace, NewStr: strp("b")},
+			[]string{"old_str", "copied from the body", "exactly once"}},
 		{"append with old_str", BodyOp{Op: OpAppend, Text: "t", OldStr: "a"},
 			[]string{"text", "str_replace"}},
 	} {

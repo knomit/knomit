@@ -23,6 +23,14 @@ func sortedKeys[V any](m map[string]V) []string {
 // client: the module has no JSON Schema validator dependency. Any keyword it
 // does not implement fails the check, so a schema change that adds one cannot
 // pass this test by being silently ignored.
+//
+// Two limits a reuse must respect. When anyOf is present it returns on the
+// first matching branch WITHOUT checking sibling keywords (type, properties,
+// required beside the anyOf); that is safe here only because
+// TestUpdateTool_ServesOpsAndIfCommit (update_ops_test.go) asserts ops.items
+// holds nothing but anyOf. And it reads required, anyOf and enum as []any, so
+// the schema must be JSON-decoded first: a Go-built map with []string values
+// would have its required list silently skipped.
 func validateSubset(schema map[string]any, v any) error {
 	for k := range schema {
 		switch k {
