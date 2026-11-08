@@ -118,17 +118,28 @@ a { color: inherit; }
 .k-chat-table-scroll { max-width: 100%; overflow-x: auto; margin: 0 0 12px; }
 
 /* Fact links (design §3; mockup .fp / .rp / .more / .hc). A resolved fact cited
-   in an answer: the type's glyph on its colour, then the title. */
+   in an answer: the type's glyph on its colour, then the title.
+   ON THE TEXT'S BASELINE. The title is the chip's baseline (align-items:
+   baseline; the glyph is centred and takes no part), so vertical-align:
+   baseline puts the chip's words on the line's own baseline. Its height comes
+   from the title's 19px line plus the 1px borders (21px), which sits inside
+   the answer's 14px/1.65 line box: a line holding a chip is as tall as one
+   without. It used to be height 21px at vertical-align -4px, whose baseline
+   was the glyph's, so the chip rode off the line and pushed it apart. */
 .k-fact-link {
-  display: inline-flex; align-items: center; gap: 5px; max-width: 250px; vertical-align: -4px; height: 21px;
+  display: inline-flex; align-items: baseline; gap: 5px; max-width: 250px; vertical-align: baseline;
   box-sizing: border-box; padding: 0 8px 0 4px; margin: 0; border-radius: 5px; background: #161a21; border: 1px solid #263041;
-  color: #cbd6e6; font-size: 12.5px; line-height: 1; white-space: nowrap; font-family: var(--k-font-body); font-weight: 400;
+  color: #cbd6e6; font-size: 12.5px; line-height: 19px; white-space: nowrap; font-family: var(--k-font-body); font-weight: 400;
   cursor: pointer; text-align: left;
 }
-.k-fact-link:hover, .k-fact-link:focus-visible { border-color: #4f6a96; background: #1b2332; color: #eef3fb; box-shadow: 0 0 0 3px rgba(110,168,254,.12); outline: none; }
-.k-fact-link.k-fact-link--open { border-color: #6ea8fe; background: #1b2436; }
-.k-fact-link-title { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.k-fact-link-glyph { width: 16px; height: 16px; border-radius: 4px; display: flex; align-items: center; justify-content: center; flex: none; }
+/* No selected look: a clicked chip goes back to rest (chat review, 2026-11-08).
+   Hover lifts it; keyboard focus gets the app's ring (.k-bare's), on
+   :focus-visible only, and the chip takes no focus from a mouse press. */
+.k-fact-link:hover { border-color: #4f6a96; background: #1b2332; color: #eef3fb; }
+.k-fact-link:focus { outline: none; }
+.k-fact-link:focus-visible { outline: 2px solid #4a7ab5; outline-offset: 2px; }
+.k-fact-link-title { overflow: hidden; text-overflow: ellipsis; min-width: 0; line-height: 19px; }
+.k-fact-link-glyph { width: 16px; height: 16px; border-radius: 4px; display: flex; align-items: center; justify-content: center; flex: none; align-self: center; }
 /* In the column narrowed beside the side panel, links in tables cap at 150px. */
 .k-chat-main--narrow .k-chat-answer td .k-fact-link { max-width: 150px; }
 /* A commit link: the timeline's CommitHash as a bare button, underlined on hover. */

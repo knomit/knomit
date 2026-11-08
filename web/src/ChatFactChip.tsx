@@ -9,6 +9,7 @@ import { createPortal } from 'react-dom';
 import { FactMetaLine } from './FactMetaLine';
 import { FactBandPath } from './FactBand';
 import { CommitHash } from './TimelineNav';
+import { noMouseFocus } from './utils';
 import type { Fact } from './api';
 
 // The fact links of a chat answer (design §3): the chip, its hover card, the
@@ -54,9 +55,12 @@ export function FactLink({ handle }: { handle: string }) {
 
   return (
     <>
+      {/* data-open says the panel shows this fact; it is NOT drawn: a clicked chip
+          looks like any other (no selected border). A mouse press takes no focus
+          (noMouseFocus), so only the keyboard's :focus-visible draws a ring. */}
       <button ref={chip} type="button" data-testid="fact-link" data-type={f.type} data-open={open ? 'true' : undefined}
-        className={open ? 'k-fact-link k-fact-link--open' : 'k-fact-link'} title={f.title}
-        onClick={onClick} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}>
+        className="k-fact-link" title={f.title}
+        onMouseDown={noMouseFocus} onClick={onClick} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}>
         <span data-testid="fact-link-glyph" className="k-fact-link-glyph" style={{ background: ts.bg }}>
           <TypeIcon type={f.type} color={ts.color} size={11} />
         </span>

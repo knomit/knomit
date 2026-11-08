@@ -8,6 +8,7 @@ import type { ChatSnapshot } from './chatApi';
 import { typeStyles, repoHue } from './utils';
 import { TypeIcon } from './icons';
 import { CommitHash } from './TimelineNav';
+import { computed } from './cascade.testutil';
 
 const CHAT = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
 const BASE = '/api/v1/chats/chat-a';
@@ -278,7 +279,7 @@ describe('chat fact links', () => {
     expect(cell.textContent).not.toContain(',');
   });
 
-  it('click opens the fact in the side panel and the chip stays highlighted; Cmd-click goes to Browse', async () => {
+  it('click opens the fact in the side panel and the chip knows it is open; Cmd-click goes to Browse', async () => {
     const { onBrowseFact } = mount();
     const turn1 = await screen.findByTestId('chat-turn-1');
     const chip = await within(turn1).findByTestId('fact-link');
@@ -298,6 +299,51 @@ describe('chat fact links', () => {
     // Closing the panel takes the highlight away.
     fireEvent.click(within(panel).getByTestId('chat-panel-close'));
     expect(chip).not.toHaveAttribute('data-open');
+  });
+
+  // Chat review, 2026-11-08: a clicked chip kept a bright "selected" border.
+  // SABOTAGE: put back the --open class or its rule, or drop noMouseFocus -> red.
+  it('a clicked chip has no selected border: it is back at rest, unfocused; only :focus-visible draws a ring', async () => {
+    mount();
+    const turn1 = await screen.findByTestId('chat-turn-1');
+    const chip = await within(turn1).findByTestId('fact-link');
+    const rest = computed(chip, 'border-color', 1280);
+    expect(rest).toBe('rgb(38, 48, 65)'); // #263041, the resting border
+    // A mouse press takes no focus (the app's noMouseFocus): its default is prevented.
+    expect(fireEvent.mouseDown(chip)).toBe(false);
+    fireEvent.click(chip);
+    await within(await screen.findByTestId('chat-side-panel')).findByTestId('fact-title');
+    expect(chip).toHaveAttribute('data-open', 'true'); // reached: the panel shows this fact
+    expect(chip.className).toBe('k-fact-link');
+    expect(document.activeElement).not.toBe(chip);
+    // The pointer moves off it (only hover may lift a chip, and only while it is there).
+    fireEvent.mouseLeave(chip);
+    fireEvent.mouseOver(document.body);
+    expect(chip.matches(':hover')).toBe(false);
+    expect(computed(chip, 'border-color', 1280)).toBe(rest);
+    expect(computed(chip, 'background', 1280)).toBe('rgb(22, 26, 33)'); // #161a21, the resting ground
+    expect(computed(chip, 'box-shadow', 1280)).toBe('');
+    // The stylesheet has no rule that draws an open chip, and its only ring is
+    // the keyboard's, on :focus-visible.
+    const css = (await import('node:fs')).readFileSync('src/App.css', 'utf8');
+    expect(css).not.toMatch(/k-fact-link--open/);
+    expect(css).toMatch(/\.k-fact-link:focus \{ outline: none; \}/);
+    expect(css).toMatch(/\.k-fact-link:focus-visible \{ outline: 2px solid #4a7ab5; outline-offset: 2px; \}/);
+  });
+
+  // Chat review, 2026-11-08: chips sat off the text baseline and spread their lines.
+  // SABOTAGE: restore height 21px / vertical-align -4px, or align-items center -> red.
+  it('a chip sits on the text baseline: the title is its baseline, the glyph is centred, and it sets no height', async () => {
+    mount();
+    const turn1 = await screen.findByTestId('chat-turn-1');
+    const chip = await within(turn1).findByTestId('fact-link');
+    expect(computed(chip, 'vertical-align', 1280)).toBe('baseline');
+    expect(computed(chip, 'align-items', 1280)).toBe('baseline');
+    expect(computed(chip, 'height', 1280)).toBe('');
+    expect(computed(chip, 'line-height', 1280)).toBe('19px');
+    const glyph = within(chip).getByTestId('fact-link-glyph');
+    expect(computed(glyph, 'align-self', 1280)).toBe('center');
+    expect(computed(chip.querySelector('.k-fact-link-title')!, 'line-height', 1280)).toBe('19px');
   });
 
   it('hovering about 300ms shows the card: type, repo, confidence, title, excerpt and path, and no way to Browse', async () => {
