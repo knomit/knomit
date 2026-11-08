@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, readOnlyTitle, READ_ONLY_TITLE, isLensContext, lensResolutionPending, openFactSource, openFactSourceResolved, factHistoryAnchor, edgeAnchorCommit, remoteErrorText } from './state';
-import type { AppState, FilterChip } from './state';
+import { reducer, init, canGoBack, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, readOnlyTitle, READ_ONLY_TITLE, isLensContext, lensResolutionPending, openFactSource, openFactSourceResolved, factHistoryAnchor, edgeAnchorCommit, remoteErrorText } from './state';
+import type { Action, AppState, FilterChip } from './state';
 
 // Crumb identity without the pop count (asserted separately in state_asof.test.ts).
 const bare = (t: { factPath: string; asOf: unknown }[]) => t.map(({ factPath, asOf }) => ({ factPath, asOf }));
@@ -1416,5 +1416,199 @@ describe('NAV_BACK and the branch', () => {
   it('a branch gone: the fact, filters, trail and experiment go with it', () => {
     const s = reducer({ ...land(onExp), filters: [{ category: 'path', value: 'kb/x' }], freeText: 'q' }, { type: 'BRANCH_GONE' });
     expect(s).toMatchObject({ factPath: null, filters: [], freeText: '', navStack: [], experiment: null, sinceFork: false, asOf: { mode: 'live' } });
+  });
+});
+
+// Back across a context switch returns to the context the reader left, then to
+// what they had open there. The reducer switches only once App has said the
+// context exists (NAV_RETURN_ENTER), and lands the entry only once its branch is
+// on screen (NAV_RETURN_LAND).
+describe('NAV_BACK across a repo switch', () => {
+  const exp = { name: 'try', parent: 'main', fork_commit: 'f0rk' } as AppState['experiment'];
+  const inA: AppState = {
+    ...init, repo: 'a', context: { kind: 'repo', repo: 'a' }, branch: 'exp/try', headCommit: 'ha', experiment: exp, branchWritable: true, sinceFork: true,
+    factPath: 'kb/a.md', asOf: { mode: 'history', commit: 'c1' }, filters: [{ category: 'path', value: 'kb' }], freeText: '', librarySort: 'path',
+  };
+  const pickB = (s: AppState) => reducer(s, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'b' }, push: true });
+  const onB = (s: AppState) => reducer(s, { type: 'SET_STATUS', head: 'hb', branch: 'main', embeddingsEnabled: false, ontologyRoot: 'kb', branchWritable: true, experiment: null });
+  const statusA = (s: AppState) => reducer(s, { type: 'SET_STATUS', head: 'ha2', branch: 'exp/try', embeddingsEnabled: false, ontologyRoot: 'kb', branchWritable: true, experiment: exp });
+
+  it('a rail pick pushes what was left, with its repo; a switch that is not a pick still drops the stack', () => {
+    const s = pickB(inA);
+    expect(s.navStack).toHaveLength(1);
+    expect(s.navStack[0]).toMatchObject({ context: { kind: 'repo', repo: 'a' }, repo: 'a', branch: 'exp/try', factPath: 'kb/a.md' });
+    expect(reducer(inA, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'b' } }).navStack).toEqual([]);
+    // Nothing to return to before a branch is known (boot).
+    expect(reducer({ ...init, repo: 'a' }, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'b' }, push: true }).navStack).toEqual([]);
+  });
+
+  it('Back does not resolve the old fact in the new repo: it asks App to return to the old one', () => {
+    const b = reducer(onB(pickB(inA)), { type: 'NAV_BACK' });
+    expect(b).toMatchObject({ repo: 'b', context: { kind: 'repo', repo: 'b' }, factPath: null, navStack: [] });
+    expect(b.navReturn).toMatchObject({ entered: false, entry: { repo: 'a', factPath: 'kb/a.md' } });
+  });
+
+  it('enter switches the context and keeps the stack; land restores fact, anchor, filters, sort and since-fork on the re-read branch', () => {
+    let s = onB(pickB(inA));
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/b0.md', asOf: { mode: 'live' } });
+    s = reducer(s, { type: 'NAV_BACK' });          // back to B's root, same context
+    expect(s.navReturn).toBeNull();
+    s = reducer(s, { type: 'NAV_BACK' });          // across to A
+    s = reducer(s, { type: 'NAV_RETURN_ENTER' });
+    expect(s).toMatchObject({ repo: 'a', context: { kind: 'repo', repo: 'a' }, branch: '', headCommit: '', factPath: null });
+    expect(s.navReturn?.entered).toBe(true);
+    // A landing before the context is entered changes nothing.
+    expect(reducer({ ...s, navReturn: { ...s.navReturn!, entered: false } }, { type: 'NAV_RETURN_LAND' }).factPath).toBeNull();
+    s = reducer(statusA(s), { type: 'NAV_RETURN_LAND' });
+    expect(s).toMatchObject({
+      repo: 'a', branch: 'exp/try', headCommit: 'ha2', experiment: exp, sinceFork: true, navReturn: null,
+      factPath: 'kb/a.md', asOf: { mode: 'history', commit: 'c1' }, filters: [{ category: 'path', value: 'kb' }], librarySort: 'path',
+    });
+  });
+
+  it('since-fork does not come back on a branch that is no longer an experiment', () => {
+    let s = reducer(reducer(onB(pickB(inA)), { type: 'NAV_BACK' }), { type: 'NAV_RETURN_ENTER' });
+    s = reducer(s, { type: 'SET_STATUS', head: 'ha2', branch: 'exp/try', embeddingsEnabled: false, ontologyRoot: 'kb', experiment: null });
+    expect(reducer(s, { type: 'NAV_RETURN_LAND' }).sinceFork).toBe(false);
+  });
+
+  it('a context that is gone: the reader stays, and every entry left in it is dropped', () => {
+    let s = reducer(inA, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/a2.md', asOf: { mode: 'live' } });
+    s = onB(pickB(s));
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/b1.md', asOf: { mode: 'live' } });
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s.navStack).toHaveLength(2);
+    s = reducer(s, { type: 'NAV_BACK' });
+    const gone = reducer(s, { type: 'NAV_RETURN_GONE' });
+    expect(gone).toMatchObject({ repo: 'b', factPath: null, navReturn: null, navStack: [] });
+  });
+
+  it('a branch that is gone ends the return like a return to a chat: normal view, no trail', () => {
+    let s = reducer(reducer(onB(pickB(inA)), { type: 'NAV_BACK' }), { type: 'NAV_RETURN_ENTER' });
+    s = reducer(s, { type: 'BRANCH_GONE' });
+    expect(s).toMatchObject({ navReturn: null, factPath: null, filters: [], navStack: [] });
+    const dropped = reducer(reducer(reducer(onB(pickB(inA)), { type: 'NAV_BACK' }), { type: 'NAV_RETURN_ENTER' }), { type: 'NAV_RETURN_DROP' });
+    expect(dropped).toMatchObject({ navReturn: null, factPath: null });
+  });
+
+  it('one Back at a time while a return is under way', () => {
+    let s = reducer(inA, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/a2.md', asOf: { mode: 'live' } });
+    s = reducer(onB(pickB(s)), { type: 'NAV_BACK' });
+    expect(reducer(s, { type: 'NAV_BACK' })).toBe(s);
+  });
+
+  it('a pick of another context while a return is pending cancels it', () => {
+    const s = reducer(onB(pickB(inA)), { type: 'NAV_BACK' });
+    expect(reducer(s, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'c' }, push: true }).navReturn).toBeNull();
+  });
+
+  it('a chat landing in another repo: one entry, pushed by the switch with the chat on it; Back returns to the chat AND to repo A', () => {
+    let s = reducer(inA, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'b' }, push: true, fromChat: 'c1' });
+    s = onB(s);
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/b.md', asOf: { mode: 'live' }, sinceFork: false, fromChat: 'c1', departed: true });
+    expect(s.navStack).toHaveLength(1);
+    expect(s.navStack[0]).toMatchObject({ fromChat: 'c1', repo: 'a', factPath: 'kb/a.md' });
+    s = reducer(s, { type: 'NAV_BACK' });
+    expect(s).toMatchObject({ chatReturn: 'c1', navReturn: { entered: false, entry: { repo: 'a' } } });
+  });
+
+  it('the trail stops at another context: a crumb is never a fact in another repo', () => {
+    let s = onB(pickB(inA));
+    s = reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/b.md', asOf: { mode: 'history', commit: 'cb' } });
+    expect(selectTrail(s).map(c => c.factPath)).toEqual(['kb/b.md']);
+  });
+
+  it('Back inside one repo is unchanged by any of this', () => {
+    const s = reducer(inA, { type: 'APPLY_NAV', view: 'library', factPath: 'kb/a2.md', asOf: { mode: 'live' } });
+    const back = reducer(s, { type: 'NAV_BACK' });
+    expect(back).toMatchObject({ repo: 'a', factPath: 'kb/a.md', navReturn: null, asOf: { mode: 'history', commit: 'c1' } });
+  });
+});
+
+// Review of b491ff03: what a pending return (navReturn) must yield to.
+describe('a pending return to another context', () => {
+  const inA: AppState = {
+    ...init, repo: 'a', context: { kind: 'repo', repo: 'a' }, branch: 'exp/try', headCommit: 'ha',
+    factPath: 'kb/a.md', librarySort: 'path',
+  };
+  const opened = (s: AppState, f: string) => reducer(s, { type: 'APPLY_NAV', view: 'library', factPath: f, asOf: { mode: 'live' } });
+  const onBranch = (s: AppState, branch: string) => reducer(s, { type: 'SET_STATUS', head: 'h', branch, embeddingsEnabled: false, ontologyRoot: 'kb', experiment: null });
+  // A in its own context, then B picked, then Back: entered, A's branch not read yet.
+  const pending = () => {
+    let s = onBranch(reducer(opened(inA, 'kb/a2.md'), { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'b' }, push: true }), 'main');
+    s = reducer(s, { type: 'NAV_BACK' });
+    s = onBranch(reducer(s, { type: 'NAV_RETURN_ENTER' }), 'main');
+    expect(s.navReturn?.entered).toBe(true);
+    return s;
+  };
+
+  // Every one of READER_MOVES, so removing any one of them fails here.
+  // SABOTAGE: reducer() without the READER_MOVES drop, or any one action taken out of it.
+  const MOVES: [string, Action][] = [
+    ['opening a fact (APPLY_NAV)', { type: 'APPLY_NAV', view: 'library', factPath: 'kb/mine.md', asOf: { mode: 'live' } }],
+    ['entering a folder (NAVIGATE)', { type: 'NAVIGATE', path: 'kb/mine' }],
+    ['going up (GO_UP)', { type: 'GO_UP' }],
+    ['a filter (ADD_FILTER)', { type: 'ADD_FILTER', chip: { category: 'domain', value: 'web' } }],
+    ['removing a filter (REMOVE_FILTER)', { type: 'REMOVE_FILTER', index: 0 }],
+    ['free text (SET_FREE_TEXT)', { type: 'SET_FREE_TEXT', text: 'q' }],
+    ['clearing the filters (CLEAR_FILTERS)', { type: 'CLEAR_FILTERS' }],
+    ['a mount from the summary (FOCUS_LENS_SOURCE)', { type: 'FOCUS_LENS_SOURCE', repo: 'x' }],
+    ['a motif pivot (PIVOT_MOTIF)', { type: 'PIVOT_MOTIF', motif: 'm' }],
+    ['leaving a search (EXIT_SEARCH)', { type: 'EXIT_SEARCH' }],
+    ['leaving a motif (EXIT_MOTIF)', { type: 'EXIT_MOTIF' }],
+    ['a sort (SET_LIBRARY_SORT)', { type: 'SET_LIBRARY_SORT', sort: 'recent' }],
+    ['the sources (SET_LENS_SOURCES)', { type: 'SET_LENS_SOURCES', repos: ['x'] }],
+    ['since-fork (SET_SINCE_FORK)', { type: 'SET_SINCE_FORK', value: true }],
+    ['a time anchor (SET_AS_OF)', { type: 'SET_AS_OF', asOf: { mode: 'history', commit: 'c9' } }],
+  ];
+  it('the table covers the 15 reader moves, once each', () => {
+    expect(new Set(MOVES.map(([, a]) => a.type)).size).toBe(15);
+  });
+  for (const [name, move] of MOVES) it(`${name} drops it, so its landing cannot overwrite the reader's move`, () => {
+    const s = reducer(pending(), move as Action);
+    expect(s.navReturn).toBeNull();
+    expect(reducer(s, { type: 'NAV_RETURN_LAND' }).factPath).toBe(s.factPath);
+  });
+  it('the app\'s own selection of a first row (AMEND_NAV) does not drop it', () => {
+    expect(reducer(pending(), { type: 'AMEND_NAV', factPath: 'kb/row0.md' }).navReturn).not.toBeNull();
+  });
+  it('a branch pick drops it (enterBranch dispatches NAV_RETURN_DROP)', () => {
+    expect(reducer(pending(), { type: 'NAV_RETURN_DROP' }).navReturn).toBeNull();
+  });
+
+  // SABOTAGE: canGoBack ignores navReturn.
+  it('Back is not offered while it is pending, and is again once it has landed', () => {
+    const s = pending();
+    expect(s.navStack.length).toBeGreaterThan(0);
+    expect(canGoBack(s)).toBe(false);
+    expect(canGoBack(reducer(onBranch(s, 'exp/try'), { type: 'NAV_RETURN_LAND' }))).toBe(true);
+  });
+
+  // SABOTAGE: NAV_RETURN_BRANCH_GONE clears the whole stack (as BRANCH_GONE does).
+  // SABOTAGE: pop every trailing entry of the context, whatever its branch.
+  it('a branch gone drops only the entries left on that branch of that context, and keeps the experiment the branch on screen has', () => {
+    let s = reducer({ ...init, repo: 'c', context: { kind: 'repo', repo: 'c' }, branch: 'main', factPath: 'kb/c.md' }, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'a' }, push: true });
+    // An entry of the same repo on ANOTHER branch, below the dead ones: it stays.
+    s = { ...s, branch: 'main', factPath: 'kb/a0.md' };
+    s = opened(s, 'kb/a.md');
+    s = { ...s, branch: 'exp/try' };
+    s = opened(s, 'kb/a2.md');
+    s = onBranch(reducer(s, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'b' }, push: true }), 'main');
+    s = reducer(s, { type: 'NAV_BACK' });
+    s = reducer(s, { type: 'NAV_RETURN_ENTER' });
+    const exp = { name: 'e', parent: 'main', fork_commit: 'f' } as AppState['experiment'];
+    s = reducer(s, { type: 'SET_STATUS', head: 'h', branch: 'exp/e', embeddingsEnabled: false, ontologyRoot: 'kb', experiment: exp });
+    s = reducer(s, { type: 'NAV_RETURN_BRANCH_GONE' });
+    expect(s).toMatchObject({ navReturn: null, factPath: null, filters: [], experiment: exp, branch: 'exp/e' });
+    expect(s.navStack.map(e => `${e.repo}@${e.branch}:${e.factPath}`)).toEqual(['c@main:kb/c.md', 'a@main:kb/a0.md']);
+  });
+
+  // SABOTAGE: a pick with no branch yet drops the stack.
+  it('a pick made before the last switch has a branch keeps the stack instead of dropping it', () => {
+    const s = reducer(opened(inA, 'kb/a2.md'), { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'b' }, push: true });
+    expect(s.branch).toBe('');
+    const again = reducer(s, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'c' }, push: true });
+    expect(again.navStack).toEqual(s.navStack);
+    expect(again.navStack.at(-1)).toMatchObject({ repo: 'a', factPath: 'kb/a2.md' });
   });
 });

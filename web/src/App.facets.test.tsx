@@ -1946,6 +1946,308 @@ describe('a chat target', () => {
       await act(async () => { await new Promise(r => setTimeout(r, 30)); });
       expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']);
     });
+
+    // Back across a repo switch returns to the repo left, on its branch, with its
+    // fact: never the old fact resolved in the new repo (a 404 in the fact pane).
+    // SABOTAGE: SET_CONTEXT without push; NAV_BACK applying the entry in the current
+    // context; no branch re-read in the navReturn landing; no existence check.
+    describe('Back across a repo switch', () => {
+      const ONE = 'kb/ops/one.md';
+      const TWO = 'kb/ops/two.md';
+      const THREE = 'kb/ops/three.md';
+      const CORE = 'kb/core/c.md';
+      const notHere = (path: string, r: string) => Object.assign(new Error(`no fact at path ${path} in ${r}`), { status: 404 });
+      // `start: 'core-kb'` begins on core-kb's fact and picks ops-kb from there, so
+      // the stack holds another context's entry below ops-kb's.
+      async function inOpsOnTwo(status?: (r: string, b?: string) => unknown, start: 'ops-kb' | 'core-kb' = 'ops-kb') {
+        window.history.replaceState(null, '', '/');
+        resetFactCache();
+        localStorage.setItem('knomit.context', JSON.stringify({ kind: 'repo', repo: start }));
+        const { m } = await primeApi();
+        chatRoutes([CHAT_A]);
+        if (status) m.status.mockImplementation(async (r: string, b?: string) => status(r, b));
+        // Everything the fact view reads, set here: no test in this group may lean on
+        // what an earlier test left mocked (each must pass alone, with -t).
+        m.explain.mockResolvedValue({ incoming: [], outgoing: [] });
+        m.factCommits.mockResolvedValue({ entries: [] });
+        m.listExperiments.mockResolvedValue({ experiments: [{ name: 'other', branch: 'exp/other', parent: 'machine/test', fork_commit: 'f1', writable: true }] });
+        m.recent.mockImplementation(async (r: string) => (r === 'ops-kb'
+          ? { facts: [{ path: ONE, title: 'One' }, { path: TWO, title: 'Two' }, { path: THREE, title: 'Three' }], total: 3 }
+          : { facts: [{ path: CORE, title: 'Core' }], total: 1 }));
+        m.fact.mockImplementation(async (r: string, _b: string, path: string, c?: string) => {
+          if (path.startsWith('kb/ops/') !== (r === 'ops-kb')) throw notHere(path, r);
+          return { path, title: path, type: 'observation', body: 'BODY OF ' + path, domain: [], confidence: 0.9, sources: 1, entities: [], refs: [], commit_hash: c ?? 'newest1' };
+        });
+        await mountApp();
+        fireEvent.mouseEnter(screen.getByTestId('mode-flyout'));
+        const seg = await screen.findByTestId('sort-recent');
+        fireEvent.pointerDown(seg, { pointerType: 'mouse' });
+        fireEvent.click(seg, { detail: 1 });
+        if (start === 'core-kb') {
+          await waitFor(() => expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + CORE));
+          fireEvent.click(screen.getByTestId('rail-repo-ops-kb'));
+          await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('ops-kb'));
+        }
+        await waitFor(() => expect(screen.getAllByTestId('chrono-item')).toHaveLength(3));
+        fireEvent.click(screen.getAllByTestId('chrono-item')[0]);
+        await waitFor(() => expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + ONE));
+        fireEvent.click(screen.getAllByTestId('chrono-item')[1]);
+        await waitFor(() => expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + TWO));
+        return m;
+      }
+      const toCore = async () => {
+        fireEvent.click(screen.getByTestId('rail-repo-core-kb'));
+        await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('core-kb'));
+        await waitFor(() => expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + CORE));
+      };
+      const back = async () => {
+        fireEvent.keyDown(window, { key: '[', metaKey: true });
+        await act(async () => { await new Promise(r => setTimeout(r, 80)); });
+      };
+      const body = () => screen.getByTestId('browse-facet').textContent ?? '';
+
+      it('Back returns to the repo left, on the fact that was open, and never reads it in the other repo', async () => {
+        const m = await inOpsOnTwo();
+        await toCore();
+        expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled();
+        m.fact.mockClear();
+        await back();
+        await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('ops-kb'));
+        await waitFor(() => expect(body()).toContain('BODY OF ' + TWO));
+        expect(body()).not.toContain('no fact at path');
+        expect(m.fact.mock.calls.filter(c => c[0] === 'core-kb' && String(c[2]).startsWith('kb/ops/'))).toEqual([]);
+        expect(screen.getByTestId('rail-repo-ops-kb')).toHaveAttribute('aria-current', 'true');
+        expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']);
+        // And Back inside the repo it returned to is Browse's own, as before.
+        await back();
+        await waitFor(() => expect(body()).toContain('BODY OF ' + ONE));
+        expect(screen.getByTestId('target-label').textContent).toBe('ops-kb');
+      });
+
+      const EXP = { ...statusOf('exp/try'), writable: true, experiment: { name: 'try', parent: 'machine/test', fork_commit: 'f0rk' } };
+      it('the branch left is read again and restored, with the experiment', async () => {
+        let onExp = true;
+        const m = await inOpsOnTwo((r, b) => (r === 'ops-kb' && (b === 'exp/try' || (!b && onExp)) ? EXP : statusOf('machine/test')));
+        expect(screen.getByTestId('since-fork-toggle')).toBeInTheDocument();
+        await toCore();
+        onExp = false; // the repo's own branch is no longer the experiment
+        m.status.mockClear();
+        m.fact.mockClear();
+        await back();
+        await waitFor(() => expect(m.status).toHaveBeenCalledWith('ops-kb', 'exp/try'));
+        await waitFor(() => expect(body()).toContain('BODY OF ' + TWO));
+        expect(m.fact.mock.calls.filter(c => c[2] === TWO).at(-1)?.[1]).toBe('exp/try');
+        expect(screen.getByTestId('since-fork-toggle')).toBeInTheDocument();
+      });
+
+      it('the branch left is gone: Browse\'s normal view on the repo\'s branch, not a 404', async () => {
+        let onExp = true;
+        const gone = Object.assign(new Error('no such branch'), { status: 404 });
+        const m = await inOpsOnTwo((r, b) => {
+          if (r === 'ops-kb' && b === 'exp/try' && !onExp) throw gone;
+          return r === 'ops-kb' && (b === 'exp/try' || (!b && onExp)) ? EXP : statusOf('machine/test');
+        });
+        await toCore();
+        onExp = false;
+        m.fact.mockClear();
+        await back();
+        await waitFor(() => expect(m.status).toHaveBeenCalledWith('ops-kb', 'exp/try'));
+        await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('ops-kb'));
+        expect(screen.queryByTestId('since-fork-toggle')).toBeNull();
+        expect(body()).not.toContain('no fact at path');
+        expect(m.fact.mock.calls.every(c => c[1] !== 'exp/try')).toBe(true);
+        expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
+      });
+
+      it('the repo left is gone: the reader stays where they are, with no error, and Back has nothing left there', async () => {
+        const m = await inOpsOnTwo();
+        await toCore();
+        m.repos.mockResolvedValue([{ name: 'core-kb', uid: 'u-core' }]);
+        act(() => { latestStream('/api/v1/repo-events')!.emit('ready', {}); });
+        await waitFor(() => expect(screen.queryByTestId('rail-repo-ops-kb')).toBeNull());
+        m.getRepo.mockClear();
+        await back();
+        expect(screen.getByTestId('target-label').textContent).toBe('core-kb');
+        expect(body()).toContain('BODY OF ' + CORE);
+        expect(body()).not.toContain('no fact at path');
+        expect(m.getRepo).not.toHaveBeenCalledWith('ops-kb');
+        expect(screen.queryByTestId('boot-phase')).toBeNull();
+        expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
+      });
+
+      // The repo's own branch is the experiment until the reader leaves; after that the
+      // entry's branch (exp/try) answers through `away`, which each test controls.
+      const gone404 = () => Object.assign(new Error('no such branch'), { status: 404 });
+      async function awayFromExp(away: () => unknown) {
+        let onExp = true;
+        const m = await inOpsOnTwo((r, b) => {
+          if (r === 'ops-kb' && b === 'exp/try' && !onExp) return away();
+          if (r === 'ops-kb' && (b === 'exp/try' || (!b && onExp))) return EXP;
+          return statusOf(b || 'machine/test');
+        });
+        await waitFor(() => expect(screen.getByTestId('retract-btn')).toBeEnabled()); // the entry's gate: open
+        await toCore();
+        onExp = false;
+        m.status.mockClear();
+        m.fact.mockClear();
+        return m;
+      }
+      const hold = () => {
+        let settle!: (ok: boolean) => void;
+        const p = new Promise((res, rej) => { settle = ok => (ok ? res(EXP) : rej(gone404())); });
+        return { p, settle };
+      };
+      const askedForTheBranchLeft = async (m: Record<string, ReturnType<typeof vi.fn>>) => {
+        await back();
+        await waitFor(() => expect(m.status).toHaveBeenCalledWith('ops-kb', 'exp/try'));
+      };
+      const settleNow = async (h: ReturnType<typeof hold>, ok: boolean) => {
+        await act(async () => { h.settle(ok); await new Promise(r => setTimeout(r, 60)); });
+      };
+
+      // The return's 404 drops only the entries left on the dead branch of that repo:
+      // an entry from another repo below them is still there to go back to.
+      // SABOTAGE: the effect-2 catch dispatches BRANCH_GONE (it clears every context's entries).
+      it('the branch left is gone: only its own entries go, and Back still reaches the repo before it', async () => {
+        let onExp = true;
+        const m = await inOpsOnTwo((r, b) => {
+          if (r === 'ops-kb' && b === 'exp/try' && !onExp) throw gone404();
+          return r === 'ops-kb' && (b === 'exp/try' || (!b && onExp)) ? EXP : statusOf(b || 'machine/test');
+        }, 'core-kb');
+        await toCore();
+        onExp = false;
+        m.status.mockClear();
+        await back();
+        await waitFor(() => expect(m.status).toHaveBeenCalledWith('ops-kb', 'exp/try'));
+        await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('ops-kb'));
+        await act(async () => { await new Promise(r => setTimeout(r, 60)); });
+        expect(body()).not.toContain('no fact at path');
+        expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled();
+        await back();
+        await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('core-kb'));
+        await waitFor(() => expect(body()).toContain('BODY OF ' + CORE));
+      });
+
+      // SABOTAGE: still() in the navReturn landing is () => true.
+      for (const ok of [true, false]) it(`a late ${ok ? 'answer' : '404'} for the branch left, after the reader picked another repo, changes nothing there`, async () => {
+        const h = hold();
+        const m = await awayFromExp(() => h.p);
+        await askedForTheBranchLeft(m);
+        await toCore();
+        await settleNow(h, ok);
+        expect(screen.getByTestId('target-label').textContent).toBe('core-kb');
+        expect(screen.queryByTestId('since-fork-toggle')).toBeNull();
+        expect(body()).toContain('BODY OF ' + CORE);
+        expect(m.fact.mock.calls.some(c => c[1] === 'exp/try')).toBe(false);
+      });
+
+      // SABOTAGE: every failure treated as a gone branch.
+      it('a failure that does not say the branch is gone: the repo\'s normal view, and the trail before it is kept', async () => {
+        const m = await awayFromExp(() => { throw new Error('network down'); });
+        await askedForTheBranchLeft(m);
+        await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('ops-kb'));
+        await act(async () => { await new Promise(r => setTimeout(r, 60)); });
+        expect(body()).not.toContain('BODY OF ' + TWO);
+        expect(body()).not.toContain('no fact at path');
+        expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled();
+      });
+
+      // SABOTAGE: NAV_RETURN_LAND restores branchWritable from the entry.
+      it('the write gate comes from the branch read again, not from what the entry held', async () => {
+        const m = await awayFromExp(() => ({ ...EXP, writable: false }));
+        await askedForTheBranchLeft(m);
+        await waitFor(() => expect(body()).toContain('BODY OF ' + TWO));
+        await waitFor(() => expect(screen.getByTestId('retract-btn')).toBeDisabled());
+      });
+
+      // SABOTAGE: a reader move does not drop navReturn (APPLY_NAV), or enterBranch does not.
+      it('a fact the reader opens while the return is on its way is not overwritten by its landing', async () => {
+        const h = hold();
+        const m = await awayFromExp(() => h.p);
+        await askedForTheBranchLeft(m);
+        await waitFor(() => expect(screen.getAllByTestId('chrono-item')).toHaveLength(3));
+        fireEvent.click(screen.getAllByTestId('chrono-item')[2]);
+        await waitFor(() => expect(body()).toContain('BODY OF ' + THREE));
+        await settleNow(h, true);
+        expect(body()).toContain('BODY OF ' + THREE);
+        expect(body()).not.toContain('BODY OF ' + TWO);
+        expect(screen.queryByTestId('since-fork-toggle')).toBeNull();
+      });
+      it('a branch the reader picks while the return is on its way is not overwritten by its landing', async () => {
+        const h = hold();
+        const m = await awayFromExp(() => h.p);
+        await askedForTheBranchLeft(m);
+        fireEvent.click(await screen.findByTestId('toknomitr-branch'));
+        fireEvent.click(await screen.findByTestId('toknomitr-branch-option-other'));
+        await waitFor(() => expect(m.status).toHaveBeenCalledWith('ops-kb', 'exp/other'));
+        await settleNow(h, true);
+        expect(body()).not.toContain('BODY OF ' + TWO);
+        expect(m.fact.mock.calls.some(c => c[1] === 'exp/try')).toBe(false);
+        expect(screen.queryByTestId('since-fork-toggle')).toBeNull();
+      });
+
+      // SABOTAGE: canGoBack ignores navReturn.
+      it('Back is not offered while a return is on its way, and is again once it has landed', async () => {
+        const h = hold();
+        const m = await awayFromExp(() => h.p);
+        await askedForTheBranchLeft(m);
+        expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
+        await settleNow(h, true);
+        await waitFor(() => expect(body()).toContain('BODY OF ' + TWO));
+        expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled();
+      });
+    });
+
+    // A chat's landing in another repo: Back returns to the chat AND puts Browse back
+    // in the repo it left, as it was (here: its search). One Back, one entry.
+    // SABOTAGE: the landing pushes again (no departed); the switch does not push.
+    it('a landing in another repo: Back returns to the chat, and Browse is back in the repo it left, as it was', async () => {
+      const m = await toTheChipsFact({ start: 'ops-kb', mode: 'path', ms: 0 });
+      const input = within(screen.getByTestId('browse-search')).getByRole('textbox');
+      fireEvent.change(input, { target: { value: 'needle' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await act(async () => { await new Promise(r => setTimeout(r, 60)); });
+      fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+      m.fact.mockClear();
+      fireEvent.click(await screen.findByTestId('fact-link'), { metaKey: true });
+      await landed(0);
+      expect(screen.getByTestId('target-label').textContent).toBe('core-kb');
+      expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + PATH);
+      fireEvent.keyDown(window, { key: '[', metaKey: true });
+      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
+      expect(screen.getByTestId('rail-chat-chat-a')).toHaveAttribute('aria-current', 'true');
+      // Browse behind the chat is ops-kb again, before the reader asks for it.
+      await waitFor(() => expect(window.location.search).toContain('ctx_repo=u-ops'));
+      fireEvent.click(screen.getByTestId('rail-repo-ops-kb'));
+      await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
+      expect(screen.getByTestId('target-label').textContent).toBe('ops-kb');
+      // The search it was in (the list's state, as the URL writes it).
+      expect(window.location.search).toContain('l_q=needle');
+    });
+
+    // The chat it came from has ended: Back is Browse's, so Browse goes to the repo
+    // returned to, facets and all (a repo now being created shows Settings, its only
+    // facet). The facets follow the context at render; the return never touches the
+    // view (a rail dispatch there would unpin a chat still open: the test above).
+    // SABOTAGE: the return is not entered when its entry came from a chat.
+    it('a landing in another repo whose chat has since ended: Back takes Browse to the repo left, as a pick of it would', async () => {
+      const m = await toTheChipsFact({ start: 'ops-kb', mode: 'path', ms: 0 });
+      fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+      fireEvent.click(await screen.findByTestId('fact-link'), { metaKey: true });
+      await landed(0);
+      expect(screen.getByTestId('target-label').textContent).toBe('core-kb');
+      const es = await waitFor(() => { const e = chatStream('chat-a'); expect(e).toBeTruthy(); return e!; });
+      act(() => { es.emit('chat_end', { reason: 'deleted' }); });
+      await waitFor(() => expect(screen.queryByTestId('rail-chat-chat-a')).toBeNull());
+      const { refreshRepoCreates } = await import('./useRepoCreates');
+      m.listRepoCreates.mockResolvedValue([{ create_id: 'c-ops', name: 'ops-kb', mode: 'initialize', state: 'running', step: 'index', phase: 'index', index_state: 'indexing', repo: { name: 'ops-kb', uid: 'u-ops' } }]);
+      await act(async () => { await refreshRepoCreates(); });
+      expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']);
+      fireEvent.keyDown(window, { key: '[', metaKey: true });
+      await waitFor(() => expect(screen.getByTestId('target-label').textContent).toMatch(/^ops-kb/));
+      await waitFor(() => expect(tabNames()).toEqual(['Settings']));
+      expect(screen.getByTestId('facet-tab-settings')).toHaveAttribute('aria-selected', 'true');
+    });
   });
 
   it('the chat ending (chat_end on its stream) removes it from the rail and unpins it', async () => {

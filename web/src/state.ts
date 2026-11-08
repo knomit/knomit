@@ -46,10 +46,16 @@ interface NavEntry {
   // goes back to that chat (chatReturn). It stands in for everything older on
   // the trail, because Back from here is the chat and not what Browse held.
   fromChat?: string;
+  // The browse context this entry was left in. Back to an entry from another
+  // context switches back to it (navReturn) before anything else is restored:
+  // a fact path and filters mean nothing in another repo or lens.
+  context: BrowseContext;
   repo: string;
-  // The branch this entry was left on, with what the app holds about it. Only a
-  // chat's landing (fromChat) restores these: it can move the branch, and factPath
-  // and filters mean nothing on another one. Back inside Browse leaves the branch.
+  // The branch this entry was left on, with what the app holds about it. Inside
+  // one context only a chat's landing (fromChat) restores these: it can move the
+  // branch, and factPath and filters mean nothing on another one. Back inside
+  // Browse leaves the branch. Back across contexts always returns to this branch
+  // (navReturn), read again rather than trusted.
   branch: string;
   head: string;
   experiment: ExperimentInfo | null;
@@ -83,6 +89,10 @@ export interface AppState {
   // Going back to a chat restored a branch from its entry. App reads that branch's
   // status (it may be gone by now, and the entry may be stale), and clears this.
   branchRecheck: boolean;
+  // Back popped an entry from another browse context. App first checks that the
+  // context still exists and switches to it (entered), then, once its branch is
+  // known, reads the entry's branch and restores the entry on it (NAV_RETURN_LAND).
+  navReturn: { entry: NavEntry; entered: boolean } | null;
   // A landing's request to open a panel of the fact at `path`. FactView serves it
   // once and clears it.
   factPanelRequest: (FactPanel & { path: string }) | null;
@@ -183,7 +193,18 @@ export type Action =
   // reusing it would either blank those or force a fetch per event.
   | { type: 'SET_INDEX'; indexState: string; indexDone: number; indexTotal: number }
   | { type: 'SET_REPO'; repo: string }
-  | { type: 'SET_CONTEXT'; context: BrowseContext }
+  // push: a move the reader made (a rail pick, a chat's landing in another
+  // context): the place left goes on the back stack instead of the stack being
+  // dropped. fromChat stamps that entry for a chat's landing.
+  | { type: 'SET_CONTEXT'; context: BrowseContext; push?: boolean; fromChat?: string }
+  // The steps of Back to another context (navReturn): switch to it, drop it
+  // because it is gone, land the entry once its branch is read, or give up on
+  // the landing (the branch could not be read) and stay on the context's view.
+  | { type: 'NAV_RETURN_ENTER' }
+  | { type: 'NAV_RETURN_GONE' }
+  | { type: 'NAV_RETURN_BRANCH_GONE' }
+  | { type: 'NAV_RETURN_LAND' }
+  | { type: 'NAV_RETURN_DROP' }
   | { type: 'CACHE_FACT_TITLE'; key: string; title: string }
   // writeId: the write member's root-commit id (see AppState.lensWriteId).
   | { type: 'SET_LENS'; lens: Lens; writeId?: string }
@@ -200,7 +221,9 @@ export type Action =
   // in ONE entry or Back would undo them one at a time.
   | { type: 'BRANCH_RECHECK_SERVED' }
   | { type: 'BRANCH_GONE' }
-  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; sinceFork?: boolean; hop?: boolean; fromChat?: string; factPanel?: FactPanel }
+  // departed: the context switch before this landing already pushed what the
+  // reader left (SET_CONTEXT push), so this one does not push again.
+  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; sinceFork?: boolean; hop?: boolean; fromChat?: string; factPanel?: FactPanel; departed?: boolean }
   | { type: 'CHAT_RETURN_SERVED' }
   | { type: 'FACT_PANEL_SERVED' }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
@@ -234,6 +257,7 @@ export const init: AppState = {
   lensSources: null,
   chatReturn: null,
   branchRecheck: false,
+  navReturn: null,
   factPanelRequest: null,
   factSource: null,
   view: 'library',
@@ -270,6 +294,7 @@ export const init: AppState = {
 function pushNav(s: AppState, fromChat?: string): NavEntry[] {
   const entry: NavEntry = {
     ...(fromChat ? { fromChat } : {}),
+    context: s.context,
     repo: s.repo,
     branch: s.branch,
     head: s.headCommit,
@@ -289,11 +314,19 @@ function pushNav(s: AppState, fromChat?: string): NavEntry[] {
   return stack;
 }
 
+// sameContext: two browse contexts are the same surface (the same repo, or the
+// same lens).
+export function sameContext(a: BrowseContext, b: BrowseContext): boolean {
+  return a.kind === 'repo' ? b.kind === 'repo' && a.repo === b.repo : b.kind === 'lens' && a.name === b.name;
+}
+
 // canGoBack reports whether NAV_BACK has anywhere to go. There is no forward:
 // NAV_BACK pops, so the entries ahead of the cursor do not exist to return to.
 // A back-only history is the whole model here — see the Library header.
+// While a Back to another context is under way (navReturn) there is nowhere to
+// go back to yet: NAV_BACK ignores itself then, so the control says so.
 export function canGoBack(state: AppState): boolean {
-  return state.navStack.length > 0;
+  return state.navStack.length > 0 && !state.navReturn;
 }
 
 export function currentPath(state: AppState): string {
@@ -403,23 +436,20 @@ function applyAction(s: AppState, a: Action): AppState {
       return { ...s, filters: kept, factPath: null, navStack: pushNav(s) };
     }
     case 'NAV_BACK': {
-      if (s.navStack.length === 0) return s;
+      // One Back at a time: while one to another context is under way, the stack
+      // below it belongs to the place it is going to.
+      if (s.navStack.length === 0 || s.navReturn) return s;
       const prev = s.navStack[s.navStack.length - 1];
-      // If repo changed, treat as full reset
-      if (prev.repo !== s.repo) {
+      // Back to another repo or lens: what was left there means nothing here, so
+      // App switches to it first (navReturn) and restores the entry once its branch
+      // is read. Nothing of the entry is applied here.
+      if (!sameContext(prev.context, s.context)) {
         return {
           ...s,
-          repo: prev.repo,
-          view: 'library',
-          factPath: null,
-          asOf: { mode: 'live' },
-          filters: [],
-          freeText: '',
-          headCommit: '',
-          branch: '',
-          librarySort: prev.sort,
-          lensSources: prev.lensSources,
+          chatReturn: prev.fromChat ?? null,
+          navReturn: { entry: prev, entered: false },
           navStack: s.navStack.slice(0, -1),
+          rightPanelFocused: false,
         };
       }
       // Back to a chat: what the reader left when the landing took them away. It is
@@ -533,11 +563,17 @@ function applyAction(s: AppState, a: Action): AppState {
         asOf: { mode: 'live' },
         filters: [],
         freeText: '',
-        navStack: [],
+        // A move the reader made keeps where they were, so Back returns there
+        // (navReturn). Every other entry (a fallback off a deleted repo, a boot
+        // restore, a create landing) is not a move of theirs and drops the stack.
+        // A pick before the branch is known (the last switch still opening) has
+        // nothing of its own to push: the stack is kept as it is, not dropped.
+        navStack: a.push ? (s.repo && s.branch ? pushNav(s, a.fromChat) : s.navStack) : [],
         remoteSyncError: '',
         remotePushError: '',
         rightPanelFocused: false,
         factSource: null,
+        navReturn: null,
       };
       if (a.context.kind === 'repo') {
         // Repo context: repo/branch are authoritative. Clearing branch/headCommit
@@ -755,7 +791,7 @@ function applyAction(s: AppState, a: Action): AppState {
         freeText: a.freeText !== undefined ? a.freeText : s.freeText,
         librarySort: a.sort ?? s.librarySort,
         sinceFork: a.sinceFork ?? s.sinceFork,
-        navStack: pushNav(s, a.fromChat),
+        navStack: a.departed ? s.navStack : pushNav(s, a.fromChat),
         factPanelRequest: a.factPanel && a.factPath ? { ...a.factPanel, path: a.factPath } : null,
         rightPanelFocused: false,
       };
@@ -768,7 +804,57 @@ function applyAction(s: AppState, a: Action): AppState {
       // The branch restored for a return from a chat no longer exists. Nothing on it,
       // or on the trail behind it, can be read; the status of the branch moved to
       // comes with this.
-      return { ...s, view: 'library', factPath: null, asOf: { mode: 'live' }, filters: [], freeText: '', navStack: [], experiment: null, sinceFork: false };
+      return { ...s, view: 'library', factPath: null, asOf: { mode: 'live' }, filters: [], freeText: '', navStack: [], experiment: null, sinceFork: false, navReturn: null };
+    case 'NAV_RETURN_ENTER': {
+      // The context Back returns to exists: switch to it the way any switch does,
+      // keeping the stack, which is the history Back is walking.
+      const r = s.navReturn;
+      if (!r || r.entered) return s;
+      const next = reducer(s, { type: 'SET_CONTEXT', context: r.entry.context });
+      return { ...next, navStack: s.navStack, navReturn: { ...r, entered: true } };
+    }
+    case 'NAV_RETURN_GONE': {
+      // The context Back returns to is gone: the reader stays where they are, and
+      // every entry left in it goes too, or each Back would be another dead step.
+      const r = s.navReturn;
+      if (!r) return s;
+      const stack = [...s.navStack];
+      while (stack.length > 0 && sameContext(stack[stack.length - 1].context, r.entry.context)) stack.pop();
+      return { ...s, navReturn: null, navStack: stack };
+    }
+    case 'NAV_RETURN_BRANCH_GONE': {
+      // The branch the entry was left on is gone. The context is entered and its
+      // status is the branch on screen: its normal view, with that branch's own
+      // experiment and since-fork as its status set them. The entries left on the
+      // dead branch of this context go; entries of other contexts stay.
+      const r = s.navReturn;
+      if (!r) return s;
+      const stack = [...s.navStack];
+      const onDead = (e: NavEntry) => sameContext(e.context, r.entry.context) && e.branch === r.entry.branch;
+      while (stack.length > 0 && onDead(stack[stack.length - 1])) stack.pop();
+      return { ...s, navReturn: null, navStack: stack, view: 'library', factPath: null, asOf: { mode: 'live' }, filters: [], freeText: '' };
+    }
+    case 'NAV_RETURN_LAND': {
+      // The entry's branch is the one on screen now: put back what the reader left.
+      // Not a move, so nothing is pushed. Since-fork holds only in an experiment.
+      const e = s.navReturn?.entry;
+      if (!e || !s.navReturn?.entered) return s;
+      return {
+        ...s,
+        navReturn: null,
+        view: e.view,
+        factPath: e.factPath,
+        asOf: e.asOf,
+        filters: e.filters,
+        freeText: e.freeText,
+        librarySort: e.sort,
+        lensSources: e.lensSources,
+        sinceFork: e.sinceFork && !!s.experiment,
+        rightPanelFocused: false,
+      };
+    }
+    case 'NAV_RETURN_DROP':
+      return s.navReturn ? { ...s, navReturn: null } : s;
     case 'FACT_PANEL_SERVED':
       return s.factPanelRequest ? { ...s, factPanelRequest: null } : s;
     case 'AMEND_NAV': {
@@ -798,7 +884,21 @@ function applyAction(s: AppState, a: Action): AppState {
 // observe stale data. Centralizing this here means new fact-close paths inherit
 // the guarantee for free. Referential identity is preserved for the common case
 // (already-null factSource), so no-op arms that `return s` stay ===.
+// The reader's own moves. One made while a Back to another context is still on its
+// way (navReturn) wins: the return is dropped, or its landing would overwrite
+// what the reader just chose. Not AMEND_NAV or RESTORE_LIST: those are the app's
+// own (a list selecting its first row, a reload), not the reader's.
+const READER_MOVES: ReadonlySet<Action['type']> = new Set<Action['type']>([
+  'NAVIGATE', 'GO_UP', 'ADD_FILTER', 'REMOVE_FILTER', 'SET_FREE_TEXT', 'CLEAR_FILTERS', 'APPLY_NAV',
+  'FOCUS_LENS_SOURCE', 'PIVOT_MOTIF', 'EXIT_SEARCH', 'EXIT_MOTIF', 'SET_LIBRARY_SORT', 'SET_LENS_SOURCES',
+  'SET_SINCE_FORK', 'SET_AS_OF',
+]);
+
 export function reducer(s: AppState, a: Action): AppState {
+  return reduce(s.navReturn && READER_MOVES.has(a.type) ? { ...s, navReturn: null } : s, a);
+}
+
+function reduce(s: AppState, a: Action): AppState {
   const next = applyAction(s, a);
   if (next.factPath === null && next.factSource !== null) {
     return { ...next, factSource: null };
@@ -983,6 +1083,8 @@ export function selectTrail(s: AppState): TrailCrumb[] {
     const e = s.navStack[i];
     // Back from here is the chat, so what Browse held before it is not a crumb.
     if (e.fromChat) break;
+    // Nor is a fact in another repo or lens: a crumb is a hop inside this one.
+    if (!sameContext(e.context, s.context)) break;
     if (e.factPath == null) continue;
     prefix.unshift({ factPath: e.factPath, asOf: e.asOf, pops: s.navStack.length - i });
     if (e.asOf.mode === 'live') break;
