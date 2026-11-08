@@ -43,6 +43,33 @@ func TestWikiLinks_ProseCountsCodeIsExempt(t *testing.T) {
 		{"lone open with close on another line", "[[a\nb]]", nil},
 		{"blank inside", "[[  ]] is not one", nil},
 		{"single brackets", "[x] and [text](kb/a.md)", nil},
+		// F2: a fence opened on a list-marker or blockquote line.
+		{"fence on a dash list line", "- ```toml\n  [[oauth.client]]\n  ```\n\nprose [[z]]", []string{"[[z]]"}},
+		{"fence on a numbered list line", "1. ```\n   [[a]]\n   ```\n\n2) ```\n   [[b]]\n   ```\n[[z]]", []string{"[[z]]"}},
+		{"fence in a blockquote", "> ```\n> [[a]]\n> ```\n\n[[z]]", []string{"[[z]]"}},
+		{"fence in a quoted list", "> - ```\n>   [[a]]\n>   ```\n\n[[z]]", []string{"[[z]]"}},
+		{"list item prose still counts", "- see [[a]]\n* and [[b]]\n+ and [[c]]\n3. and [[d]]", []string{"[[a]]", "[[b]]", "[[c]]", "[[d]]"}},
+		{"quoted prose still counts", "> see [[a]]", []string{"[[a]]"}},
+		{"bold is not a list marker", "**[[a]]**", []string{"[[a]]"}},
+		// F6: indented code blocks.
+		{"indented block after a blank line", "intro\n\n    [[x]] = 1\n\nafter [[y]]", []string{"[[y]]"}},
+		{"indented block at the start", "    [[x]] = 1", nil},
+		{"tab-indented block", "intro\n\n\t[[x]] = 1", nil},
+		{"indented block across a blank line", "    [[x]]\n\n    [[y]]\nz [[z]]", []string{"[[z]]"}},
+		{"indented line continues a paragraph", "text\n    [[x]]", []string{"[[x]]"}},
+		{"indented line continues a list item", "- item\n\n    [[x]]", []string{"[[x]]"}},
+		{"after a list ends, indented is code again", "- item\n\nback\n\n    [[x]]", nil},
+		// F6: escaped backticks.
+		{"escaped backtick does not open", "a \\`[[x]]` b", []string{"[[x]]"}},
+		{"escaped backticks around it", "\\`[[x]]\\`", []string{"[[x]]"}},
+		{"double backslash does not escape", "a \\\\`[[x]]` b", nil},
+		{"span after an escaped backtick", "a \\` b `[[y]]`", nil},
+		// F6: a span does not cross a heading line.
+		{"span does not cross a heading", "a `x\n# Head\n[[y]] `", []string{"[[y]]"}},
+		{"span inside a heading", "# The `[[a]]` header", nil},
+		// F6: nested brackets.
+		{"nested single brackets", "see [[the [x] fact]] here", []string{"[[the [x] fact]]"}},
+		{"two on one line", "[[a]] then [[b]]", []string{"[[a]]", "[[b]]"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
