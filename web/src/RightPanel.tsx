@@ -21,9 +21,9 @@ import type { NavRequest } from './useNavigationManager';
 
 // ─── Summary-view components ─────────────────────────────────────────────────
 
-// StatFigure is the compact inline form of StatBox used by the overview strip.
-// The overview shows five of these, so the boxed StatBox form cost ~100px of
-// vertical space that the highlights list now uses.
+// StatFigure is the compact inline stat used by the overview strip. The
+// overview shows five of these, so a boxed form would cost ~100px of vertical
+// space that the highlights list now uses.
 function StatFigure({ label, value, color = '#e8edf3' }: {
   label: string; value: ReactNode; color?: string;
 }) {
