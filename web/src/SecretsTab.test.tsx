@@ -75,7 +75,7 @@ describe('Access → Secrets', () => {
     expect(rows).toEqual(['secret-row-fine', 'secret-row-old', 'secret-row-soon']);
   });
 
-  it('finds by name, host or linked repository', async () => {
+  it('finds by name or host', async () => {
     const api = await mocked();
     api.listSecrets.mockResolvedValue([
       secret({ id: 'a', name: 'gh', hosts: ['github.com'] }),

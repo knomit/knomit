@@ -67,10 +67,12 @@ export function useAuthData(onCount?: (n: number | null) => void, enabled = true
   return { pending, grants, err, reload };
 }
 
-/** The approval note: what the reader should know after Approve. */
-export function approvalNotice(a: OAuthApproval, p: OAuthPending): string {
+/** The approval note: what the reader should know after Approve. A
+ *  re-approval that left the subject's grants as they were is a WARNING: the
+ *  token may be capped below the scopes just checked. */
+export function approvalNotice(a: OAuthApproval, p: OAuthPending): { text: string; tone: 'ok' | 'warn' } {
   const who = p.client_name || p.client_id;
   return a.grantsUnchanged
-    ? `Approved ${who}. host:${a.subject}@token had been granted before, so its grants were left as they are and may cap this token below the scopes you checked. Widen them with: knomit grants add host:${a.subject}@token <perm>`
-    : `Approved ${who}. It signs in as host:${a.subject}@token.`;
+    ? { tone: 'warn', text: `Approved ${who}. host:${a.subject}@token had been granted before, so its grants were left as they are and may cap this token below the scopes you checked. Widen them with: knomit grants add host:${a.subject}@token <perm>` }
+    : { tone: 'ok', text: `Approved ${who}. It signs in as host:${a.subject}@token.` };
 }

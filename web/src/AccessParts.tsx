@@ -237,9 +237,11 @@ const groupHead: CSSProperties = {
 
 /** ItemRow: a list row in the Library's geometry and selection — a glyph, a
  *  title over a mono meta line, and a badge at the right. */
-export function ItemRow({ id, selected, onSelect, glyph, title, meta, badge, italic, testid, titleMono }: {
+export function ItemRow({ id, selected, tabbable, onSelect, glyph, title, meta, badge, italic, testid, titleMono }: {
   id: string;
   selected: boolean;
+  /** The list's one Tab stop (tabStop): the selected row, else the first. */
+  tabbable?: boolean;
   onSelect: () => void;
   glyph: ReactNode;
   title: ReactNode;
@@ -251,7 +253,7 @@ export function ItemRow({ id, selected, onSelect, glyph, title, meta, badge, ita
 }) {
   return (
     <button type="button" data-item={id} data-testid={testid} aria-current={selected || undefined}
-      tabIndex={selected ? 0 : -1} onClick={onSelect}
+      tabIndex={selected || tabbable ? 0 : -1} onClick={onSelect}
       style={selected ? itemSel : item}
       onMouseEnter={selected ? undefined : e => { e.currentTarget.style.background = '#191922'; }}
       onMouseLeave={selected ? undefined : e => { e.currentTarget.style.background = 'transparent'; }}>

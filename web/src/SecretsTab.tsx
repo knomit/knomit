@@ -9,7 +9,7 @@ import { KeyIcon, TicketIcon, IdCardIcon, TerminalIcon, PencilIcon, TrashIcon, R
 import {
   Badge, Block, Chip, DetailHeader, IconAction, ItemRow, ListEmpty, ListHeader, Note, Prop, Stats,
 } from './AccessParts';
-import { dim, fmtDate, listKeys, mono, relDays } from './accessUtil';
+import { attnRow, dim, fmtDate, listKeys, listScroll, mono, relDays, tabStop } from './accessUtil';
 
 // Access → Secrets: the instance's stored credentials, which repositories
 // link to instead of holding a pasted token. The list column names every
@@ -30,11 +30,13 @@ const TYPE_WORD: Record<SecretType, string> = { token: 'token', basic: 'username
 
 // ─── List ────────────────────────────────────────────────────────────────────
 
-export function SecretsList({ list, err, selected, onSelect, adding, onAdd, onLeft, onRight }: {
+export function SecretsList({ list, err, selected, onSelect, focusOnly, adding, onAdd, onLeft, onRight }: {
   list: SecretView[] | null;
   err: string;
   selected: string | null;
   onSelect: (id: string) => void;
+  /** One column at a time: arrows move the focus, Enter opens (listKeys). */
+  focusOnly?: boolean;
   adding: boolean;
   onAdd: () => void;
   onLeft: () => void;
@@ -44,17 +46,18 @@ export function SecretsList({ list, err, selected, onSelect, adding, onAdd, onLe
   const shown = useMemo(() => {
     const t = q.trim().toLowerCase();
     const l = [...(list ?? [])].sort((a, b) => a.name.localeCompare(b.name));
-    return t ? l.filter(s => s.name.toLowerCase().includes(t) || s.hosts.some(h => h.includes(t)) || (s.repos ?? []).some(r => r.name.includes(t))) : l;
+    return t ? l.filter(s => s.name.toLowerCase().includes(t) || s.hosts.some(h => h.includes(t))) : l;
   }, [list, q]);
   const ids = [...(adding ? [NEW_SECRET] : []), ...shown.map(s => s.id)];
+  const tab = tabStop(ids, selected);
   return (
     <>
       <ListHeader query={q} onQuery={setQ} placeholder="Find a secret or host"
         add={{ label: 'Add a secret', active: adding, onClick: onAdd, testid: 'secret-add' }} />
-      <div data-testid="secrets-list" role="list" style={listScroll} onKeyDown={listKeys(ids, selected, onSelect, { onLeft, onRight })}>
+      <div data-testid="secrets-list" role="list" style={listScroll} onKeyDown={listKeys(ids, selected, onSelect, { onLeft, onRight, focusOnly })}>
         {err && <div role="alert" data-testid="secrets-error" style={{ ...wizardErr, margin: 12 }}>{err}</div>}
         {adding && (
-          <ItemRow id={NEW_SECRET} selected={selected === NEW_SECRET} onSelect={() => onSelect(NEW_SECRET)} italic
+          <ItemRow id={NEW_SECRET} selected={selected === NEW_SECRET} tabbable={tab === NEW_SECRET} onSelect={() => onSelect(NEW_SECRET)} italic
             glyph={<PlusIcon color="#8ab6d6" size={14} />} title="New secret" meta="not saved yet" testid="secret-row-new" />
         )}
         {list === null && !err && <div style={{ ...dim, padding: 16 }}>Loading…</div>}
@@ -70,7 +73,7 @@ export function SecretsList({ list, err, selected, onSelect, adding, onAdd, onLe
         {shown.map(s => {
           const b = expiryBadge(s);
           return (
-            <ItemRow key={s.id} id={s.id} selected={s.id === selected} onSelect={() => onSelect(s.id)} titleMono
+            <ItemRow key={s.id} id={s.id} selected={s.id === selected} tabbable={tab === s.id} onSelect={() => onSelect(s.id)} titleMono
               testid={`secret-row-${s.name}`}
               glyph={<SecretTypeIcon type={s.type} color={s.id === selected ? TYPE_COLOR[s.type] : '#777'} />}
               title={s.name}
@@ -82,7 +85,6 @@ export function SecretsList({ list, err, selected, onSelect, adding, onAdd, onLe
     </>
   );
 }
-const listScroll: CSSProperties = { flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: 12 };
 
 // ─── Overview (nothing picked) ───────────────────────────────────────────────
 
@@ -126,11 +128,6 @@ export function SecretsOverview({ list, onAdd, onPick }: { list: SecretView[] | 
     </div>
   );
 }
-const attnRow: CSSProperties = {
-  width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '9px 8px', margin: '0 -8px',
-  boxSizing: 'content-box', border: 'none', borderRadius: 4, borderBottom: '1px solid #1a1a1a',
-  background: 'transparent', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', minWidth: 0,
-};
 
 // ─── New secret ──────────────────────────────────────────────────────────────
 

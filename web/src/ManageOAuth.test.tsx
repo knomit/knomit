@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { AccessPage } from './AccessPage';
 import { defaultScopes, redirectHost } from './oauthAccess';
 import { api, type OAuthGrant, type OAuthPending } from './api';
@@ -65,6 +65,26 @@ afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
 });
+
+// The page's width (jsdom has no layout): every element's clientWidth, and
+// the ResizeObserver callbacks a resize fires.
+function sized(px: number) {
+  const d = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
+  const set = (w: number) => Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => w });
+  set(px);
+  const callbacks: (() => void)[] = [];
+  const RO = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class {
+    constructor(cb: () => void) { callbacks.push(cb); }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+  return {
+    to(w: number) { set(w); act(() => { callbacks.forEach(cb => cb()); }); },
+    restore() { if (d) Object.defineProperty(HTMLElement.prototype, 'clientWidth', d); globalThis.ResizeObserver = RO; },
+  };
+}
 
 function renderAuth(onAuthCount = vi.fn()) {
   return render(<AccessPage tab="auth" onTab={vi.fn()} oauthAvailable authCount={null} onAuthCount={onAuthCount} />);
@@ -251,6 +271,17 @@ describe('Authorizations — a waiting request', () => {
     const note = await screen.findByTestId('oauth-notice');
     expect(note).toHaveTextContent('host:laptop@token');
     expect(note).toHaveTextContent('knomit grants add host:laptop@token <perm>');
+    // A warning, not a success: the token may be capped below what was checked.
+    expect(note).toHaveAttribute('role', 'alert');
+  });
+
+  it('says a first approval in the success tone', async () => {
+    vi.mocked(api.listOAuthPending).mockResolvedValueOnce([claude()]).mockResolvedValue([]);
+    renderAuth();
+    const r = await request();
+    fireEvent.change(within(r).getByLabelText(/subject/i), { target: { value: 'laptop' } });
+    fireEvent.click(within(r).getByTestId('oauth-approve'));
+    expect(await screen.findByTestId('oauth-notice')).toHaveAttribute('role', 'status');
   });
 
   it('cannot approve with no scope checked', async () => {
@@ -342,5 +373,78 @@ describe('Authorizations — an approved login', () => {
     fireEvent.click(within(g).getByTestId('oauth-revoke-confirm'));
     await waitFor(() => expect(within(g).getByRole('alert')).toHaveTextContent('no such approved login'));
     expect(screen.getByTestId('oauth-grant')).toBeInTheDocument();
+  });
+});
+
+// A notice is about one place (the overview the action returned to), and
+// goes once the selection moves; nothing about another item leaks onto it.
+describe('Authorizations — notices', () => {
+  it('drops the revoke notice once another login is picked, and does not bring it back', async () => {
+    vi.mocked(api.listOAuthGrants).mockResolvedValue([login(), login({ id: 'fam-2', subject: 'desktop', client_name: 'Cursor' })]);
+    renderAuth();
+    const g = await approved();
+    fireEvent.click(within(g).getByTestId('oauth-revoke'));
+    fireEvent.click(within(g).getByTestId('oauth-revoke-confirm'));
+    expect(await screen.findByTestId('oauth-notice')).toHaveTextContent('Revoked Claude Code');
+    fireEvent.click(screen.getAllByTestId('oauth-grant-item')[1]);
+    expect(await screen.findByTestId('oauth-grant')).toHaveTextContent('Cursor');
+    expect(screen.queryByTestId('oauth-notice')).toBeNull();
+    fireEvent.click(screen.getAllByTestId('oauth-grant-item')[1]);
+    expect(screen.queryByTestId('oauth-notice')).toBeNull();
+  });
+
+  it('drops the approval notice when a login is picked and back on the overview', async () => {
+    vi.mocked(api.listOAuthPending).mockResolvedValueOnce([claude()]).mockResolvedValue([]);
+    vi.mocked(api.listOAuthGrants).mockResolvedValue([login()]);
+    renderAuth();
+    const r = await request();
+    fireEvent.change(within(r).getByLabelText(/subject/i), { target: { value: 'laptop' } });
+    fireEvent.click(within(r).getByTestId('oauth-approve'));
+    expect(await screen.findByTestId('oauth-notice')).toHaveTextContent('Approved Claude Code');
+    const g = await approved();
+    expect(within(g).queryByTestId('oauth-notice')).toBeNull();
+    expect(screen.queryByTestId('oauth-notice')).toBeNull();
+  });
+});
+
+describe('Authorizations — narrow widths', () => {
+  let page: ReturnType<typeof sized> | null = null;
+  afterEach(() => { page?.restore(); page = null; });
+
+  it('at a phone width shows the notice an approval leaves, warning included', async () => {
+    page = sized(500);
+    vi.mocked(api.approveOAuthPending).mockResolvedValue({ subject: 'laptop', grantsUnchanged: true });
+    vi.mocked(api.listOAuthPending).mockResolvedValueOnce([claude()]).mockResolvedValue([]);
+    renderAuth();
+    const r = await request();
+    fireEvent.change(within(r).getByLabelText(/subject/i), { target: { value: 'laptop' } });
+    fireEvent.click(within(r).getByTestId('oauth-approve'));
+    const note = await screen.findByTestId('oauth-notice');
+    expect(note).toHaveTextContent('knomit grants add host:laptop@token <perm>');
+    expect(note).toHaveAttribute('role', 'alert');
+  });
+
+  it('at a phone width shows the notice a revoke leaves', async () => {
+    page = sized(500);
+    vi.mocked(api.listOAuthGrants).mockResolvedValue([login()]);
+    renderAuth();
+    const g = await approved();
+    fireEvent.click(within(g).getByTestId('oauth-revoke'));
+    fireEvent.click(within(g).getByTestId('oauth-revoke-confirm'));
+    expect(await screen.findByTestId('oauth-notice')).toHaveTextContent('Revoked Claude Code');
+  });
+
+  it('keeps a decision in progress — subject and scopes — across the breakpoint', async () => {
+    page = sized(1200);
+    renderAuth();
+    const r = await request();
+    fireEvent.change(within(r).getByLabelText(/subject/i), { target: { value: 'laptop' } });
+    fireEvent.click(within(r).getByRole('checkbox', { name: 'operator' }));
+    page.to(500);
+    const after = screen.getByTestId('oauth-row');
+    expect(within(after).getByLabelText(/subject/i)).toHaveValue('laptop');
+    expect(within(after).getByRole('checkbox', { name: 'operator' })).toBeChecked();
+    page.to(1200);
+    expect(within(screen.getByTestId('oauth-row')).getByLabelText(/subject/i)).toHaveValue('laptop');
   });
 });

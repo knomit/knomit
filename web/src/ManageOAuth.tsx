@@ -7,7 +7,8 @@ import { CopyButton } from './fleetParts';
 import {
   Badge, Block, Chip, DetailHeader, ItemRow, ListEmpty, ListGroup, ListHeader, Note, Prop, Stats,
 } from './AccessParts';
-import { ago, dim, fmtDate, left, listKeys, mono, relDays, useNow } from './accessUtil';
+import { ago, attnRow, dim, fmtDate, left, listKeys, listScroll, mono, relDays, tabStop, useNow } from './accessUtil';
+import { errMsg } from './secrets';
 
 // Access → Authorizations is the operator's side of an OAuth login (F19 phase
 // 3b): a client such as Claude Code parked an authorization request on this
@@ -52,10 +53,12 @@ const GREEN = '#8fd1a5';
 
 // ─── List ────────────────────────────────────────────────────────────────────
 
-export function AuthList({ data, selected, onSelect, onLeft, onRight }: {
+export function AuthList({ data, selected, onSelect, focusOnly, onLeft, onRight }: {
   data: AuthData;
   selected: string | null;
   onSelect: (key: string) => void;
+  /** One column at a time: arrows move the focus, Enter opens (listKeys). */
+  focusOnly?: boolean;
   onLeft: () => void;
   onRight: () => void;
 }) {
@@ -69,10 +72,11 @@ export function AuthList({ data, selected, onSelect, onLeft, onRight }: {
   const grants = useMemo(() => (data.grants ?? []).filter(g => match(g.client_name, g.client_id, g.subject)), [data.grants, match]);
   const ids = [...pending.map(p => pendingKey(p.id)), ...grants.map(g => grantKey(g.id))];
   const nothing = data.pending !== null && data.pending.length === 0 && (data.grants === null || data.grants.length === 0);
+  const tab = tabStop(ids, selected);
   return (
     <>
       <ListHeader query={q} onQuery={setQ} placeholder="Find a client or subject" />
-      <div data-testid="auth-list" role="list" style={listScroll} onKeyDown={listKeys(ids, selected, onSelect, { onLeft, onRight })}>
+      <div data-testid="auth-list" role="list" style={listScroll} onKeyDown={listKeys(ids, selected, onSelect, { onLeft, onRight, focusOnly })}>
         {data.err && <div role="alert" style={{ ...wizardErr, margin: 12 }}>{data.err}</div>}
         {data.pending === null && !data.err && <div style={{ ...dim, padding: 16 }}>Loading…</div>}
         {nothing && (
@@ -87,7 +91,7 @@ export function AuthList({ data, selected, onSelect, onLeft, onRight }: {
               const k = pendingKey(p.id);
               const urgent = new Date(p.expires_at).getTime() - now < 3 * 60_000;
               return (
-                <ItemRow key={k} id={k} selected={selected === k} onSelect={() => onSelect(k)} testid="oauth-row-item"
+                <ItemRow key={k} id={k} selected={selected === k} tabbable={tab === k} onSelect={() => onSelect(k)} testid="oauth-row-item"
                   glyph={<ClockIcon color={selected === k ? AMBER : '#9a8a60'} />}
                   title={p.client_name || p.client_id}
                   meta={<>→ {redirectHost(p.redirect_uri)}</>}
@@ -103,7 +107,7 @@ export function AuthList({ data, selected, onSelect, onLeft, onRight }: {
               const k = grantKey(g.id);
               const lapsing = new Date(g.refresh_expires_at).getTime() - now < 7 * 86_400_000;
               return (
-                <ItemRow key={k} id={k} selected={selected === k} onSelect={() => onSelect(k)} testid="oauth-grant-item"
+                <ItemRow key={k} id={k} selected={selected === k} tabbable={tab === k} onSelect={() => onSelect(k)} testid="oauth-grant-item"
                   glyph={<PlugIcon color={selected === k ? GREEN : '#6f8f78'} />}
                   title={g.client_name || g.client_id}
                   meta={<>as {g.subject} · {g.scopes.join(' ')} · since {shortDate(g.created_at)}</>}
@@ -116,14 +120,16 @@ export function AuthList({ data, selected, onSelect, onLeft, onRight }: {
     </>
   );
 }
-const listScroll: CSSProperties = { flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: 12 };
 const groupEmpty: CSSProperties = { ...dim, padding: '4px 12px 10px' };
 
 // ─── Overview (nothing picked) ───────────────────────────────────────────────
 
+/** A notice to show: an outcome, in the tone it deserves. */
+export interface ShownNotice { text: string; tone: 'ok' | 'warn' }
+
 export function AuthOverview({ data, notice, onDismissNotice, onPick }: {
   data: AuthData;
-  notice: string;
+  notice: ShownNotice | null;
   onDismissNotice: () => void;
   onPick: (key: string) => void;
 }) {
@@ -134,7 +140,7 @@ export function AuthOverview({ data, notice, onDismissNotice, onPick }: {
       <DetailHeader kindIcon={<ShieldCheckIcon color="#7c9" size={12} />} kind="oauth" kindColor="#7c9"
         title="Client sign-ins"
         sub="MCP clients ask to use this instance over OAuth. Approving one issues it a token that acts as the subject you name, limited to the scopes you check; revoking it signs the client out." />
-      {notice && <Note tone="ok" testid="oauth-notice" onDismiss={onDismissNotice}>{notice}</Note>}
+      {notice && <Note tone={notice.tone} testid="oauth-notice" onDismiss={onDismissNotice}>{notice.text}</Note>}
       <div style={{ marginTop: 22 }}>
         <Stats items={[
           { n: pending.length, label: 'waiting', tone: 'ok' },
@@ -164,11 +170,6 @@ export function AuthOverview({ data, notice, onDismissNotice, onPick }: {
     </div>
   );
 }
-const attnRow: CSSProperties = {
-  width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '9px 8px', margin: '0 -8px',
-  boxSizing: 'content-box', border: 'none', borderRadius: 4, borderBottom: '1px solid #1a1a1a',
-  background: 'transparent', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', minWidth: 0,
-};
 
 // ─── A waiting request ───────────────────────────────────────────────────────
 
@@ -193,7 +194,7 @@ export function PendingDetail({ p, onDone, onApproved }: {
     try {
       await f();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(errMsg(e));
       setBusy(false);
     }
   };
@@ -316,7 +317,7 @@ export function RequestGone() {
 
 export function GrantDetail({ g, notice, onDismissNotice, onRevoked }: {
   g: OAuthGrant;
-  notice: string;
+  notice: ShownNotice | null;
   onDismissNotice: () => void;
   onRevoked: (notice: string) => void;
 }) {
@@ -335,7 +336,7 @@ export function GrantDetail({ g, notice, onDismissNotice, onRevoked }: {
         aside={<>approved {relDays(g.created_at, now)}</>}
         title={g.client_name || g.client_id}
         sub={<>acts as <span style={{ ...mono, color: '#bbb' }}>{principal}</span></>} />
-      {notice && <Note tone="ok" testid="oauth-notice" onDismiss={onDismissNotice}>{notice}</Note>}
+      {notice && <Note tone={notice.tone} testid="oauth-notice" onDismiss={onDismissNotice}>{notice.text}</Note>}
 
       <Block title="What it may do">
         <Prop label="Subject">
@@ -385,7 +386,7 @@ export function GrantDetail({ g, notice, onDismissNotice, onRevoked }: {
                 onClick={async () => {
                   setBusy(true); setErr('');
                   try { await api.revokeOAuthGrant(g.id); onRevoked(`Revoked ${g.client_name || g.client_id} (${principal}).`); }
-                  catch (e) { setErr(e instanceof Error ? e.message : String(e)); setBusy(false); setRevoking(false); }
+                  catch (e) { setErr(errMsg(e)); setBusy(false); setRevoking(false); }
                 }}>Revoke</button>
               <button type="button" style={btn(busy)} disabled={busy} onClick={() => setRevoking(false)}>Cancel</button>
             </span>

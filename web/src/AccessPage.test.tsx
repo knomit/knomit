@@ -36,6 +36,28 @@ function atWidth(px: number) {
   return () => { if (d) Object.defineProperty(HTMLElement.prototype, 'clientWidth', d); };
 }
 
+// A resizable page: a ResizeObserver jsdom lacks, whose callbacks a test
+// fires after changing the width.
+function resizable(px: number) {
+  const restoreWidth: { fn: () => void } = { fn: atWidth(px) };
+  const callbacks: (() => void)[] = [];
+  const RO = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class {
+    constructor(cb: () => void) { callbacks.push(cb); }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+  return {
+    to(next: number) {
+      restoreWidth.fn();
+      restoreWidth.fn = atWidth(next);
+      act(() => { callbacks.forEach(cb => cb()); });
+    },
+    restore() { restoreWidth.fn(); globalThis.ResizeObserver = RO; },
+  };
+}
+
 const page = (over: Partial<Parameters<typeof AccessPage>[0]> = {}) => (
   <AccessPage tab="secrets" onTab={vi.fn()} oauthAvailable={false} authCount={null} onAuthCount={vi.fn()} {...over} />
 );
@@ -169,9 +191,80 @@ describe('AccessPage — narrow widths', () => {
     expect(screen.getByTestId('access-section-secrets')).toHaveAttribute('aria-selected', 'true');
     fireEvent.click(await screen.findByTestId('secret-row-gh-pat'));
     expect(await screen.findByTestId('secret-editor')).toBeInTheDocument();
-    expect(screen.queryByTestId('secrets-list')).toBeNull();
+    expect(screen.getByTestId('access-list')).not.toBeVisible();
     await act(async () => { fireEvent.click(screen.getByTestId('access-detail-back')); });
-    expect(await screen.findByTestId('secrets-list')).toBeInTheDocument();
+    expect(screen.getByTestId('access-list')).toBeVisible();
     expect(screen.queryByTestId('secret-editor')).toBeNull();
+  });
+
+  // At one column a selection replaces the list, so ↑/↓ only move the
+  // focus; the focused row's own click (Enter) opens it.
+  it('at a phone width ↑/↓ move the focus without opening a row', async () => {
+    restore = atWidth(500);
+    const api = await mocked();
+    api.listSecrets.mockResolvedValue([secret({ id: 'a', name: 'alpha' }), secret({ id: 'b', name: 'beta' })]);
+    render(page());
+    const list = await screen.findByTestId('secrets-list');
+    await screen.findByTestId('secret-row-beta');
+    fireEvent.keyDown(list, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(screen.getByTestId('secret-row-alpha'));
+    fireEvent.keyDown(screen.getByTestId('secret-row-alpha'), { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(screen.getByTestId('secret-row-beta'));
+    fireEvent.keyDown(screen.getByTestId('secret-row-beta'), { key: 'Enter' });
+    expect(screen.queryByTestId('secret-editor')).toBeNull();
+    expect(screen.getByTestId('access-list')).toBeVisible();
+    fireEvent.click(screen.getByTestId('secret-row-beta'));
+    expect(await screen.findByTestId('secret-editor')).toHaveTextContent('beta');
+  });
+});
+
+// Crossing a breakpoint restyles the columns and never remounts them: what
+// is being typed survives.
+describe('AccessPage — resizing', () => {
+  let page_: ReturnType<typeof resizable> | null = null;
+  afterEach(() => { page_?.restore(); page_ = null; });
+
+  it('keeps a new secret\'s draft and the list\'s search across the narrow breakpoint, both ways', async () => {
+    page_ = resizable(1200);
+    const api = await mocked();
+    api.listSecrets.mockResolvedValue([secret({ id: 'a', name: 'alpha' })]);
+    render(page());
+    fireEvent.change(await screen.findByLabelText('Find a secret or host'), { target: { value: 'alp' } });
+    fireEvent.click(screen.getByTestId('secret-add'));
+    fireEvent.change(screen.getByTestId('secret-name'), { target: { value: 'gh' } });
+    page_.to(500);
+    expect(screen.getByTestId('access-sections')).toHaveAttribute('role', 'tablist');
+    expect(screen.getByTestId('secret-name')).toHaveValue('gh');
+    page_.to(1200);
+    expect(screen.getByTestId('access-sections').tagName).toBe('NAV');
+    expect(screen.getByTestId('secret-name')).toHaveValue('gh');
+    expect(screen.getByLabelText('Find a secret or host')).toHaveValue('alp');
+  });
+
+  it('keeps a hosts edit in progress', async () => {
+    page_ = resizable(1200);
+    const api = await mocked();
+    api.listSecrets.mockResolvedValue([secret()]);
+    render(page());
+    fireEvent.click(await screen.findByTestId('secret-row-gh-pat'));
+    fireEvent.click(await screen.findByTestId('secret-hosts-edit'));
+    fireEvent.change(screen.getByTestId('secret-host-new'), { target: { value: 'gitlab.com' } });
+    page_.to(500);
+    expect(screen.getByTestId('secret-host-new')).toHaveValue('gitlab.com');
+  });
+});
+
+describe('AccessPage — Tab reaches the list', () => {
+  it('makes the first row the Tab stop with nothing picked, then the picked row', async () => {
+    const api = await mocked();
+    api.listSecrets.mockResolvedValue([secret({ id: 'a', name: 'alpha' }), secret({ id: 'b', name: 'beta' })]);
+    render(page());
+    const alpha = await screen.findByTestId('secret-row-alpha');
+    const beta = screen.getByTestId('secret-row-beta');
+    expect(alpha).toHaveAttribute('tabindex', '0');
+    expect(beta).toHaveAttribute('tabindex', '-1');
+    fireEvent.click(beta);
+    await waitFor(() => expect(beta).toHaveAttribute('tabindex', '0'));
+    expect(alpha).toHaveAttribute('tabindex', '-1');
   });
 });

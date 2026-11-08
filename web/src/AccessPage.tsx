@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { api, type SecretView } from './api';
 import { accessTabsFor, type AccessTab } from './facets';
 import { useFacetLayout } from './facetLayout';
@@ -99,7 +99,7 @@ export function AccessPage({ tab, onTab, oauthAvailable, authCount, onAuthCount 
     const current = secrets?.find(s => s.id === sel) ?? null;
     const startAdd = () => { setAdding(true); pick(NEW_SECRET); };
     list = (
-      <SecretsList list={secrets} err={secretsErr} selected={sel} onSelect={pick}
+      <SecretsList list={secrets} err={secretsErr} selected={sel} onSelect={pick} focusOnly={narrow}
         adding={adding} onAdd={startAdd} onLeft={focusRail} onRight={focusDetail} />
     );
     detail = sel === NEW_SECRET && adding ? (
@@ -112,98 +112,123 @@ export function AccessPage({ tab, onTab, oauthAvailable, authCount, onAuthCount 
       <SecretsOverview list={secrets} onAdd={startAdd} onPick={pick} />
     );
   } else {
-    list = <AuthSection.List selected={sel} onSelect={pick} onLeft={focusRail} onRight={focusDetail} />;
+    list = <AuthSection.List selected={sel} onSelect={pick} focusOnly={narrow} onLeft={focusRail} onRight={focusDetail} />;
     detail = <AuthSection.Detail selected={sel} onSelect={pick} />;
   }
 
-  const detailPane = (
-    <div ref={detailRef} tabIndex={-1} data-testid="access-detail" style={detailCol}
-      onKeyDown={e => { if (e.key === 'Escape' && !(e.target as HTMLElement).closest('input,textarea,select')) focusList(); }}>
-      <div style={narrow ? detailBodyNarrow : detailBody}>
-        {narrow && sel !== null && <DetailBack label={SECTION_LABEL[shown]} onClick={() => pick(null)} />}
-        {detail}
-      </div>
+  // ONE tree at every width: the sections, the list and the detail keep their
+  // places, and a width only restyles them (a narrow page hides the list while
+  // an item is open). Swapping trees at a breakpoint would remount the columns
+  // and drop what is being typed in them: a subject, a new secret, a hosts
+  // edit, the list's search, a notice.
+  const listHidden = narrow && sel !== null;
+  return (
+    <div ref={box} data-testid="access-page" style={{ ...page, flexDirection: narrow ? 'column' : 'row' }}>
+      <AuthProvider enabled={shown === 'auth'} onAuthCount={onAuthCount}>
+        <div ref={railRef} style={narrow ? { flexShrink: 0 } : { display: 'flex' }}>
+          {narrow
+            ? <SectionStrip entries={entries} active={shown} onPick={onTab} />
+            : <SectionRail entries={entries} active={shown} onPick={onTab} compact={compact} onRight={focusList} />}
+        </div>
+        <div ref={listRef} data-testid="access-list"
+          style={listHidden ? { display: 'none' } : narrow ? listNarrow : { ...listCol, width: listW }}>
+          {list}
+        </div>
+        {!narrow && <FacetSplitter testId="access-splitter" />}
+        <div ref={detailRef} tabIndex={-1} data-testid="access-detail" style={detailCol}
+          onKeyDown={e => { if (e.key === 'Escape' && !(e.target as HTMLElement).closest('input,textarea,select')) focusList(); }}>
+          <div style={narrow ? detailBodyNarrow : detailBody}>
+            {listHidden && <DetailBack label={SECTION_LABEL[shown]} onClick={() => pick(null)} />}
+            {detail}
+          </div>
+        </div>
+      </AuthProvider>
     </div>
   );
+}
 
-  const body = (
-    <AuthProvider enabled={shown === 'auth'} onAuthCount={onAuthCount}>
-      {narrow ? (
-        <div style={{ ...page, flexDirection: 'column' }}>
-          <SectionStrip entries={entries} active={shown} onPick={onTab} />
-          {sel === null ? (
-            // The list first; the section's overview under it.
-            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-              <div ref={listRef} style={{ display: 'flex', flexDirection: 'column', borderBottom: '1px solid #222', maxHeight: '60%' }}>{list}</div>
-              <div style={{ ...detailBodyNarrow }}>{detail}</div>
-            </div>
-          ) : detailPane}
-        </div>
-      ) : (
-        <div style={page}>
-          <div ref={railRef} style={{ display: 'flex' }}>
-            <SectionRail entries={entries} active={shown} onPick={onTab} compact={compact} onRight={focusList} />
-          </div>
-          <div ref={listRef} data-testid="access-list" style={{ ...listCol, width: listW }}>{list}</div>
-          <FacetSplitter testId="access-splitter" />
-          {detailPane}
-        </div>
-      )}
-    </AuthProvider>
-  );
+// ─── Authorizations ──────────────────────────────────────────────────────────
 
-  return <div ref={box} data-testid="access-page" style={{ ...page, flexDirection: 'column' }}>{body}</div>;
+/** A notice an approval, a denial or a revocation leaves, and WHERE it
+ *  belongs: `at` is the list key it is about, null for the overview. It shows
+ *  only there, and goes as soon as the selection moves elsewhere. */
+interface AuthNotice { at: string | null; text: string; tone: 'ok' | 'warn' }
+
+interface AuthState {
+  data: AuthData;
+  notice: AuthNotice | null;
+  setNotice: (n: AuthNotice | null) => void;
 }
 
 // The Authorizations data is read once for both columns (the list and the
-// detail show the same queue), and only while the section is on screen.
-const AuthCtx = createContext<AuthData | null>(null);
+// detail show the same queue), and only while the section is on screen. The
+// notice lives here too, above the columns, so nothing that remounts a
+// column can drop it.
+const AuthCtx = createContext<AuthState | null>(null);
 function AuthProvider({ enabled, onAuthCount, children }: { enabled: boolean; onAuthCount: (n: number | null) => void; children: ReactNode }) {
   // Always the same element, so switching sections never remounts the
   // columns (and the focus a keyboard move put in the rail survives).
   const data = useAuthData(onAuthCount, enabled);
-  return <AuthCtx.Provider value={enabled ? data : null}>{children}</AuthCtx.Provider>;
+  const [notice, setNotice] = useState<AuthNotice | null>(null);
+  const value = useMemo(() => (enabled ? { data, notice, setNotice } : null), [enabled, data, notice]);
+  return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
 }
 
-// The Authorizations columns. The notice an approval, a denial or a
-// revocation leaves lives in the detail column, which stays mounted while the
-// selection moves, so the list's reload does not drop it.
 const AuthSection = {
-  List({ selected, onSelect, onLeft, onRight }: { selected: string | null; onSelect: (k: string) => void; onLeft: () => void; onRight: () => void }) {
-    const data = useContext(AuthCtx);
-    if (!data) return null;
-    return <AuthList data={data} selected={selected} onSelect={onSelect} onLeft={onLeft} onRight={onRight} />;
+  List({ selected, onSelect, focusOnly, onLeft, onRight }: {
+    selected: string | null; onSelect: (k: string) => void; focusOnly: boolean; onLeft: () => void; onRight: () => void;
+  }) {
+    const st = useContext(AuthCtx);
+    if (!st) return null;
+    return <AuthList data={st.data} selected={selected} onSelect={onSelect} focusOnly={focusOnly} onLeft={onLeft} onRight={onRight} />;
   },
   Detail({ selected, onSelect }: { selected: string | null; onSelect: (k: string | null) => void }) {
-    const data = useContext(AuthCtx);
-    const [notice, setNotice] = useState('');
-    if (!data) return null;
+    const st = useContext(AuthCtx);
+    const notice = st?.notice ?? null;
+    const setNotice = st?.setNotice;
+    // A notice is about one place: picking anything else drops it.
+    useEffect(() => {
+      if (notice && notice.at !== selected) setNotice?.(null);
+    }, [selected, notice, setNotice]);
+    if (!st) return null;
+    const { data } = st;
+    const shownNotice = (at: string | null) => (notice && notice.at === at ? notice : null);
+    const dismiss = () => st.setNotice(null);
+    // Leave a notice on the overview, and go there.
+    const toOverview = (text: string, tone: AuthNotice['tone'] = 'ok') => {
+      st.setNotice({ at: null, text, tone });
+      onSelect(null);
+      data.reload();
+    };
     const p = selected?.startsWith('p:') ? data.pending?.find(x => pendingKey(x.id) === selected) : undefined;
     const g = selected?.startsWith('g:') ? data.grants?.find(x => grantKey(x.id) === selected) : undefined;
     if (p) {
       return (
         <PendingDetail key={p.id} p={p}
-          onDone={n => { setNotice(n); onSelect(null); data.reload(); }}
+          onDone={n => toOverview(n)}
           onApproved={(a, req) => {
             // Back to the overview: the login itself is listed under Approved
             // only once the client's browser collects the approval.
-            setNotice(approvalNotice(a, req));
-            onSelect(null);
-            data.reload();
+            const n = approvalNotice(a, req);
+            toOverview(n.text, n.tone);
           }} />
       );
     }
     if (g) {
-      return <GrantDetail key={g.id} g={g} notice={notice} onDismissNotice={() => setNotice('')}
-        onRevoked={n => { setNotice(n); onSelect(null); data.reload(); }} />;
+      return <GrantDetail key={g.id} g={g} notice={shownNotice(grantKey(g.id))} onDismissNotice={dismiss}
+        onRevoked={n => toOverview(n)} />;
     }
     if (selected?.startsWith('p:') && data.pending !== null) return <RequestGone />;
-    return <AuthOverview data={data} notice={notice} onDismissNotice={() => setNotice('')} onPick={onSelect} />;
+    return <AuthOverview data={data} notice={shownNotice(null)} onDismissNotice={dismiss} onPick={onSelect} />;
   },
 };
 
 const page: CSSProperties = { flex: 1, minHeight: 0, minWidth: 0, display: 'flex', overflow: 'hidden' };
 const listCol: CSSProperties = {
   flexShrink: 0, minHeight: 0, display: 'flex', flexDirection: 'column', background: '#121212',
+};
+// Narrow, with nothing open: the list on top, the overview under it.
+const listNarrow: CSSProperties = {
+  flexShrink: 0, maxHeight: '60%', minHeight: 0, display: 'flex', flexDirection: 'column', borderBottom: '1px solid #222', background: '#121212',
 };
 const detailCol: CSSProperties = { flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto', outline: 'none' };

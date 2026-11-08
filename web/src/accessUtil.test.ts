@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { ago, left, listKeys, relDays } from './accessUtil';
+import { ago, left, listKeys, relDays, tabStop } from './accessUtil';
 
 const now = Date.parse('2026-09-24T12:00:00Z');
 const at = (ms: number) => new Date(now + ms).toISOString();
@@ -72,5 +72,55 @@ describe('listKeys', () => {
     listKeys(['a', 'b'], 'a', select, {})(key('j', { target: document.createElement('input') }));
     listKeys(['a', 'b'], 'a', select, {})(key('ArrowDown', { ctrlKey: true }));
     expect(select).not.toHaveBeenCalled();
+  });
+});
+
+describe('listKeys at one column (focusOnly)', () => {
+  function list(ids: string[]) {
+    const el = document.createElement('div');
+    for (const id of ids) {
+      const b = document.createElement('button');
+      b.setAttribute('data-item', id);
+      el.appendChild(b);
+    }
+    document.body.appendChild(el);
+    return el;
+  }
+  const row = (el: HTMLElement, id: string) => el.querySelector<HTMLElement>(`[data-item="${id}"]`)!;
+  function press(el: HTMLElement, k: string, target: HTMLElement) {
+    const e = { key: k, metaKey: false, ctrlKey: false, altKey: false, target, currentTarget: el, preventDefault: vi.fn() };
+    return e as unknown as ReactKeyboardEvent<HTMLElement> & { preventDefault: ReturnType<typeof vi.fn> };
+  }
+
+  it('moves the focus from the focused row and never selects', () => {
+    const el = list(['a', 'b', 'c']);
+    const select = vi.fn();
+    listKeys(['a', 'b', 'c'], null, select, { focusOnly: true })(press(el, 'ArrowDown', el));
+    expect(document.activeElement).toBe(row(el, 'a'));
+    listKeys(['a', 'b', 'c'], null, select, { focusOnly: true })(press(el, 'j', row(el, 'a')));
+    expect(document.activeElement).toBe(row(el, 'b'));
+    listKeys(['a', 'b', 'c'], null, select, { focusOnly: true })(press(el, 'k', row(el, 'b')));
+    expect(document.activeElement).toBe(row(el, 'a'));
+    expect(select).not.toHaveBeenCalled();
+    el.remove();
+  });
+
+  it('leaves Enter to the focused row\'s own click', () => {
+    const el = list(['a']);
+    const onRight = vi.fn();
+    const e = press(el, 'Enter', row(el, 'a'));
+    listKeys(['a'], 'a', vi.fn(), { focusOnly: true, onRight })(e);
+    expect(onRight).not.toHaveBeenCalled();
+    expect(e.preventDefault).not.toHaveBeenCalled();
+    el.remove();
+  });
+});
+
+describe('tabStop', () => {
+  it('is the selected row when it is listed, else the first, else none', () => {
+    expect(tabStop(['a', 'b'], 'b')).toBe('b');
+    expect(tabStop(['a', 'b'], null)).toBe('a');
+    expect(tabStop(['a', 'b'], 'gone')).toBe('a');
+    expect(tabStop([], null)).toBeNull();
   });
 });

@@ -88,26 +88,52 @@ export const TONE_COLOR: Record<Tone, string> = { ok: '#8fd1a5', warn: '#e2c07a'
 
 /** listKeys: ↑/↓ (j/k) walk the rows of a list, ← goes back to the section
  *  rail, → and Enter on to the detail. The list owns these keys only while
- *  focus is inside it. */
-export function listKeys(ids: string[], selected: string | null, select: (id: string) => void, opts: { onLeft?: () => void; onRight?: () => void }) {
+ *  focus is inside it.
+ *
+ *  `focusOnly` is the one-column (narrow) page, where selecting a row
+ *  REPLACES the list with its detail: there ↑/↓ move the focus alone, and
+ *  Enter on the focused row (its own click) is what opens it. */
+export function listKeys(ids: string[], selected: string | null, select: (id: string) => void, opts: { onLeft?: () => void; onRight?: () => void; focusOnly?: boolean }) {
   return (e: ReactKeyboardEvent<HTMLElement>) => {
     const tag = (e.target as HTMLElement).tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const step = e.key === 'ArrowDown' || e.key === 'j' ? 1 : e.key === 'ArrowUp' || e.key === 'k' ? -1 : 0;
+    const listEl = e.currentTarget;
+    const rowEl = (id: string) => listEl.querySelector<HTMLElement>(`[data-item="${CSS.escape(id)}"]`);
     if (step && ids.length > 0) {
       e.preventDefault();
+      if (opts.focusOnly) {
+        const at = (e.target as HTMLElement).closest?.('[data-item]')?.getAttribute('data-item') ?? selected;
+        const i = at === null ? -1 : ids.indexOf(at);
+        rowEl(ids[Math.max(0, Math.min(ids.length - 1, i + step))])?.focus();
+        return;
+      }
       const i = selected === null ? -1 : ids.indexOf(selected);
       const next = ids[Math.max(0, Math.min(ids.length - 1, i + step))];
       select(next);
-      const listEl = e.currentTarget;
-      requestAnimationFrame(() => {
-        listEl.querySelector<HTMLElement>(`[data-item="${CSS.escape(next)}"]`)?.focus();
-      });
+      requestAnimationFrame(() => rowEl(next)?.focus());
     } else if (e.key === 'ArrowLeft' && opts.onLeft) { e.preventDefault(); opts.onLeft(); }
-    else if ((e.key === 'ArrowRight' || e.key === 'Enter') && opts.onRight && selected) { e.preventDefault(); opts.onRight(); }
+    else if (!opts.focusOnly && (e.key === 'ArrowRight' || e.key === 'Enter') && opts.onRight && selected) { e.preventDefault(); opts.onRight(); }
   };
 }
+
+/** tabStop: the one row Tab lands on — the selected row when it is listed,
+ *  else the first, so a list with nothing picked is still reachable. */
+export function tabStop(ids: string[], selected: string | null): string | null {
+  return selected !== null && ids.includes(selected) ? selected : ids[0] ?? null;
+}
+
+/** The list column's scroller, under its header. */
+export const listScroll: CSSProperties = { flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: 12 };
+
+/** A row of an overview's block (Needs attention, Waiting for you): a whole-
+ *  row button that opens the item. */
+export const attnRow: CSSProperties = {
+  width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '9px 8px', margin: '0 -8px',
+  boxSizing: 'content-box', border: 'none', borderRadius: 4, borderBottom: '1px solid #1a1a1a',
+  background: 'transparent', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', minWidth: 0,
+};
 
 /** The detail column's measure: the fact view's. */
 export const detailBody: CSSProperties = { maxWidth: 760, padding: '22px 32px 56px', boxSizing: 'border-box' };
