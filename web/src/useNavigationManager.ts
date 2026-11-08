@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import type { Dispatch } from 'react';
-import type { AppState, Action, AsOf, FactPanel, FilterChip } from './state';
+import type { AppState, Action, AsOf, FilterChip } from './state';
 import { displayLensPath } from './utils';
 
 export type NavRequest =
@@ -8,10 +8,11 @@ export type NavRequest =
   | { view: 'library'; factPath: string | null }
   /** Open the fact AND take the tree to where it lives — see resolveNavRequest.
    *  `asOf` anchors it there (live when absent); `fromChat` makes Back return to
-   *  that chat; `factPanel` opens that panel of the fact on landing; `filter` is a
-   *  chip the fact's own tag asked for, added in the same move. `departed`: the
-   *  context switch before it already pushed what the reader left. */
-  | { view: 'library'; factPath: string; reveal: true; asOf?: AsOf; fromChat?: string; factPanel?: FactPanel; filter?: FilterChip; departed?: boolean };
+   *  that chat; `filter` is a
+   *  chip the fact's own tag asked for, added in the same move; `motif` lands as
+   *  the motif pivot would (see below). `departed`: the context switch before it
+   *  already pushed what the reader left. */
+  | { view: 'library'; factPath: string; reveal: true; asOf?: AsOf; fromChat?: string; filter?: FilterChip; motif?: string; departed?: boolean };
 
 /**
  * Pure async function — resolves a NavRequest to an APPLY_NAV dispatch.
@@ -69,14 +70,21 @@ export async function resolveNavRequest(
     // demotes Path to Recent exactly as a chip does, and row 0 would then replace the
     // fact. Going back to the chat restores it (NavEntry). A reveal inside Browse (a
     // highlight) leaves it: the reader set it there, and has no such way back.
+    //
+    // A MOTIF lands as PIVOT_MOTIF would leave it after this reveal, in this ONE
+    // dispatch (one Back step): the motif chip is the query and displaces the
+    // path chip, which it keeps as returnPath for EXIT_MOTIF. The sort stays
+    // 'path', the remembered one: the motif chip demotes it to Recent by
+    // derivation, as the pivot does.
     const dir = parentDir(displayLensPath(req.factPath));
     dispatch({
       type: 'APPLY_NAV', view: 'library', factPath: req.factPath, asOf: req.asOf ?? { mode: 'live' },
-      filters: [{ category: 'path', value: dir }, ...(req.filter ? [req.filter] : [])],
+      filters: req.motif
+        ? [{ category: 'motif', value: req.motif, returnPath: dir }]
+        : [{ category: 'path', value: dir }, ...(req.filter ? [req.filter] : [])],
       freeText: '',
       sort: 'path',
       ...(req.fromChat ? { fromChat: req.fromChat, sinceFork: false } : {}),
-      ...(req.factPanel ? { factPanel: req.factPanel } : {}),
       ...(req.departed ? { departed: true } : {}),
     });
     return;

@@ -187,7 +187,7 @@ describe('ChatSidePanel', () => {
     expect(document.body.textContent).not.toContain('Open in Browse');
   });
 
-  it('the band\'s controls send the reader to Browse on this fact: version, cited by, cites', async () => {
+  it('the band\'s controls send the reader to Browse: the version, and a pick from cited by or cites (their menus open here)', async () => {
     stubFleetFetch(routes());
     const onBrowse = vi.fn();
     render(<Harness onBrowse={onBrowse} />);
@@ -197,10 +197,14 @@ describe('ChatSidePanel', () => {
     fireEvent.click(await screen.findByTestId('version-walker'));
     expect(onBrowse).toHaveBeenLastCalledWith({ ...base, commit: 'c9' }); // Browse's walker opens the newest version
     await waitFor(() => expect(screen.getByTestId('connections-in')).toHaveTextContent('2'));
+    onBrowse.mockClear();
     fireEvent.click(screen.getByTestId('connections-in'));
-    expect(onBrowse).toHaveBeenLastCalledWith({ ...base, panel: { connections: 'in' } });
+    expect(onBrowse).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByTestId('connections-panel')).getByText('B'));
+    expect(onBrowse).toHaveBeenLastCalledWith({ ...base, path: 'b.md', commit: 'c2' });
     fireEvent.click(screen.getByTestId('connections-out'));
-    expect(onBrowse).toHaveBeenLastCalledWith({ ...base, panel: { connections: 'out' } });
+    fireEvent.click(within(screen.getByTestId('connections-panel')).getByText('C'));
+    expect(onBrowse).toHaveBeenLastCalledWith({ ...base, path: 'c.md', commit: 'c3' });
   });
 
   it('the title flows up into the band once it has scrolled away, with Browse\'s own observer', async () => {

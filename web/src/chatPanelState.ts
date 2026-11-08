@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import type { FactPanel, FilterChip } from './state';
+import type { FilterChip } from './state';
 
 // The chat's side panel: what it shows and how wide it is.
 //
@@ -43,8 +43,10 @@ export interface BrowseFactRequest {
   path: string;
   branch?: string;
   commit?: string;
-  panel?: FactPanel;
   filter?: FilterChip;
+  /** A motif pivot picked from the fact's motif menu: Browse lands on the fact
+   *  with that motif as its query, as its own pivot does. */
+  motif?: string;
 }
 
 /** Whether the key went to something the person types into. */

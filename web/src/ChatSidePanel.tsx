@@ -65,16 +65,20 @@ function PanelFact({ repo, branch, path, commit, close, onBrowse, repos, repoNam
   const reading = useMemo<FactReading>(() => ({
     context: { kind: 'repo', repo }, lens: null, lensWriteId: null, repo, branch, factPath: path, factSource: null,
     asOf: commit ? { mode: 'history', commit } : { mode: 'live' }, headCommit: '',
-    serverReadOnly, repoReadOnly, branchWritable, factPanelRequest: null,
+    serverReadOnly, repoReadOnly, branchWritable,
   }), [repo, branch, path, commit, serverReadOnly, repoReadOnly, branchWritable]);
   const edges = useFactEdges(reading);
   const send = (req: Omit<BrowseFactRequest, 'repo' | 'branch' | 'path'>) => {
     onBrowse?.({ repo, branch, path, ...(commit ? { commit } : {}), ...req });
   };
   const hop = (to: string, pinned: string) => onBrowse?.({ repo, branch, path: to, ...(pinned ? { commit: pinned } : {}) });
-  // Of what the view dispatches only a filter chip means anything outside Browse's
-  // state: it goes with the reader. The rest is Browse's bookkeeping for its open fact.
-  const dispatch = (a: Action) => { if (a.type === 'ADD_FILTER') send({ filter: a.chip }); };
+  // Of what the view dispatches only a filter chip and a motif pivot mean anything
+  // outside Browse's state: they go with the reader. The rest is Browse's
+  // bookkeeping for its open fact.
+  const dispatch = (a: Action) => {
+    if (a.type === 'ADD_FILTER') send({ filter: a.chip });
+    else if (a.type === 'PIVOT_MOTIF') send({ motif: a.motif });
+  };
   return (
     <FactView
       reading={reading}
@@ -83,8 +87,10 @@ function PanelFact({ repo, branch, path, commit, close, onBrowse, repos, repoNam
       // the newest version; a fact read at a commit stays at that commit.
       onScrub={newest => send({ commit: commit ?? newest })}
       onHopRef={hop}
+      // Cited by, cites and a motif open their menu here, in the panel. Picking
+      // from it is what goes to Browse: an edge hops to that fact (onHopEdge), a
+      // motif's "Open all N carriers" pivots there (PIVOT_MOTIF above).
       onHopEdge={hop}
-      onOpenPanel={panel => send({ panel })}
       repoNames={repoNames}
       incoming={edges.incoming}
       outgoing={edges.outgoing}

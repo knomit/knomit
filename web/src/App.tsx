@@ -2,7 +2,7 @@ import { useReducer, useEffect, useLayoutEffect, useState, useRef, useCallback, 
 import { flushSync } from 'react-dom';
 import type { Dispatch } from 'react';
 import { reducer, init, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText, sameContext } from './state';
-import type { Action, BrowseContext, FactPanel, FilterChip } from './state';
+import type { Action, BrowseContext, FilterChip } from './state';
 import type { BrowseFactRequest } from './chatPanelState';
 import { api, branchEventsUrl, fetchVersion, isNotFound, repoAvailable, brokenLensMember, subscribeRepoEvents } from './api';
 import type { RepoInfo, Lens, Status, RepoEvent, RepoDetails, ArchivedRepo } from './api';
@@ -1507,7 +1507,7 @@ export default function App() {
   // read at a commit opens at that commit, on the branch it was read from: another
   // branch of the repo has a different history for the timeline to show. Back
   // returns to the chat (fromChat).
-  const pendingBrowse = useRef<{ ctx: BrowseContext; path: string; commit?: string; branch?: string; panel?: FactPanel; filter?: FilterChip; fromChat: string; departed?: boolean } | null>(null);
+  const pendingBrowse = useRef<{ ctx: BrowseContext; path: string; commit?: string; branch?: string; filter?: FilterChip; motif?: string; fromChat: string; departed?: boolean } | null>(null);
   const landPendingBrowse = useCallback(() => {
     const p = pendingBrowse.current;
     if (!p) return;
@@ -1515,8 +1515,8 @@ export default function App() {
     navigate({
       view: 'library', factPath: p.path, reveal: true, fromChat: p.fromChat,
       ...(p.commit ? { asOf: { mode: 'history', commit: p.commit } } : {}),
-      ...(p.panel ? { factPanel: p.panel } : {}),
       ...(p.filter ? { filter: p.filter } : {}),
+      ...(p.motif ? { motif: p.motif } : {}),
       ...(p.departed ? { departed: true } : {}),
     });
   }, [navigate]);
@@ -1553,7 +1553,7 @@ export default function App() {
   }, [dispatch, landPendingBrowse]);
   // `repo` is a repo or a lens (a chat binds to either). A lens addresses a fact
   // as kb://<store>/<path>, a repo by the bare path.
-  const onBrowseFact = useCallback((chatId: string, { repo, path, branch, commit, panel, filter }: BrowseFactRequest) => {
+  const onBrowseFact = useCallback((chatId: string, { repo, path, branch, commit, filter, motif }: BrowseFactRequest) => {
     const ctx: BrowseContext = lenses.some(l => l.name === repo) ? { kind: 'lens', name: repo } : { kind: 'repo', repo };
     // Into another repo or lens, the switch pushes what Browse held, stamped with
     // the chat, and the landing does not push again: Back is then ONE step that
@@ -1561,8 +1561,8 @@ export default function App() {
     const departed = !sameContext(ctx, stateRef.current.context);
     pendingBrowse.current = {
       ctx, path: ctx.kind === 'lens' ? path : path.replace(/^kb:\/\/[^/]+\//, ''), fromChat: chatId,
-      ...(branch ? { branch } : {}), ...(commit ? { commit } : {}), ...(panel ? { panel } : {}), ...(filter ? { filter } : {}),
-      ...(departed ? { departed } : {}),
+      ...(branch ? { branch } : {}), ...(commit ? { commit } : {}), ...(filter ? { filter } : {}),
+      ...(motif ? { motif } : {}), ...(departed ? { departed } : {}),
     };
     onSelectTarget(ctx, chatId);
     dispatchView({ type: 'SET_FACET', facet: 'browse' });

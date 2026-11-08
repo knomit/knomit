@@ -40,7 +40,7 @@ vi.mock('./api', async (importOriginal) => {
       repos: vi.fn(), listLenses: vi.fn(), listArchived: vi.fn(), getAgentBranch: vi.fn(),
       status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),
       search: vi.fn(), stats: vi.fn(), activity: vi.fn(), explain: vi.fn(), completions: vi.fn(),
-      fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(), getRepo: vi.fn(), listBranchNames: vi.fn(),
+      fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(), getRepo: vi.fn(), listBranchNames: vi.fn(), motifCluster: vi.fn(),
       listRepoCreates: vi.fn(), listExperiments: vi.fn(), listPushedBranches: vi.fn(),
       // The drafts and the pinned targets.
       createRepo: vi.fn(), createLens: vi.fn(), updateLens: vi.fn(), renameLens: vi.fn(), renameRepo: vi.fn(), archiveRepo: vi.fn(), restoreRepo: vi.fn(), purgeRepo: vi.fn(),
@@ -81,6 +81,12 @@ async function primeApi({ readOnly = false, lenses = [] as unknown[] } = {}) {
   m.validateOntology.mockResolvedValue({ ok: true, id: 'general', name: 'General', topics: ['people'], rule_count: 0 });
   m.ontologySchema.mockResolvedValue([]);
   m.listTemplates.mockResolvedValue([]);
+  // A motif is a cluster of two carriers, so its menu offers the pivot.
+  m.motifCluster.mockImplementation(async (_r: string, _b: string, key: string) => ({
+    cluster_key: key, canonical: key, members: [key], df: 2, carrier_count: 2,
+    carriers: [{ path: 'kb/decisions/one.md', title: 'One', type: 'observation' }, { path: 'kb/b.md', title: 'B', type: 'observation' }],
+    aliases: [{ motif: key, method: 'canonical' }],
+  }));
   return { m, mod };
 }
 
@@ -1440,26 +1446,40 @@ describe('a chat target', () => {
       await waitFor(() => expect(screen.getByTestId('connections-in')).toHaveTextContent('1'));
       return m;
     }
+    // The version lands at once. Cited by and cites open their menu IN PLACE in the
+    // chat's panel (chat review, 2026-11-08): the app stays on the chat until the
+    // reader picks from it, and the pick is what lands in Browse.
+    const PICK: Record<'in' | 'out', string> = { in: 'In', out: 'Out' };
     const click = async (m: Record<string, ReturnType<typeof vi.fn>>, control: Control, ms: number) => {
       m.fact.mockClear();
       fireEvent.click(screen.getByTestId(TEST_ID[control]));
+      if (control !== 'version') {
+        const chatView = within(screen.getByTestId('fact-view'));
+        expect(chatView.getByTestId(TEST_ID[control]).getAttribute('aria-expanded')).toBe('true');
+        await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+        expect(tabNames()).toEqual(['Chat', 'Settings']);
+        fireEvent.click(within(chatView.getByTestId('connections-panel')).getByText(PICK[control]));
+      }
       await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
       await act(async () => { await new Promise(r => setTimeout(r, ms + 150)); });
       return within(screen.getByTestId('browse-facet'));
     };
     // Everything Browse read for a fact, and what is on screen.
     const reads = (m: Record<string, ReturnType<typeof vi.fn>>) => m.fact.mock.calls.map(c => `${c[2]}@${String(c[3]).slice(0, 7)}`);
+    // The version lands on this fact at the commit; a pick from cited by or cites
+    // lands on the fact picked, at the commit its edge pins.
+    const LANDS: Record<Control, string> = { version: `${PATH}@abc1234`, in: 'kb/in.md@c1', out: 'kb/out.md@c2' };
     const expectLandedOnTheFact = (m: Record<string, ReturnType<typeof vi.fn>>, control: Control, browse: ReturnType<typeof within>) => {
-      expect(reads(m).at(-1)).toBe(`${PATH}@abc1234`);
+      expect(reads(m).at(-1)).toBe(LANDS[control]);
       // Row 0 at the commit is the trap. Row 0 live is only the back-crumb's title, when it was the fact open before.
       expect(reads(m)).not.toContain(`${ROW0}@abc1234`);
       const body = screen.getByTestId('browse-facet').textContent;
-      expect(body).toContain('BODY OF ' + PATH);
+      expect(body).toContain('BODY OF ' + LANDS[control].split('@')[0]);
       expect(body).not.toContain('BODY OF ' + ROW0);
       expect(browse.getByTestId('timeline-nav')).toBeInTheDocument();
-      // Each control lands on its own view of the fact.
+      // No menu is handed over: Browse lands with its cells closed.
       for (const dir of ['in', 'out'] as const) {
-        expect(browse.getByTestId(TEST_ID[dir]).getAttribute('aria-expanded')).toBe(control === dir ? 'true' : 'false');
+        expect(browse.getByTestId(TEST_ID[dir]).getAttribute('aria-expanded')).toBe('false');
       }
     };
 
@@ -1490,28 +1510,27 @@ describe('a chat target', () => {
     }
 
     for (const start of ['core-kb', 'ops-kb']) for (const mode of ['recent', 'search'] as const) {
-      it(`a motif in the band lands on that fact, at that commit, with its panel: from ${start}, in ${mode}`, async () => {
+      it(`a motif opens its menu in the chat, and its pivot lands on that fact, at that commit, with the motif as the query: from ${start}, in ${mode}`, async () => {
         const m = await toTheChatsFact({ start, mode, ms: 30, motifs: ['a-shape'] });
         m.fact.mockClear();
-        fireEvent.click(await within(screen.getByTestId('fact-view')).findByTestId('motif-cell'));
+        // The pivot's list holds the fact (it carries the motif), as Browse's own would.
+        m.recent.mockImplementation(() => Promise.resolve({ facts: [{ path: PATH, title: 'One' }], total: 1 }));
+        m.search.mockImplementation(() => Promise.resolve({ results: [{ path: PATH, title: 'One', score: 1 }], total: 1 }));
+        const chatView = within(screen.getByTestId('fact-view'));
+        fireEvent.click(await chatView.findByTestId('motif-cell'));
+        const pivot = await within(chatView.getByTestId('motif-panel')).findByTestId('motif-pivot');
+        expect(tabNames()).toEqual(['Chat', 'Settings']);
+        fireEvent.click(pivot);
         await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
         await act(async () => { await new Promise(r => setTimeout(r, 180)); });
         expect(reads(m).at(-1)).toBe(`${PATH}@abc1234`);
-        expect(within(screen.getByTestId('browse-facet')).getByTestId('motif-panel')).toBeInTheDocument();
+        // The list Browse reads is the motif's (the chip row is not drawn while anchored,
+        // so the query is checked where it goes): the motif, and no path scope.
+        const lastList = JSON.stringify(m.recent.mock.calls.at(-1));
+        expect(lastList).toContain('a-shape');
+        expect(lastList).not.toContain('kb/decisions');
       });
     }
-
-    it('a panel opens once: leaving Browse and coming back to the same fact does not open it again', async () => {
-      const m = await toTheChatsFact({ start: 'core-kb', mode: 'path', ms: 0 });
-      const browse = await click(m, 'in', 0);
-      expect(browse.getByTestId('connections-in').getAttribute('aria-expanded')).toBe('true');
-      fireEvent.click(screen.getByTestId('rail-chat-chat-a')); // not back: the fact stays open in Browse
-      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
-      fireEvent.click(screen.getByTestId('rail-repo-core-kb'));
-      await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
-      const again = within(screen.getByTestId('browse-facet'));
-      expect((await again.findByTestId('connections-in')).getAttribute('aria-expanded')).toBe('false');
-    });
 
     // Browse on another branch of the same repo: the commit was read from the
     // resolver's branch, and that is the history the timeline has to show.
@@ -1558,7 +1577,8 @@ describe('a chat target', () => {
     });
     it('back from a hop inside Browse stays in Browse; the next one returns to the chat', async () => {
       const m = await toTheChatsFact({ start: 'core-kb', mode: 'path', ms: 0 });
-      const browse = await click(m, 'in', 0);
+      const browse = await click(m, 'version', 0);
+      fireEvent.click(browse.getByTestId('connections-in'));
       fireEvent.click(within(browse.getByTestId('connections-panel')).getByText('In'));
       await waitFor(() => expect(reads(m).at(-1)).toBe('kb/in.md@c1'));
       fireEvent.keyDown(window, { key: '[', metaKey: true });
@@ -1641,11 +1661,18 @@ describe('a chat target', () => {
         const view = await openChip();
         m.fact.mockClear();
         fireEvent.click(view.getByTestId(TEST_ID[control]));
+        // Cited by and cites open their menu in the chat; the pick is what lands.
+        const to = control === 'version' ? `${PATH}@newest1` : control === 'in' ? 'kb/in.md@c1' : 'kb/out.md@c2';
+        if (control !== 'version') {
+          expect(view.getByTestId(TEST_ID[control]).getAttribute('aria-expanded')).toBe('true');
+          expect(tabNames()).toEqual(['Chat', 'Settings']);
+          fireEvent.click(within(view.getByTestId('connections-panel')).getByText(control === 'in' ? 'In' : 'Out'));
+        }
         const browse = await landed(30);
-        expect(reads(m).at(-1)).toBe(control === 'version' ? `${PATH}@newest1` : `${PATH}@undefin`);
-        expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + PATH);
+        expect(reads(m).at(-1)).toBe(to);
+        expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + to.split('@')[0]);
         expect(reads(m)).not.toContain(`${ROW0}@newest1`);
-        if (control !== 'version') expect(browse.getByTestId(TEST_ID[control]).getAttribute('aria-expanded')).toBe('true');
+        expect(browse.getByTestId('connections-in').getAttribute('aria-expanded')).toBe('false');
         await backToTheChat();
       });
     }
