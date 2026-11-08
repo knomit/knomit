@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -260,7 +261,15 @@ func TestLLMProviderConfig_APIKeyFileModeChecked(t *testing.T) {
 	require.NoError(t, os.Chmod(f, 0o644))
 	p := LLMProviderConfig{APIKeyFile: f}
 	_, err := p.ResolveKey()
-	require.ErrorContains(t, err, "owner only")
+	if runtime.GOOS == "windows" {
+		// POSIX mode bits do not exist on Windows (os.Chmod only toggles the
+		// read-only attribute and Stat reports a synthetic 0666), and NTFS
+		// ACLs are not inspected, so the owner-only check is deliberately
+		// not enforced there: the wide-mode file resolves.
+		require.NoError(t, err)
+	} else {
+		require.ErrorContains(t, err, "owner only")
+	}
 	require.NoError(t, os.Chmod(f, 0o600))
 	k, err := p.ResolveKey()
 	require.NoError(t, err)

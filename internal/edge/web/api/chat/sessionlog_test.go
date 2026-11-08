@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -153,6 +154,9 @@ func TestSessionLog_TruncatesLongResults(t *testing.T) {
 }
 
 func TestSessionLog_FileModes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits; Windows reports a synthetic 0666 and NTFS ACLs are not asserted here")
+	}
 	h := newHarness(t)
 	handle := h.bind(writer, "chat-00000000000000000000000000000095", "alpha")
 	h.queue("a1", toolStep("tu_m", "knomit_learn", learnArgs(handle, "Mode fixture"), usage), textStep("ok", usage))
