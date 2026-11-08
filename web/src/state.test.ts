@@ -1542,12 +1542,29 @@ describe('a pending return to another context', () => {
     return s;
   };
 
-  // SABOTAGE: reducer() without the READER_MOVES drop.
-  for (const [name, move] of [
+  // Every one of READER_MOVES, so removing any one of them fails here.
+  // SABOTAGE: reducer() without the READER_MOVES drop, or any one action taken out of it.
+  const MOVES: [string, Action][] = [
     ['opening a fact (APPLY_NAV)', { type: 'APPLY_NAV', view: 'library', factPath: 'kb/mine.md', asOf: { mode: 'live' } }],
     ['entering a folder (NAVIGATE)', { type: 'NAVIGATE', path: 'kb/mine' }],
+    ['going up (GO_UP)', { type: 'GO_UP' }],
+    ['a filter (ADD_FILTER)', { type: 'ADD_FILTER', chip: { category: 'domain', value: 'web' } }],
+    ['removing a filter (REMOVE_FILTER)', { type: 'REMOVE_FILTER', index: 0 }],
+    ['free text (SET_FREE_TEXT)', { type: 'SET_FREE_TEXT', text: 'q' }],
+    ['clearing the filters (CLEAR_FILTERS)', { type: 'CLEAR_FILTERS' }],
+    ['a mount from the summary (FOCUS_LENS_SOURCE)', { type: 'FOCUS_LENS_SOURCE', repo: 'x' }],
+    ['a motif pivot (PIVOT_MOTIF)', { type: 'PIVOT_MOTIF', motif: 'm' }],
+    ['leaving a search (EXIT_SEARCH)', { type: 'EXIT_SEARCH' }],
+    ['leaving a motif (EXIT_MOTIF)', { type: 'EXIT_MOTIF' }],
     ['a sort (SET_LIBRARY_SORT)', { type: 'SET_LIBRARY_SORT', sort: 'recent' }],
-  ] as const) it(`${name} drops it, so its landing cannot overwrite the reader's move`, () => {
+    ['the sources (SET_LENS_SOURCES)', { type: 'SET_LENS_SOURCES', repos: ['x'] }],
+    ['since-fork (SET_SINCE_FORK)', { type: 'SET_SINCE_FORK', value: true }],
+    ['a time anchor (SET_AS_OF)', { type: 'SET_AS_OF', asOf: { mode: 'history', commit: 'c9' } }],
+  ];
+  it('the table covers the 15 reader moves, once each', () => {
+    expect(new Set(MOVES.map(([, a]) => a.type)).size).toBe(15);
+  });
+  for (const [name, move] of MOVES) it(`${name} drops it, so its landing cannot overwrite the reader's move`, () => {
     const s = reducer(pending(), move as Action);
     expect(s.navReturn).toBeNull();
     expect(reducer(s, { type: 'NAV_RETURN_LAND' }).factPath).toBe(s.factPath);
@@ -1568,9 +1585,13 @@ describe('a pending return to another context', () => {
   });
 
   // SABOTAGE: NAV_RETURN_BRANCH_GONE clears the whole stack (as BRANCH_GONE does).
+  // SABOTAGE: pop every trailing entry of the context, whatever its branch.
   it('a branch gone drops only the entries left on that branch of that context, and keeps the experiment the branch on screen has', () => {
     let s = reducer({ ...init, repo: 'c', context: { kind: 'repo', repo: 'c' }, branch: 'main', factPath: 'kb/c.md' }, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'a' }, push: true });
-    s = { ...s, branch: 'exp/try', factPath: 'kb/a.md' };
+    // An entry of the same repo on ANOTHER branch, below the dead ones: it stays.
+    s = { ...s, branch: 'main', factPath: 'kb/a0.md' };
+    s = opened(s, 'kb/a.md');
+    s = { ...s, branch: 'exp/try' };
     s = opened(s, 'kb/a2.md');
     s = onBranch(reducer(s, { type: 'SET_CONTEXT', context: { kind: 'repo', repo: 'b' }, push: true }), 'main');
     s = reducer(s, { type: 'NAV_BACK' });
@@ -1579,7 +1600,7 @@ describe('a pending return to another context', () => {
     s = reducer(s, { type: 'SET_STATUS', head: 'h', branch: 'exp/e', embeddingsEnabled: false, ontologyRoot: 'kb', experiment: exp });
     s = reducer(s, { type: 'NAV_RETURN_BRANCH_GONE' });
     expect(s).toMatchObject({ navReturn: null, factPath: null, filters: [], experiment: exp, branch: 'exp/e' });
-    expect(s.navStack.map(e => e.repo)).toEqual(['c']);
+    expect(s.navStack.map(e => `${e.repo}@${e.branch}:${e.factPath}`)).toEqual(['c@main:kb/c.md', 'a@main:kb/a0.md']);
   });
 
   // SABOTAGE: a pick with no branch yet drops the stack.

@@ -1957,10 +1957,12 @@ describe('a chat target', () => {
       const THREE = 'kb/ops/three.md';
       const CORE = 'kb/core/c.md';
       const notHere = (path: string, r: string) => Object.assign(new Error(`no fact at path ${path} in ${r}`), { status: 404 });
-      async function inOpsOnTwo(status?: (r: string, b?: string) => unknown) {
+      // `start: 'core-kb'` begins on core-kb's fact and picks ops-kb from there, so
+      // the stack holds another context's entry below ops-kb's.
+      async function inOpsOnTwo(status?: (r: string, b?: string) => unknown, start: 'ops-kb' | 'core-kb' = 'ops-kb') {
         window.history.replaceState(null, '', '/');
         resetFactCache();
-        localStorage.setItem('knomit.context', JSON.stringify({ kind: 'repo', repo: 'ops-kb' }));
+        localStorage.setItem('knomit.context', JSON.stringify({ kind: 'repo', repo: start }));
         const { m } = await primeApi();
         chatRoutes([CHAT_A]);
         if (status) m.status.mockImplementation(async (r: string, b?: string) => status(r, b));
@@ -1981,6 +1983,11 @@ describe('a chat target', () => {
         const seg = await screen.findByTestId('sort-recent');
         fireEvent.pointerDown(seg, { pointerType: 'mouse' });
         fireEvent.click(seg, { detail: 1 });
+        if (start === 'core-kb') {
+          await waitFor(() => expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + CORE));
+          fireEvent.click(screen.getByTestId('rail-repo-ops-kb'));
+          await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('ops-kb'));
+        }
         await waitFor(() => expect(screen.getAllByTestId('chrono-item')).toHaveLength(3));
         fireEvent.click(screen.getAllByTestId('chrono-item')[0]);
         await waitFor(() => expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + ONE));
@@ -2097,6 +2104,29 @@ describe('a chat target', () => {
       const settleNow = async (h: ReturnType<typeof hold>, ok: boolean) => {
         await act(async () => { h.settle(ok); await new Promise(r => setTimeout(r, 60)); });
       };
+
+      // The return's 404 drops only the entries left on the dead branch of that repo:
+      // an entry from another repo below them is still there to go back to.
+      // SABOTAGE: the effect-2 catch dispatches BRANCH_GONE (it clears every context's entries).
+      it('the branch left is gone: only its own entries go, and Back still reaches the repo before it', async () => {
+        let onExp = true;
+        const m = await inOpsOnTwo((r, b) => {
+          if (r === 'ops-kb' && b === 'exp/try' && !onExp) throw gone404();
+          return r === 'ops-kb' && (b === 'exp/try' || (!b && onExp)) ? EXP : statusOf(b || 'machine/test');
+        }, 'core-kb');
+        await toCore();
+        onExp = false;
+        m.status.mockClear();
+        await back();
+        await waitFor(() => expect(m.status).toHaveBeenCalledWith('ops-kb', 'exp/try'));
+        await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('ops-kb'));
+        await act(async () => { await new Promise(r => setTimeout(r, 60)); });
+        expect(body()).not.toContain('no fact at path');
+        expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled();
+        await back();
+        await waitFor(() => expect(screen.getByTestId('target-label').textContent).toBe('core-kb'));
+        await waitFor(() => expect(body()).toContain('BODY OF ' + CORE));
+      });
 
       // SABOTAGE: still() in the navReturn landing is () => true.
       for (const ok of [true, false]) it(`a late ${ok ? 'answer' : '404'} for the branch left, after the reader picked another repo, changes nothing there`, async () => {
