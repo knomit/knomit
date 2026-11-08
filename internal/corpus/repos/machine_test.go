@@ -1008,3 +1008,46 @@ func TestSwap_CopyFailureNeverCarriesTheIncomingCredential(t *testing.T) {
 	require.Equal(t, previous, o.URL, "the previous origin is restored")
 	require.Equal(t, "none", o.AuthMethod, "the incoming origin's credential is not carried to the previous URL")
 }
+
+// IsRefused tells a refusal that changed nothing from everything else: the
+// machine's own checks and a guard's verdict are refusals, a context error is
+// not (Send also returns it when it merely stopped waiting), and the wrapper
+// keeps the error's identity and text.
+func TestIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newMFix(t, StageIndex, "index-job", false)
+	tmp := f.copyOfOwnDB(t)
+
+	// A guard error: the incoming store cannot be read.
+	_, err := send(f.m, f.ri, SwapStore(SwapSpec{TempDB: filepath.Join(t.TempDir(), "missing.db")}))
+	require.Error(t, err)
+	require.True(t, IsRefused(err), "a guard's verdict is a refusal: %v", err)
+
+	// ErrIndexing, from the snapshot fast path and from handleExternal.
+	f.holdIndex(t)
+	_, err = send(f.m, f.ri, SwapStore(SwapSpec{TempDB: tmp}))
+	require.ErrorIs(t, err, ErrIndexing)
+	require.True(t, IsRefused(err))
+	err = sendPastFastPath(t, f.ri, SwapStore(SwapSpec{TempDB: tmp}))
+	require.ErrorIs(t, err, ErrIndexing)
+	require.True(t, IsRefused(err))
+
+	// Context errors are never refusals, wrapped or not.
+	for _, ce := range []error{context.Canceled, context.DeadlineExceeded, Refused(context.Canceled)} {
+		require.False(t, IsRefused(ce), ce.Error())
+	}
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = f.m.Send(cctx, f.ri, Rebuild(f.ri.AgentBranch()))
+	if err != nil {
+		require.False(t, IsRefused(err), "a send that stopped waiting is no refusal: %v", err)
+	}
+
+	require.False(t, IsRefused(nil))
+	require.False(t, IsRefused(errors.New("disk full")))
+	require.Nil(t, Refused(nil))
+	w := Refused(ErrNotOpen)
+	require.ErrorIs(t, w, ErrNotOpen)
+	require.Equal(t, ErrNotOpen.Error(), w.Error())
+	require.Same(t, w, Refused(w), "already marked: returned as is")
+}
