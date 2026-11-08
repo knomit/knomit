@@ -1383,8 +1383,10 @@ paths:
           fact at that commit.
         - `/outgoing` items carry `commit = target_commit` (the version
           of the target the ref resolved to at the anchor); `_links.self`
-          points to the target fact at that commit. `deleted=true` items
-          omit `_links.self`.
+          points to the target fact at that commit.
+        Every item's `commit` is one where its fact exists, so `deleted=true`
+        items (retracted now) carry `_links.self` too: it opens the fact as it
+        stood there. Only an item with no `commit` omits it.
 
         A file under `.knomit/` by its exact path is returned raw as of this
         commit, as on the branch-anchored route. Every other path with a
@@ -6763,8 +6765,9 @@ components:
         # for /outgoing items (the version of the target the ref resolved to
         # at the source's commit). _links.self is anchored to this commit.
         commit:  { type: string, description: "Commit hash this entry is pinned to (source_commit on /incoming, target_commit on /outgoing)." }
-        # Outgoing-only: target Fact node is soft-deleted at the anchor.
-        # When true, _links.self is omitted (no navigable destination).
+        # The entry's version is retracted (on /incoming and /outgoing alike).
+        # _links.self is still present: `commit` is a commit where the fact
+        # exists, so the link opens it there.
         deleted: { type: boolean }
         _links:  { $ref: "#/components/schemas/LinkMap" }
 

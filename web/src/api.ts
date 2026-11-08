@@ -3071,9 +3071,10 @@ export const api = {
     const parseRefs = (data: any): RawRef[] => {
       // HAL CollectionView: {_embedded: {refs: [...]}}
       // Each ref carries a `commit` field pinning it to a specific version:
-      // source_commit for /incoming, target_commit for /outgoing. The
-      // `deleted` flag (outgoing-only) marks tombstoned targets — those
-      // entries omit _links.self.
+      // source_commit for /incoming, target_commit for /outgoing: a commit
+      // where that fact exists, so a hop to (path, commit) lands on it. The
+      // `deleted` flag marks a version retracted NOW; such an entry is still
+      // followed at its commit (and carries _links.self like any other).
       if (data && data._embedded && Array.isArray(data._embedded.refs)) {
         return data._embedded.refs;
       }
