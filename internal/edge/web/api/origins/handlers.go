@@ -265,19 +265,10 @@ func handleTestConnectivity(rm *repos.Manager, sm *sessionManager, agentBranch s
 
 		// Create a temp store.Service for the clone.
 		dbPath := filepath.Join(sess.TempDir, "clone.db")
-		remoteSvc, err := store.Open(dbPath)
+		remoteSvc, err := openSessionClone(rm, ri, dbPath)
 		if err != nil {
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open clone db: %v", err)})
 			return
-		}
-		// This store is where the disjoint-history commit REPLAYS this
-		// instance's facts (store.Replay), and SwapStore then installs it and
-		// pushes the result as our agent branch. Those commits must be signed:
-		// without a signer they went out unsigned (now model.ErrNoSigner).
-		remoteSvc.SetSigner(rm.Signer())
-		remoteSvc.SetAgentID(rm.AgentID())
-		if ri := repos.RepoFromContext(r.Context()); ri != nil {
-			remoteSvc.SetAcceptList(rm.VerifyAccepts().For(ri.UID()))
 		}
 
 		// Phase: cloning.
@@ -883,6 +874,29 @@ type commitRequest struct {
 	CancelIndexing bool `json:"cancel_indexing"`
 }
 
+// openSessionCloneFn is openSessionClone's seam: a test makes the reopen after
+// a refused swap fail.
+var openSessionCloneFn = openSessionClone
+
+// openSessionClone opens the session's clone database at dbPath and sets it up
+// as /test does: the store is where the disjoint-history commit REPLAYS this
+// instance's facts (store.Replay), and SwapStore then installs it and pushes
+// the result as our agent branch. Those commits must be signed (without a
+// signer they went out unsigned, now model.ErrNoSigner), so it carries the
+// manager's signer, agent id and the repo's verify accept list. ri may be nil.
+func openSessionClone(rm *repos.Manager, ri *repos.RepoInstance, dbPath string) (*store.Service, error) {
+	svc, err := store.Open(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	svc.SetSigner(rm.Signer())
+	svc.SetAgentID(rm.AgentID())
+	if ri != nil {
+		svc.SetAcceptList(rm.VerifyAccepts().For(ri.UID()))
+	}
+	return svc, nil
+}
+
 // handleCommit handles POST /api/v1/{repo}/origin/session/{sessionID}/commit
 //
 // It finalizes the origin connection as ONE lifecycle event on the repo's
@@ -990,6 +1004,7 @@ func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string, adm
 		origin.ReplaceLink = replaceLink
 
 		var e repos.MachineEvent
+		swap := testResult.History != "shared"
 		attach := true // false: the shared-history commit has no branch to record
 		if testResult.History == "shared" {
 			// Shared history means the remote holds the SAME knowledge base
@@ -1027,18 +1042,6 @@ func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string, adm
 			})
 		}
 
-		// The clone has served its purpose: checkpoint its WAL so the swap
-		// copies a complete file, close it, and detach it from the session so
-		// a retry cannot reuse a closed handle (re-entry then hits the "no
-		// remote store" guard above).
-		if err := remoteStore.Checkpoint(); err != nil {
-			log.Warn().Err(err).Msg("commit: WAL checkpoint failed")
-		}
-		remoteStore.Close()
-		sess.mu.Lock()
-		sess.RemoteStore = nil
-		sess.mu.Unlock()
-
 		started = true
 		sm.startRun(w, r, b, sess, l, unuse, false, func(ctx context.Context, stream *runLog) {
 			if body.CancelIndexing {
@@ -1049,10 +1052,26 @@ func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string, adm
 				}
 			}
 			if attach {
-				if refusal, ok := streamLifecycle(ctx, rm, ri, stream, e); !ok {
-					if refusal != nil {
+				if swap {
+					// The clone has served its purpose: checkpoint its WAL so
+					// the swap copies a complete file and close it. It must
+					// stay closed while the machine runs: the swap guard opens
+					// the same clone.db (inspectIncomingStore) and the install
+					// copies only the main file. Closed here and not earlier,
+					// so a commit that fails before this point (cancel-index
+					// failing) leaves the session untouched; a refusal after
+					// it reopens the clone below.
+					closeSessionClone(sess)
+				}
+				if sendErr, narrated := streamLifecycle(ctx, rm, ri, stream, e); sendErr != nil {
+					if swap && repos.IsRefused(sendErr) {
+						// The machine refused before changing anything, so the
+						// session must stay retryable: give it its store back.
+						reopenSessionClone(rm, ri, sess, sendErr)
+					}
+					if !narrated {
 						stream.refuse(func(w http.ResponseWriter, r *http.Request) {
-							writeCommitProblem(w, r, b, repo, refusal)
+							writeCommitProblem(w, r, b, repo, sendErr)
 						})
 					}
 					return
@@ -1079,11 +1098,13 @@ func handleCommit(rm *repos.Manager, sm *sessionManager, agentBranch string, adm
 // swapping (the machine is rewinding to Populate), configuring (Open,
 // Identify), indexing with current/total, then done (carrying index_state,
 // and a warning carrying the index's reason when it ended in error) or error
-// with the event's own failure. It reports whether the event succeeded; a
-// refusal that changed nothing and arrived before any phase was logged is
-// returned instead, for the POST to answer as an HTTP problem.
+// with the event's own failure. It returns the event's error, nil when it
+// succeeded. narrated says the error was logged as an "error" phase; when it
+// is false, the error is a refusal that changed nothing and arrived before
+// any phase was logged, for the POST to answer as an HTTP problem. The caller
+// classifies the error either way (repos.IsRefused).
 func streamLifecycle(ctx context.Context, rm *repos.Manager, ri *repos.RepoInstance, stream *runLog,
-	e repos.MachineEvent) (refusal error, ok bool) {
+	e repos.MachineEvent) (sendErr error, narrated bool) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	watch := ri.Watch(ctx)
@@ -1118,7 +1139,6 @@ func streamLifecycle(ctx context.Context, rm *repos.Manager, ri *repos.RepoInsta
 	}
 
 	var sent bool
-	var sendErr error
 	for !sent {
 		select {
 		case t, ok := <-watch:
@@ -1139,7 +1159,7 @@ func streamLifecycle(ctx context.Context, rm *repos.Manager, ri *repos.RepoInsta
 			return sendErr, false
 		}
 		stream.event(map[string]string{"phase": "error", "message": sendErr.Error()})
-		return nil, false
+		return sendErr, true
 	}
 	// The watch is lossy (cap 1, latest wins) and the loop above may have left
 	// on done before reading its last value: take whatever is pending, without
@@ -1179,13 +1199,53 @@ drain:
 		doneEv["warning"] = "index: " + st.Index.Reason
 	}
 	stream.event(doneEv)
-	return nil, true
+	return nil, false
+}
+
+// closeSessionClone checkpoints and closes the session's clone and detaches it
+// from the session. The session's use (held by the run) makes this the only
+// toucher of the store.
+func closeSessionClone(sess *originSession) {
+	sess.mu.Lock()
+	svc := sess.RemoteStore
+	sess.RemoteStore = nil
+	sess.mu.Unlock()
+	if svc == nil {
+		return
+	}
+	if err := svc.Checkpoint(); err != nil {
+		log.Warn().Err(err).Msg("commit: WAL checkpoint failed")
+	}
+	svc.Close()
+}
+
+// reopenSessionClone gives a session whose swap was refused its clone back, so
+// the commit can be retried. The refusal changed nothing, and the clone.db in
+// the session's folder is still the one /test cloned. If it cannot be opened
+// the session cannot be retried: it moves to stateError (a new session is
+// needed, as after a failed /test) and the original refusal is still what the
+// caller delivers.
+func reopenSessionClone(rm *repos.Manager, ri *repos.RepoInstance, sess *originSession, refusal error) {
+	svc, err := openSessionCloneFn(rm, ri, filepath.Join(sess.TempDir, "clone.db"))
+	if err == nil {
+		if err = svc.OpenRepo(); err != nil {
+			svc.Close()
+		}
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if err != nil {
+		log.Warn().Err(err).AnErr("refusal", refusal).Msg("commit: reopening the session clone after a refused swap failed; session marked failed")
+		sess.State = stateError
+		return
+	}
+	sess.RemoteStore = svc
 }
 
 // isCommitRefusal reports whether err is a refusal that changed nothing: the
 // machine's own checks, or an event guard's verdict.
 func isCommitRefusal(err error) bool {
-	return httpx.IsLifecycleRefusal(err) ||
+	return httpx.IsLifecycleRefusal(err) || repos.IsRefused(err) ||
 		errors.Is(err, repos.ErrOriginOntologyConflict) ||
 		errors.Is(err, repos.ErrKnowledgeBaseAlreadyLocal) ||
 		errors.Is(err, repos.ErrOriginUnrelatedHistory) ||
