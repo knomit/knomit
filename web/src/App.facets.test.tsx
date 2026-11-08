@@ -1366,9 +1366,14 @@ describe('a chat target', () => {
       expect(sent('chat-b')).toEqual([]);
       expect(screen.getByTestId('rail-chat-title-chat-a')).toHaveTextContent('alpha words');
       expect(screen.getByTestId('rail-chat-title-chat-b')).toHaveTextContent('beta words');
+      // Back on A, the edit is not waiting there either: it ended.
+      fireEvent.click(screen.getByTestId('rail-chat-chat-a'));
+      await waitFor(() => expect(screen.getByTestId('target-label-name')).toHaveTextContent('alpha words'));
+      expect(screen.queryByTestId('target-label-rename')).toBeNull();
     });
 
-    // SABOTAGE: drop the done guard in ChatTitleEdit.finish -> red (two PATCHes).
+    // The editor's own guard is pinned in ChatTitleEdit.test.tsx; here the whole
+    // path: one PATCH.
     it('Enter then the blur that follows it saves exactly once', async () => {
       const fx = await mountWithChat();
       fireEvent.doubleClick(screen.getByTestId('rail-chat-title-chat-a'));
