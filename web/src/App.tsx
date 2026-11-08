@@ -49,6 +49,7 @@ import { FleetWizard } from './FleetWizard';
 import type { FleetStatus } from './api';
 import { ErrorBoundary } from './ErrorBoundary';
 import { AccessSecretsLink } from './accessLink';
+import { restoreReturnPoint, takeReturnPoint, type ReturnPoint } from './serverReturn';
 import { StatusFooter } from './StatusFooter';
 import { useVersion } from './hooks';
 import { createOutageLog } from './streamOutage';
@@ -1206,22 +1207,41 @@ export default function App() {
   const onServerPage = useCallback((p: ServerPage) => dispatchView({ type: 'SET_SERVER_PAGE', page: p }), [dispatchView]);
   // The gear refuses while a connect commit runs in the Settings facet:
   // opening the server pages over it would unmount the wizard.
+  // What the server pages hide (Settings, the drafts) loses its scroll
+  // positions and the focus while display:none; they are taken just before
+  // the pages open and put back when they close (serverReturn.ts).
+  const returnPoint = useRef<ReturnPoint | null>(null);
   const onGear = useCallback(() => {
     if (view.locked) return;
+    if (view.server === null) returnPoint.current = takeReturnPoint(document);
     dispatchView({ type: 'TOGGLE_SERVER' });
-  }, [view.locked, dispatchView]);
+  }, [view.locked, view.server, dispatchView]);
+  useLayoutEffect(() => {
+    if (serverOpen || !returnPoint.current) return;
+    restoreReturnPoint(returnPoint.current);
+    returnPoint.current = null;
+  }, [serverOpen]);
+  // Each close of the server pages counts one return: what stayed mounted
+  // under them re-reads what Access may have changed (AccessSecretsLink).
+  const [serverReturns, setServerReturns] = useState(0);
+  const [wasServerOpen, setWasServerOpen] = useState(serverOpen);
+  if (wasServerOpen !== serverOpen) {
+    setWasServerOpen(serverOpen);
+    if (!serverOpen) setServerReturns(n => n + 1);
+  }
   // "Access → Secrets" from a credential picker (SecretPicker): the server
   // pages on Access, Secrets picked. Not offered when there is no Access page
   // (read-only server) or while the gear is locked by a connect commit.
-  const openAccessSecrets = useCallback(() => {
+  const openAccessSecrets = useCallback((from?: HTMLElement) => {
     if (view.locked) return;
+    if (view.server === null) returnPoint.current = takeReturnPoint(document, from);
     setAccessTab('secrets');
     dispatchView({ type: 'SET_SERVER_PAGE', page: 'access' });
-  }, [view.locked, dispatchView]);
+  }, [view.locked, view.server, dispatchView]);
   const accessSecretsLink = useMemo(() => ({
     exists: serverPages.includes('access'),
-    open: serverPages.includes('access') && !view.locked ? openAccessSecrets : null, serverOpen,
-  }), [serverPages, view.locked, openAccessSecrets, serverOpen]);
+    open: serverPages.includes('access') && !view.locked ? openAccessSecrets : null, serverOpen, returns: serverReturns,
+  }), [serverPages, view.locked, openAccessSecrets, serverOpen, serverReturns]);
   const serverBar = useMemo(() => serverPage === null ? null : ({
     page: serverPage, pages: serverPages, onPage: onServerPage, authCount: oauth.count,
   }), [serverPage, serverPages, onServerPage, oauth.count]);
@@ -2209,11 +2229,11 @@ export default function App() {
   );
 }
 
-// A draft's body: mounted always, shown only while it is the displayed target.
 /** A facet kept mounted under the server pages: laid out as if the wrapper
  *  were not there while it shows, gone from the page while they do. */
 const underServer = (serverOpen: boolean): React.CSSProperties => ({ display: serverOpen ? 'none' : 'contents' });
 
+// A draft's body: mounted always, shown only while it is the displayed target.
 const draftBody = (shown: boolean): React.CSSProperties => ({
   flex: '1 1 0', minHeight: 0, flexDirection: 'column', overflow: 'hidden',
   display: shown ? 'flex' : 'none',

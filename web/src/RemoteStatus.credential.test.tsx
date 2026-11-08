@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import { RemoteCard } from './RemoteStatus';
 import { useRemote } from './useRemote';
+import { AccessSecretsLink } from './accessLink';
 import type { OriginResponse, SecretView } from './api';
 
 vi.mock('./api', async (importOriginal) => {
@@ -111,6 +112,28 @@ describe('RemoteCard credential row', () => {
     expect(await screen.findByTestId('credential-picker-none')).toHaveTextContent(/No token or username \+ password secret is allowed for .+\. Add one in Access → Secrets\./);
     expect(screen.queryByTestId('credential-picker-select')).toBeNull();
     expect(screen.getByTestId('credential-link-save')).toBeDisabled();
+  });
+
+  it('re-reads the linked secret quietly when the server pages close: new name and status, open box kept', async () => {
+    const api = await mocked();
+    api.getOrigin.mockResolvedValue(linkedOrigin('expired'));
+    const tree = (serverOpen: boolean, returns: number) => (
+      <AccessSecretsLink.Provider value={{ exists: true, open: null, serverOpen, returns }}><Harness /></AccessSecretsLink.Provider>
+    );
+    const { rerender } = render(tree(false, 0));
+    expect(await screen.findByTestId('credential-warning')).toHaveTextContent('gh-pat has expired');
+    // The reader opens "Use another secret…", then goes to Access, replaces
+    // the value and renames the secret.
+    fireEvent.click(screen.getByTestId('credential-link'));
+    expect(screen.getByTestId('credential-link-box')).toBeInTheDocument();
+    rerender(tree(true, 0));
+    api.getOrigin.mockResolvedValue({ ...linkedOrigin('ok'), secret_name: 'gh-pat-2' });
+    rerender(tree(false, 1));
+    await waitFor(() => expect(screen.getByTestId('credential-secret-name')).toHaveTextContent('gh-pat-2'));
+    expect(screen.queryByTestId('credential-warning')).toBeNull();
+    // Quiet: no "Loading…", and the open box survived it.
+    expect(screen.getByTestId('credential-link-box')).toBeInTheDocument();
+    expect(api.getOrigin).toHaveBeenCalledTimes(2);
   });
 
   it('shows the linked secret, and Unlink cannot be confirmed until a replacement is chosen', async () => {

@@ -52,7 +52,7 @@ function Held({ url: start, initial = '', preselect = false, onChange = () => {}
   );
 }
 const valueNow = () => screen.getByTestId('value').textContent;
-const link = (over: Partial<AccessSecretsLinkValue>): AccessSecretsLinkValue => ({ exists: true, open: null, serverOpen: false, ...over });
+const link = (over: Partial<AccessSecretsLinkValue>): AccessSecretsLinkValue => ({ exists: true, open: null, serverOpen: false, returns: 0, ...over });
 
 describe('SecretPicker: what it lists', () => {
   it('lists only the token and basic secrets for the https host, and has no create option', async () => {
@@ -174,17 +174,42 @@ describe('SecretPicker: none fit', () => {
   it('re-reads the secrets when the server pages close, and picks up one added there', async () => {
     const api = await mocked();
     api.listSecrets.mockResolvedValue([]);
-    const tree = (serverOpen: boolean) => (
-      <AccessSecretsLink.Provider value={link({ open: () => {}, serverOpen })}>
+    const tree = (serverOpen: boolean, returns: number) => (
+      <AccessSecretsLink.Provider value={link({ open: () => {}, serverOpen, returns })}>
         <Held url="https://github.com/a/b.git" preselect />
       </AccessSecretsLink.Provider>
     );
-    const { rerender } = render(tree(false));
+    const { rerender } = render(tree(false, 0));
     await screen.findByTestId('secret-picker-none');
-    rerender(tree(true));
+    rerender(tree(true, 0));
     api.listSecrets.mockResolvedValue([secret({ id: 'added', name: 'added' })]);
-    rerender(tree(false));
+    rerender(tree(false, 1));
     await waitFor(() => expect(valueNow()).toBe('added'));
+  });
+
+  it('hands the focus from the link to the select when the re-read replaces one with the other', async () => {
+    const api = await mocked();
+    api.listSecrets.mockResolvedValue([]);
+    const tree = (returns: number) => (
+      <AccessSecretsLink.Provider value={link({ open: () => {}, returns })}>
+        <Held url="https://github.com/a/b.git" />
+      </AccessSecretsLink.Provider>
+    );
+    const { rerender } = render(tree(0));
+    const a = await screen.findByTestId('secret-picker-access-link');
+    a.focus();
+    expect(a).toHaveFocus();
+    api.listSecrets.mockResolvedValue([secret({ id: 'added', name: 'added' })]);
+    rerender(tree(1));
+    await waitFor(() => expect(screen.getByTestId('secret-picker-select')).toHaveFocus());
+  });
+
+  it('passes the link itself to open, so focus can come back to it', async () => {
+    const open = vi.fn();
+    render(<AccessSecretsLink.Provider value={link({ open })}><Held url="https://bitbucket.org/a/b.git" /></AccessSecretsLink.Provider>);
+    const a = await screen.findByTestId('secret-picker-access-link');
+    fireEvent.click(a);
+    expect(open).toHaveBeenCalledWith(a);
   });
 });
 

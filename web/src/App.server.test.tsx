@@ -423,6 +423,47 @@ describe('a credential picker sends the reader to Access → Secrets', () => {
     expect(await screen.findByTestId('secrets-overview')).toBeInTheDocument();
   });
 
+  it('coming back puts the scroll position back and the focus on the link, then on the select that replaces it', async () => {
+    const m = await primeApi({ oauth: [] });
+    await mountApp();
+    fireEvent.click(screen.getByTestId('facet-tab-settings'));
+    await screen.findByTestId('repo-settings');
+    await act(async () => { fireEvent.click(await screen.findByTestId('remote-connect')); });
+    await act(async () => { fireEvent.change(await screen.findByTestId('wizard-url'), { target: { value: 'https://github.com/a/kb.git' } }); });
+    fireEvent.change(screen.getByLabelText('Auth method'), { target: { value: 'secret' } });
+    const link = await screen.findByRole('button', { name: 'Access → Secrets' });
+    // The wizard's box, scrolled down to the picker.
+    const settings = screen.getByTestId('wizard-url').parentElement!;
+    settings.scrollTop = 420;
+    link.focus();
+    await act(async () => { fireEvent.click(link); });
+    expect(await screen.findByTestId('access-page')).toBeInTheDocument();
+    // What display:none does to a scrolled box in a browser.
+    settings.scrollTop = 0;
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    m.listSecrets.mockResolvedValue([
+      { id: 's1', name: 'gh-pat', type: 'token', hosts: ['github.com'], expires_at: null, status: 'none', created_at: '', updated_at: '', linked_repos: 0 },
+    ]);
+    await act(async () => { fireEvent.click(gear()); });
+    expect(settings.scrollTop).toBe(420);
+    // Focus comes back to the link, and moves to the select once the re-read
+    // has replaced the link with it.
+    await waitFor(() => expect(screen.getByTestId('wizard-secret-picker-select')).toHaveFocus());
+  });
+
+  it('the gear alone also puts the scroll position back', async () => {
+    await primeApi({ oauth: [] });
+    await mountApp();
+    fireEvent.click(screen.getByTestId('facet-tab-settings'));
+    const settings = await screen.findByTestId('repo-settings');
+    settings.scrollTop = 250;
+    await openServer();
+    settings.scrollTop = 0;
+    await act(async () => { fireEvent.click(gear()); });
+    expect(settings.scrollTop).toBe(250);
+  });
+
   it('coming back from Access finds the half-filled connect wizard exactly as it was left', async () => {
     const m = await primeApi({ oauth: [] });
     await mountApp();

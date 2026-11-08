@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api, type OriginResponse } from './api';
+import { AccessSecretsLink } from './accessLink';
 
 /** RemoteState is the loaded remote for one repo. RepoDetail owns it (rather
  *  than RemoteCard) because the detail pane's ⋯ menu has to know whether a
@@ -24,17 +25,27 @@ export function useRemote(repo: string, enabled = true): RemoteState {
   const [loading, setLoading] = useState(enabled);
   const [err, setErr] = useState('');
   const [nonce, setNonce] = useState(0);
+  // A return from the server pages (AccessSecretsLink.returns) re-reads the
+  // origin QUIETLY: the linked secret may have been renamed, replaced or
+  // deleted in Access, but the card stays as it is meanwhile (no "Loading…",
+  // which would unmount an open credential box), and a failed re-read keeps
+  // what was shown.
+  const { returns } = useContext(AccessSecretsLink);
+  const readFor = useRef({ repo, enabled, nonce, returns });
 
   useEffect(() => {
     if (!enabled) return;
+    const last = readFor.current;
+    const quiet = last.returns !== returns && last.repo === repo && last.enabled === enabled && last.nonce === nonce;
+    readFor.current = { repo, enabled, nonce, returns };
     let cancelled = false;
-    setLoading(true); setErr('');
+    if (!quiet) { setLoading(true); setErr(''); }
     api.getOrigin(repo)
       .then(o => { if (!cancelled) setOrigin(o); })
-      .catch(() => { if (!cancelled) setErr('could not load remote status'); })
-      .finally(() => { if (!cancelled) setLoading(false); });
+      .catch(() => { if (!cancelled && !quiet) setErr('could not load remote status'); })
+      .finally(() => { if (!cancelled && !quiet) setLoading(false); });
     return () => { cancelled = true; };
-  }, [repo, enabled, nonce]);
+  }, [repo, enabled, nonce, returns]);
 
   const reload = useCallback(() => setNonce(n => n + 1), []);
   // When disabled, report "not connected, not loading" by derivation rather

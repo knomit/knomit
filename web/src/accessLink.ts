@@ -7,9 +7,17 @@ import { createContext } from 'react';
 //   so a hint may point there;
 // - `open`: shows the gear's server pages on Access with the Secrets section
 //   picked; null where that cannot happen now (no Access page, or a connect
-//   commit locks the gear);
-// - `serverOpen`: the server pages are showing, so a picker kept mounted
-//   under them re-reads the secrets when the reader comes back.
-export type AccessSecretsLinkValue = { exists: boolean; open: (() => void) | null; serverOpen: boolean };
+//   commit locks the gear). Pass the element the reader used (the link): focus
+//   returns to it, or to its picker, when the reader comes back;
+// - `serverOpen`: the server pages are showing;
+// - `returns`: how many times the server pages have closed. Anything kept
+//   mounted under them that shows a secret's name or status (the picker, the
+//   Remote card, the fleet's Access row) re-reads when it moves.
+export type AccessSecretsLinkValue = {
+  exists: boolean;
+  open: ((from?: HTMLElement) => void) | null;
+  serverOpen: boolean;
+  returns: number;
+};
 
-export const AccessSecretsLink = createContext<AccessSecretsLinkValue>({ exists: true, open: null, serverOpen: false });
+export const AccessSecretsLink = createContext<AccessSecretsLinkValue>({ exists: true, open: null, serverOpen: false, returns: 0 });

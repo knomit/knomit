@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api, type SecretType, type SecretView } from './api';
 import { fieldInput, fieldHint, linkBtn, wizardErr } from './manageStyles';
 import { CredentialChip } from './CredentialChip';
@@ -57,7 +57,7 @@ export function SecretPicker({ url, value, onChange, preselect = false, testid =
     .catch(e => { setErr(e instanceof Error ? e.message : String(e)); }), []);
   // Read on mount, and again each time the server pages close: a picker kept
   // mounted under them sees the secret just added there.
-  useEffect(() => { if (!link.serverOpen) load(); }, [link.serverOpen, load]);
+  useEffect(() => { load(); }, [load, link.returns]);
 
   const host = remoteHost(url);
   const fitting = (all ?? []).filter(s => secretFits(s, url));
@@ -80,14 +80,27 @@ export function SecretPicker({ url, value, onChange, preselect = false, testid =
 
   const kind = kindFor(typesForURL(url));
 
+  // Focus came back to the "Access → Secrets" link, and the re-read then
+  // replaced the link with a select: the select takes the focus, rather than
+  // the page dropping it.
+  const selectRef = useRef<HTMLSelectElement>(null);
+  const linkFocused = useRef(false);
+  const hasSelect = all !== null && fitting.length > 0;
+  useEffect(() => {
+    if (!hasSelect || !linkFocused.current) return;
+    linkFocused.current = false;
+    const a = document.activeElement;
+    if (!a || a === document.body) selectRef.current?.focus();
+  }, [hasSelect]);
+
   return (
-    <div data-testid={testid}>
+    <div data-testid={testid} data-return-focus="">
       {err && <div role="alert" data-testid={`${testid}-error`} style={wizardErr}>{err}</div>}
       {all === null && !err && <div style={fieldHint}>Loading stored secrets…</div>}
       {lostWhy && <div data-testid={`${testid}-lost`} style={lostStyle}>{lostWhy}</div>}
-      {all !== null && fitting.length > 0 && (
+      {hasSelect && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <select data-testid={`${testid}-select`} aria-label="Stored secret" style={{ ...fieldInput, maxWidth: 360 }}
+          <select ref={selectRef} data-testid={`${testid}-select`} aria-label="Stored secret" style={{ ...fieldInput, maxWidth: 360 }}
             value={chosen ? chosen.id : ''}
             onChange={e => {
               const s = fitting.find(x => x.id === e.target.value) ?? null;
@@ -114,7 +127,8 @@ export function SecretPicker({ url, value, onChange, preselect = false, testid =
             <>
               {' Add one in '}
               {link.open
-                ? <button type="button" data-testid={`${testid}-access-link`} onClick={link.open}
+                ? <button type="button" data-testid={`${testid}-access-link`} onClick={e => link.open?.(e.currentTarget)}
+                    onFocus={() => { linkFocused.current = true; }} onBlur={e => { if (e.relatedTarget) linkFocused.current = false; }}
                     style={{ ...linkBtn, fontSize: 'inherit', fontFamily: 'inherit' }}>Access → Secrets</button>
                 : 'Access → Secrets'}
               .
