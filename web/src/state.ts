@@ -37,8 +37,6 @@ export type AsOf =
   | { mode: 'history'; commit: string }
   | { mode: 'diff'; from: string; to: string };
 
-/** A panel of the open fact a landing asks to open: cited by or cites, or a motif. */
-
 interface NavEntry {
   // Set when this departure was to Browse from a chat: going back to this entry
   // goes back to that chat (chatReturn). It stands in for everything older on
@@ -91,8 +89,6 @@ export interface AppState {
   // context still exists and switches to it (entered), then, once its branch is
   // known, reads the entry's branch and restores the entry on it (NAV_RETURN_LAND).
   navReturn: { entry: NavEntry; entered: boolean } | null;
-  // A landing's request to open a panel of the fact at `path`. FactView serves it
-  // once and clears it.
   repo: string;
   // context is the browse surface (repo | lens). In a repo context, repo/branch
   // are authoritative for both reads and writes. In a lens context, reads come
