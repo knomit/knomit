@@ -64,12 +64,9 @@ func ApplyPruneDecisions(ctx context.Context,
 	// The members' own types, snapshotted for the same reason: the merged
 	// fact's type comes from them and never from the judge.
 	memberTypes := make([][]step.FactForLLM, len(merges))
-	// And their bodies, for the wiki-link rule, for the same reason again.
-	memberText := make([]string, len(merges))
 	for i, m := range merges {
 		memberPrior[i] = memberRefs(ctx, gs, agentBranch, m.Paths)
 		memberTypes[i] = memberTypeInputs(ctx, gs, agentBranch, m.Paths)
-		memberText[i] = memberBodies(ctx, gs, agentBranch, m.Paths)
 	}
 	log.Info().Int("decisions", len(decisions)).Int("merges", len(merges)).Msg("prune: applying results")
 
@@ -215,11 +212,9 @@ func ApplyPruneDecisions(ctx context.Context,
 				mf.Path, len(m.Paths))})
 			continue
 		}
-		// The wiki-link rule, judged as an edit: the merged body may carry
-		// the [[...]] its members already held (facts written before the
-		// rule), never more. A member that cannot be read counts as holding
-		// none — the strict direction.
-		if err := fact.CheckWikiLinkEdit(memberText[i], mf.Body); err != nil {
+		// The merged body is a new body: no [[...]] outside code, whatever
+		// its members held.
+		if err := fact.CheckWikiLinks(mf.Body); err != nil {
 			onProgress(step.ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s rejected: %v", mf.Path, err)})
 			continue
 		}
@@ -870,19 +865,6 @@ func memberRefs(ctx context.Context, gs *facts.Index, branch string, paths []str
 		}
 	}
 	return out
-}
-
-// memberBodies joins the bodies of a prune merge's members, one paragraph
-// break apart, as the "before" of the wiki-link edit rule. A member that
-// cannot be read is left out.
-func memberBodies(ctx context.Context, gs *facts.Index, branch string, paths []string) string {
-	var bodies []string
-	for _, p := range paths {
-		if f, ok := step.ReadFactAt(ctx, gs, branch, p); ok {
-			bodies = append(bodies, f.Body)
-		}
-	}
-	return strings.Join(bodies, "\n\n")
 }
 
 // memberTypeInputs reads the members of a prune merge as the operands of the

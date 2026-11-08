@@ -15,7 +15,7 @@ import (
 )
 
 // The wiki-link rule on the REST writers: POST is a create (none in prose),
-// PUT is judged as an edit against the stored body (none added).
+// PUT is judged on the resulting body too, whatever the stored one held.
 
 func TestFactCreate_WikiLinkInProseRefused(t *testing.T) {
 	_, ri, r := datedRepo(t)
@@ -39,7 +39,7 @@ func TestFactCreate_WikiLinkInProseRefused(t *testing.T) {
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 }
 
-func TestFactPut_WikiLinkEditRule(t *testing.T) {
+func TestFactPut_WikiLinkRule(t *testing.T) {
 	_, ri, r := datedRepo(t)
 	b := urlBranch(ri.AgentBranch())
 	const path = "kb/technology/dated/legacy.md"
@@ -56,18 +56,22 @@ func TestFactPut_WikiLinkEditRule(t *testing.T) {
 	}
 
 	rec := put(path, "now [[x]]")
-	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, "the seeded body has none, so one may not be added: "+rec.Body.String())
-	require.Contains(t, rec.Body.String(), "the edit adds [[x]]")
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, "an edit may not leave one: "+rec.Body.String())
+	require.Contains(t, rec.Body.String(), "the body contains [[x]] (line 1). An update must leave no [[...]] outside code, including ones the fact already had.")
 
-	// Plant a legacy body with one, then keep it, then remove it.
+	// A legacy body with one: keeping it, or swapping it, is refused; removing
+	// it is accepted.
 	seedDatedFactBody(t, ri, path, "legacy [[a1b2c3d4]]")
 	rec = put(path, "legacy, reworded [[a1b2c3d4]]")
-	require.Equal(t, http.StatusOK, rec.Code, "keeping an existing one is allowed: "+rec.Body.String())
-	rec = put(path, "legacy, reworded without it")
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, "keeping an existing one is refused: "+rec.Body.String())
+	rec = put(path, "legacy, reworded [[other]]")
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, "replacing it with another is refused: "+rec.Body.String())
+	rec = put(path, "legacy, reworded without it, `[[a1b2c3d4]]` in code")
 	require.Equal(t, http.StatusOK, rec.Code, "removing it is allowed: "+rec.Body.String())
 
 	rec = put("kb/technology/dated/fresh.md", "fresh [[y]]")
 	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, "a PUT that creates is judged like a create: "+rec.Body.String())
+	require.NotContains(t, rec.Body.String(), "An update must", "a create gets knomit_learn's text")
 
 	rec = put("artifacts/crawl/state.md", "saw [[link]]")
 	require.Equal(t, http.StatusOK, rec.Code, "an artifact is exempt: "+rec.Body.String())

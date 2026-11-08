@@ -15,8 +15,7 @@ import (
 )
 
 // The wiki-link rule on the review pipeline's writes: a distilled fact is a
-// new body (none in prose); a prune merge is judged as an edit of its members
-// (no more than they held).
+// new body: none in prose, whatever the members of a prune merge held.
 
 func TestApplyDistillDecisions_WikiLinkInProseRejected(t *testing.T) {
 	svc, branch := synthtest.NewSourcesTestRepo(t)
@@ -68,14 +67,15 @@ func TestApplyReflectDecisions_WikiLinkInProseRefused(t *testing.T) {
 	require.Len(t, methodologyFactPaths(t, svc, branch), 1)
 }
 
-func TestApplyPruneDecisions_MergeMayNotAddWikiLinks(t *testing.T) {
+func TestApplyPruneDecisions_MergeMayNotKeepWikiLinks(t *testing.T) {
 	for name, tc := range map[string]struct {
 		body    string
 		written bool
 	}{
-		"keeps the members' one": {"merged, see [[a1b2c3d4]]", true},
+		"keeps the members' one": {"merged, see [[a1b2c3d4]]", false},
 		"drops it":               {"merged, plain", true},
-		"adds one":               {"merged, see [[a1b2c3d4]] and [[new]]", false},
+		"swaps it for another":   {"merged, see [[new]]", false},
+		"keeps it in code":       {"merged, see `[[a1b2c3d4]]`", true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -107,7 +107,7 @@ func TestApplyPruneDecisions_MergeMayNotAddWikiLinks(t *testing.T) {
 			}
 			require.Equal(t, 0, stats.Merged)
 			require.Len(t, warns, 1, "%v", warns)
-			require.True(t, strings.Contains(warns[0], "rejected") && strings.Contains(warns[0], "the edit adds [[new]]"), warns[0])
+			require.True(t, strings.Contains(warns[0], "rejected") && strings.Contains(warns[0], "the body contains [["), warns[0])
 		})
 	}
 }

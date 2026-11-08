@@ -116,7 +116,7 @@ func WikiLinks(body string) []WikiLink {
 	return out
 }
 
-// ErrWikiLinkInBody marks a refusal by CheckWikiLinks or CheckWikiLinkEdit.
+// ErrWikiLinkInBody marks a refusal by CheckWikiLinks or CheckWikiLinksUpdate.
 var ErrWikiLinkInBody = errors.New("wiki link in fact body")
 
 // wikiLinkAdvice is the part of every refusal that says what to send instead.
@@ -124,43 +124,27 @@ const wikiLinkAdvice = "knomit has no link syntax in a body: it neither resolves
 	"Put the cited fact's path (kb/<topic>/<category>/<id>.md, as knomit_query returned it) in refs, and keep the body plain text. " +
 	"To show [[...]] literally, as in TOML or a regex, put it in an inline code span or a fenced code block."
 
-// CheckWikiLinks refuses a NEW body that carries any `[[...]]` in prose (see
-// WikiLinks). Every write that creates a fact runs it.
+// CheckWikiLinks refuses a body that holds any `[[...]]` in prose (see
+// WikiLinks). Every write that creates a fact runs it on the body it writes.
 func CheckWikiLinks(body string) error {
+	return checkWikiLinks(body, "")
+}
+
+// CheckWikiLinksUpdate is CheckWikiLinks for a write that changes an existing
+// fact. It judges the RESULTING body only, whatever the fact held before: an
+// update of a fact that already carries `[[...]]` must remove them, so a
+// legacy fact cannot be updated, on any field, until its body is fixed. Its
+// error says so.
+func CheckWikiLinksUpdate(body string) error {
+	return checkWikiLinks(body, "An update must leave no [[...]] outside code, including ones the fact already had. ")
+}
+
+func checkWikiLinks(body, note string) error {
 	links := WikiLinks(body)
 	if len(links) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%w: the body contains %s. %s", ErrWikiLinkInBody, listWikiLinks(links), wikiLinkAdvice)
-}
-
-// CheckWikiLinkEdit refuses an edit whose result carries MORE `[[...]]` in
-// prose than the body it replaces. Like CheckFenceEdit it judges the edit,
-// not the result: facts written before the rule still carry them, and they
-// must stay editable, so an edit that keeps them or removes some passes. The
-// error names the occurrences the edit added.
-func CheckWikiLinkEdit(before, after string) error {
-	was := WikiLinks(before)
-	now := WikiLinks(after)
-	if len(now) <= len(was) {
-		return nil
-	}
-	// Name the added ones: an occurrence is added when the edit leaves more
-	// copies of its text than the body had.
-	left := make(map[string]int, len(was))
-	for _, l := range was {
-		left[l.Text]++
-	}
-	var added []WikiLink
-	for _, l := range now {
-		if left[l.Text] > 0 {
-			left[l.Text]--
-			continue
-		}
-		added = append(added, l)
-	}
-	return fmt.Errorf("%w: the edit adds %s, so the body would hold %d [[...]] outside code where it holds %d now. Ones the body already has may stay or be removed, but none may be added. %s",
-		ErrWikiLinkInBody, listWikiLinks(added), len(now), len(was), wikiLinkAdvice)
+	return fmt.Errorf("%w: the body contains %s. %s%s", ErrWikiLinkInBody, listWikiLinks(links), note, wikiLinkAdvice)
 }
 
 // listWikiLinks renders up to three occurrences with their line numbers.

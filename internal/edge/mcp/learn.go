@@ -150,7 +150,7 @@ func learnToolSchemaProperties() map[string]any {
 
 // bodyLinkRule opens the link rule in the body descriptions of knomit_learn
 // and knomit_update; each ends it with what that tool refuses
-// (fact.CheckWikiLinks, fact.CheckWikiLinkEdit).
+// (fact.CheckWikiLinks, fact.CheckWikiLinksUpdate).
 const bodyLinkRule = "There is no link syntax in a body: every reference, whether another fact's path or an external source such as a URL, goes in refs. "
 
 // learnFactInput is the JSON shape of a single fact in the input array.
@@ -1066,6 +1066,11 @@ func applyDedupMerge(
 			if err := fact.ValidateFact(ontology, topicCategories[i], merged); err != nil {
 				return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge: %v", i, err)
 			}
+		}
+		// The merge rewrites the EXISTING fact, and the body it keeps may be
+		// the existing one: an update, so the update rule applies to it.
+		if err := fact.CheckWikiLinksUpdate(merged.Body); err != nil {
+			return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge into %s: %v", i, match.Path, err)
 		}
 		// F22: the merged fact lands at the MATCH's path, which the prefix
 		// search can place in a descendant topic whose context declarations

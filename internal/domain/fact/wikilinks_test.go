@@ -107,30 +107,14 @@ func TestCheckWikiLinks_ListsAtMostThree(t *testing.T) {
 	require.NotContains(t, err.Error(), "[[d]]")
 }
 
-func TestCheckWikiLinkEdit_NoMoreThanBefore(t *testing.T) {
-	legacy := "old [[a1b2c3d4]] and [[slug]]"
+// The update rule judges the resulting body only: there is no "before".
+func TestCheckWikiLinksUpdate_ResultingBodyOnly(t *testing.T) {
+	require.NoError(t, CheckWikiLinksUpdate("all gone"))
+	require.NoError(t, CheckWikiLinksUpdate("code is fine:\n\n```\n[[x]]\n```\n\nand `[[y]]`"))
 
-	require.NoError(t, CheckWikiLinkEdit(legacy, legacy+"\n\nmore prose"), "keeping existing ones is allowed")
-	require.NoError(t, CheckWikiLinkEdit(legacy, "old and [[slug]]"), "removing one is allowed")
-	require.NoError(t, CheckWikiLinkEdit(legacy, "all gone"), "an edit that removes all of them is allowed")
-	require.NoError(t, CheckWikiLinkEdit("a", "a\n\n```\n[[x]]\n```"), "adding one in code is allowed")
-
-	err := CheckWikiLinkEdit(legacy, legacy+" plus [[new]]")
-	require.Error(t, err)
+	err := CheckWikiLinksUpdate("one\ntwo\nold [[old-one]] kept")
 	require.True(t, errors.Is(err, ErrWikiLinkInBody))
-	require.Contains(t, err.Error(), "the edit adds [[new]] (line 1)")
-	require.NotContains(t, err.Error(), "[[slug]] (line", "only the added occurrence is named")
-	require.Contains(t, err.Error(), "so the body would hold 3 [[...]] outside code where it holds 2 now")
-	require.Contains(t, err.Error(), "none may be added")
-	require.Contains(t, err.Error(), "refs")
-
-	require.Equal(t, "wiki link in fact body: the edit adds [[new]] (line 1), so the body would hold 3 [[...]] outside code where it holds 2 now. Ones the body already has may stay or be removed, but none may be added. "+approvedWikiLinkTail,
-		err.Error(), "the approved wording (2026-11-08), byte for byte")
-
-	err = CheckWikiLinkEdit("clean", "clean [[x]]")
-	require.Error(t, err, "a body with none may not gain one")
-
-	err = CheckWikiLinkEdit("[[a]]", "[[a]] [[a]]")
-	require.Error(t, err, "a second copy of an existing one is an addition")
-	require.Contains(t, err.Error(), "the edit adds [[a]]")
+	require.Equal(t, "wiki link in fact body: the body contains [[old-one]] (line 3). An update must leave no [[...]] outside code, including ones the fact already had. "+approvedWikiLinkTail,
+		err.Error(), "the drafted update wording, byte for byte")
+	require.Contains(t, err.Error(), "external source")
 }

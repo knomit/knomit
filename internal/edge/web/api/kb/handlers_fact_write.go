@@ -46,7 +46,7 @@ func writeGateProblem(w http.ResponseWriter, r *http.Request, gerr error) {
 }
 
 // writeWikiLinkProblem answers a body the wiki-link rule refuses
-// (fact.CheckWikiLinks, fact.CheckWikiLinkEdit) with 422, for POST and PUT
+// (fact.CheckWikiLinks, fact.CheckWikiLinksUpdate) with 422, for POST and PUT
 // alike. The detail is knomit_learn's and knomit_update's own error text.
 func writeWikiLinkProblem(w http.ResponseWriter, r *http.Request, err error) {
 	hal.WriteProblem(w, http.StatusUnprocessableEntity, "Link syntax in fact body",
@@ -109,17 +109,15 @@ func factResolves(ctx context.Context, ri *repos.RepoInstance, branch, path stri
 // "no prior version": a nil prior would make the gate re-judge every ref the
 // stored fact carries. handleFactUpdate answers it with 503.
 func priorRefs(ctx context.Context, ri *repos.RepoInstance, branch, path string) ([]string, error) {
-	refs, _, _, err := priorVersion(ctx, ri, branch, path)
+	refs, _, err := priorVersion(ctx, ri, branch, path)
 	return refs, err
 }
 
 // priorVersion is priorRefs plus whether a prior version exists at all, which
 // handleFactUpdate needs: a PUT to a fresh path CREATES a fact, and a create
 // must name an ontology topic. exists is true for a stored version that does
-// not parse (it is still a file at that path). body is the prior version's
-// body, "" when there is none or it does not parse — so the wiki-link edit
-// rule then judges the PUT as a fresh body, the strict direction.
-func priorVersion(ctx context.Context, ri *repos.RepoInstance, branch, path string) (refs []string, body string, exists bool, err error) {
+// not parse (it is still a file at that path).
+func priorVersion(ctx context.Context, ri *repos.RepoInstance, branch, path string) (refs []string, exists bool, err error) {
 	if aerr := ri.WithRead(func(svc *store.Service) {
 		res, rerr := svc.Facts().ReadFact(ctx, branch, path, nil)
 		if rerr != nil {
@@ -140,11 +138,10 @@ func priorVersion(ctx context.Context, ri *repos.RepoInstance, branch, path stri
 			return
 		}
 		refs = f.Refs
-		body = f.Body
 	}); aerr != nil {
-		return nil, "", false, aerr
+		return nil, false, aerr
 	}
-	return refs, body, exists, err
+	return refs, exists, err
 }
 
 // writeFact commits content at path on branch with message and returns the
@@ -358,7 +355,7 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 		// the stored version already carried resolved at its own commit and is
 		// not re-judged, or editing a title would be refused over a citation
 		// written months ago.
-		prior, priorBody, exists, perr := priorVersion(r.Context(), ri, branch, path)
+		prior, exists, perr := priorVersion(r.Context(), ri, branch, path)
 		if perr != nil {
 			// The prior-version read is the first thing to touch the path, so
 			// go-git's refusal of a path it will not look up surfaces here,
@@ -386,12 +383,15 @@ func handleFactUpdate(b hal.URLBuilder, ontologyRoot string) http.HandlerFunc {
 				return
 			}
 		}
-		// The wiki-link rule, judged on the edit as knomit_update judges it:
-		// a PUT may keep or remove the [[...]] a fact already carries, never
-		// add one. A fresh path has no prior body, so it gets the create's
-		// rule. An artifact is exempt, as in knomit_learn.
+		// The wiki-link rule on the resulting body, whatever the stored
+		// version held: a PUT that creates gets knomit_learn's text, an edit
+		// knomit_update's. An artifact is exempt, as in knomit_learn.
 		if !knomitfact.IsUnderArtifactsRoot(path) {
-			if err := knomitfact.CheckWikiLinkEdit(priorBody, f.Body); err != nil {
+			check := knomitfact.CheckWikiLinksUpdate
+			if !exists {
+				check = knomitfact.CheckWikiLinks
+			}
+			if err := check(f.Body); err != nil {
 				writeWikiLinkProblem(w, r, err)
 				return
 			}

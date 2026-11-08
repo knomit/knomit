@@ -11,7 +11,7 @@
 // same chain, in the same order, and what gets committed is what SerializeFact
 // produces, never the caller's raw bytes:
 //
-//	ParseFact  →  ValidateFact  →  wiki-link edit rule  →  refs.Gate.Apply  →  SerializeFact
+//	ParseFact  →  ValidateFact  →  wiki-link rule  →  refs.Gate.Apply  →  SerializeFact
 //
 // The subject-motif gate is NOT a step here, deliberately: SerializeFact
 // applies it internally, so reaching SerializeFact IS being gated. The REST
@@ -129,21 +129,11 @@ func normalizeOne(
 		return nil, fmt.Errorf("resolution body for %q: %w", file, knomitfact.ErrContextWithoutOntology)
 	}
 
-	// The versions this resolution merges: the fork, the parent tip and the
-	// experiment tip. Both gates below exempt what one of them already carried.
-	carried, err := carriedVersions(ctx, ri, parent, experiment, file)
-	if err != nil {
-		return nil, err
-	}
-
-	// 2b. The wiki-link rule, judged as an edit like knomit_update judges it:
-	// the resolved body may hold as many [[...]] outside code as the version
-	// that held the most, never more. Each of those versions was accepted by a
-	// write path, so keeping what one of them had is merging, not authoring.
-	// A path on no version has an empty "before", so a fresh body must hold
-	// none. An artifact is exempt, as on every write path.
+	// 2b. The wiki-link rule, as knomit_update applies it: the resolved body
+	// may hold no [[...]] outside code, whatever the merged versions held. An
+	// artifact is exempt, as on every write path.
 	if !knomitfact.IsArtifactPath(file) {
-		if err := knomitfact.CheckWikiLinkEdit(carried.mostWikiLinks(), f.Body); err != nil {
+		if err := knomitfact.CheckWikiLinksUpdate(f.Body); err != nil {
 			return nil, fmt.Errorf("resolution body for %q: %w", file, err)
 		}
 	}
@@ -160,7 +150,11 @@ func normalizeOne(
 	if err != nil {
 		return nil, err
 	}
-	canonRefs, _, err := gate.Apply(ctx, file, f.Refs, carried.refs)
+	prior, err := carriedRefs(ctx, ri, parent, experiment, file)
+	if err != nil {
+		return nil, err
+	}
+	canonRefs, _, err := gate.Apply(ctx, file, f.Refs, prior)
 	if err != nil {
 		return nil, fmt.Errorf("resolution body for %q has unresolvable references: %w", file, err)
 	}
@@ -185,28 +179,9 @@ func normalizeOne(
 	return []byte(serialized), nil
 }
 
-// carried is what the versions a resolution merges already hold: the union of
-// their refs, and each version's body.
-type carried struct {
-	refs   []string
-	bodies []string
-}
-
-// mostWikiLinks is the carried body with the most [[...]] outside code, the
-// "before" of the wiki-link edit rule; "" when no version exists.
-func (c carried) mostWikiLinks() string {
-	best, n := "", -1
-	for _, b := range c.bodies {
-		if k := len(knomitfact.WikiLinks(b)); k > n {
-			best, n = b, k
-		}
-	}
-	return best
-}
-
-// carriedVersions reads each version a resolution merges: the experiment's
-// fork point, the parent tip and the experiment tip. Its refs part is the
-// union of the refs path carries on them.
+// carriedRefs is the union of the refs path carries on each version a
+// resolution merges: the experiment's fork point, the parent tip and the
+// experiment tip.
 //
 // The FORK version is included, not just the two tips, because a resolution
 // may restore what the fork had: that is choosing the base side, and the base
@@ -221,12 +196,10 @@ func (c carried) mostWikiLinks() string {
 // A version that does not exist (model.ErrPathNotFound) contributes nothing —
 // a path added on one side only, or not yet present at the fork. Any OTHER
 // read error fails the resolution rather than shrinking prior: a smaller prior
-// would refuse refs the fact legitimately carries and blame the resolver. The
-// same holds for the bodies: an unparseable version contributes none, which is
-// the strict direction for the wiki-link rule.
-func carriedVersions(ctx context.Context, ri *repos.RepoInstance, parent, experiment, file string) (carried, error) {
+// would refuse refs the fact legitimately carries and blame the resolver.
+func carriedRefs(ctx context.Context, ri *repos.RepoInstance, parent, experiment, file string) ([]string, error) {
 	var (
-		out    carried
+		out    []string
 		seen   = map[string]bool{}
 		outErr error
 	)
@@ -267,16 +240,15 @@ func carriedVersions(ctx context.Context, ri *repos.RepoInstance, parent, experi
 			if err != nil {
 				continue // an unparseable version carried nothing we can name
 			}
-			out.bodies = append(out.bodies, f.Body)
 			for _, r := range f.Refs {
 				if !seen[r] {
 					seen[r] = true
-					out.refs = append(out.refs, r)
+					out = append(out, r)
 				}
 			}
 		}
 	}); aerr != nil {
-		return carried{}, aerr
+		return nil, aerr
 	}
 	return out, outErr
 }

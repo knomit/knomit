@@ -13,9 +13,9 @@ import (
 	"knomit/internal/engine/store/merge"
 )
 
-// A {body} resolution is a fact write, so it gets the wiki-link edit rule:
-// it may hold as many [[...]] outside code as the merged version that held
-// the most (fork, parent tip, experiment tip), never more.
+// A {body} resolution is a fact write, so it gets knomit_update's wiki-link
+// rule: the resolved body may hold no [[...]] outside code, whatever the
+// merged versions (fork, parent tip, experiment tip) held.
 
 const wikiPath = "kb/architecture/res/wiki.md"
 
@@ -66,32 +66,23 @@ func resolveWiki(t *testing.T, ri *repos.RepoInstance, exp, path, body string) e
 	return err
 }
 
-func TestNormalize_WikiLinkEditRule_MaxOfTheMergedVersions(t *testing.T) {
-	// The parent tip holds the most (two); the fork and the experiment one.
+func TestNormalize_WikiLinkRule_ResultingBodyOnly(t *testing.T) {
+	// Every merged version holds [[a]]; the resolution may still not keep it.
 	ri, exp := wikiRepo(t, "fork [[a]]", "parent [[a]] and [[b]]", "exp [[a]]")
 
-	require.NoError(t, resolveWiki(t, ri, exp, wikiPath, "merged [[a]] and [[b]]"),
-		"keeping as many as the richest version is merging")
-	require.NoError(t, resolveWiki(t, ri, exp, wikiPath, "merged, plain"), "dropping them is allowed")
-
-	err := resolveWiki(t, ri, exp, wikiPath, "merged [[a]] [[b]] [[c]]")
-	require.ErrorIs(t, err, knomitfact.ErrWikiLinkInBody)
+	err := resolveWiki(t, ri, exp, wikiPath, "merged [[a]]")
+	require.ErrorIs(t, err, knomitfact.ErrWikiLinkInBody, "keeping what the versions held is refused")
 	require.Contains(t, err.Error(), `resolution body for "`+wikiPath+`"`)
-	require.Contains(t, err.Error(), "the edit adds [[c]]")
-}
+	require.Contains(t, err.Error(), "including ones the fact already had")
 
-// The FORK version counts too: a resolution may restore what the fork had.
-func TestNormalize_WikiLinkEditRule_ForkCounts(t *testing.T) {
-	ri, exp := wikiRepo(t, "fork [[a]] and [[b]]", "parent, plain", "exp, plain")
-
-	require.NoError(t, resolveWiki(t, ri, exp, wikiPath, "restored [[a]] and [[b]]"),
-		"restoring the fork's body is choosing the base side")
-	require.Error(t, resolveWiki(t, ri, exp, wikiPath, "restored [[a]] [[b]] [[c]]"))
+	require.ErrorIs(t, resolveWiki(t, ri, exp, wikiPath, "merged [[c]]"), knomitfact.ErrWikiLinkInBody,
+		"replacing them with another is refused")
+	require.NoError(t, resolveWiki(t, ri, exp, wikiPath, "merged, plain"), "removing them is accepted")
 }
 
 // A path on no version is a fresh body: none allowed. Code and artifacts are
 // exempt.
-func TestNormalize_WikiLinkEditRule_FreshPathCodeAndArtifacts(t *testing.T) {
+func TestNormalize_WikiLinkRule_FreshPathCodeAndArtifacts(t *testing.T) {
 	ri, exp := wikiRepo(t, "x", "x", "x")
 
 	err := resolveWiki(t, ri, exp, "kb/architecture/res/fresh.md", "fresh [[a]]")

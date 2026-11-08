@@ -6,9 +6,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/domain/fact"
 )
 
-// The wiki-link rule (fact.CheckWikiLinks / CheckWikiLinkEdit) at the two MCP
+// The wiki-link rule (fact.CheckWikiLinks / CheckWikiLinksUpdate) at the two MCP
 // write tools. A fact body links nothing: refs are the only link channel.
 
 const wikiFactPath = "kb/architecture/modules/wiki0001.md"
@@ -76,51 +78,94 @@ func bodyArgs(body string) map[string]any {
 	return map[string]any{"updates": map[string]any{"body": body}}
 }
 
-func TestUpdate_WikiLinkEditRule_FullBody(t *testing.T) {
-	call, body := seedLegacyWikiFact(t)
+// The update rule judges the RESULTING body only: a fact that already holds
+// [[...]] cannot be updated, on any field, until the update removes them.
 
-	isErr, msg := call(bodyArgs("Legacy see [[a1b2c3d4]].\n\nAlso [[some-slug]] and [[new-one]]."))
-	require.True(t, isErr, "adding one must be refused")
-	require.Contains(t, msg, "wiki link in fact body: the edit adds [[new-one]] (line 3)")
-	require.Contains(t, msg, "in refs")
-	require.Equal(t, "Legacy see [[a1b2c3d4]].\n\nAlso [[some-slug]].", body())
-
-	isErr, msg = call(bodyArgs("Legacy, reworded: see [[a1b2c3d4]].\n\nAlso [[some-slug]]."))
-	require.False(t, isErr, "keeping existing ones must be accepted: "+msg)
-
-	isErr, msg = call(bodyArgs("Legacy, reworded: see the fact in refs."))
-	require.False(t, isErr, "removing them must be accepted: "+msg)
-	require.Equal(t, "Legacy, reworded: see the fact in refs.", body())
-}
-
-func TestUpdate_WikiLinkEditRule_Ops(t *testing.T) {
+func TestUpdate_WikiLinkRule_FullBody(t *testing.T) {
 	call, body := seedLegacyWikiFact(t)
 	start := body()
 
-	isErr, msg := call(map[string]any{"ops": []any{replace("Also [[some-slug]].", "Also [[some-slug]], [[x]].")}})
-	require.True(t, isErr, "str_replace adding one must be refused")
-	require.Contains(t, msg, "the edit adds [[x]]")
+	isErr, msg := call(bodyArgs("Legacy, reworded: see [[a1b2c3d4]].\n\nAlso [[some-slug]]."))
+	require.True(t, isErr, "keeping existing ones must be refused")
+	require.Contains(t, msg, "wiki link in fact body: the body contains [[a1b2c3d4]] (line 1), [[some-slug]] (line 3). An update must leave no [[...]] outside code, including ones the fact already had.")
+	require.Contains(t, msg, "in refs")
+	require.Equal(t, start, body(), "a refused update writes nothing")
 
-	isErr, msg = call(map[string]any{"ops": []any{map[string]any{"op": "append", "text": "See [[y]]."}}})
-	require.True(t, isErr, "append adding one must be refused")
-	require.Contains(t, msg, "the edit adds [[y]]")
-	require.Equal(t, start, body(), "a refused edit must write nothing")
+	isErr, _ = call(bodyArgs("Legacy, reworded: see [[other]]."))
+	require.True(t, isErr, "replacing them with another must be refused")
 
-	isErr, msg = call(map[string]any{"ops": []any{map[string]any{"op": "append", "text": "Code is fine: `[[y]]`."}}})
-	require.False(t, isErr, "append in an inline span must be accepted: "+msg)
-
-	isErr, msg = call(map[string]any{"ops": []any{replace("Legacy see [[a1b2c3d4]].", "Legacy see it.")}})
-	require.False(t, isErr, "str_replace removing one must be accepted: "+msg)
-	require.NotContains(t, body(), "[[a1b2c3d4]]")
-
-	isErr, msg = call(map[string]any{"ops": []any{replace("Also [[some-slug]].", "Also [[some-slug]], still.")}})
-	require.False(t, isErr, "str_replace keeping one must be accepted: "+msg)
+	isErr, msg = call(bodyArgs("Legacy, reworded: see the fact in refs, and `[[a1b2c3d4]]` in code."))
+	require.False(t, isErr, "removing them (code is fine) must be accepted: "+msg)
+	require.Equal(t, "Legacy, reworded: see the fact in refs, and `[[a1b2c3d4]]` in code.", body())
 }
 
-func TestUpdate_WikiLinkEditRule_FrontmatterOnlyUntouched(t *testing.T) {
-	call, _ := seedLegacyWikiFact(t)
-	isErr, msg := call(map[string]any{"updates": map[string]any{"confidence": 0.5}})
-	require.False(t, isErr, "an update that does not touch the body is never judged: "+msg)
+func TestUpdate_WikiLinkRule_Ops(t *testing.T) {
+	call, body := seedLegacyWikiFact(t)
+	start := body()
+
+	isErr, msg := call(map[string]any{"ops": []any{replace("Also [[some-slug]].", "Also, plainly.")}})
+	require.True(t, isErr, "str_replace leaving one of them must be refused")
+	require.Contains(t, msg, "the body contains [[a1b2c3d4]] (line 1).")
+
+	isErr, msg = call(map[string]any{"ops": []any{map[string]any{"op": "append", "text": "More prose."}}})
+	require.True(t, isErr, "append to a body that keeps them must be refused")
+	require.Contains(t, msg, "including ones the fact already had")
+
+	isErr, _ = call(map[string]any{"ops": []any{replace("[[a1b2c3d4]]", "[[b]]"), replace("Also [[some-slug]].", "Also.")}})
+	require.True(t, isErr, "replacing one with another must be refused")
+	require.Equal(t, start, body(), "a refused update writes nothing")
+
+	isErr, msg = call(map[string]any{"ops": []any{
+		replace("Legacy see [[a1b2c3d4]].", "Legacy see it."),
+		replace("Also [[some-slug]].", "Also `[[some-slug]]`."),
+		map[string]any{"op": "append", "text": "Code is fine: `[[y]]`."},
+	}})
+	require.False(t, isErr, "ops that remove them all must be accepted: "+msg)
+	require.NotContains(t, body(), "see [[a1b2c3d4]]")
+}
+
+func TestUpdate_WikiLinkRule_FrontmatterOnlyRefused(t *testing.T) {
+	call, body := seedLegacyWikiFact(t)
+	start := body()
+	for name, updates := range map[string]map[string]any{
+		"refs only":       {"refs": []any{}},
+		"confidence only": {"confidence": 0.5},
+	} {
+		isErr, msg := call(map[string]any{"updates": updates})
+		require.True(t, isErr, "%s: an update of a fact holding [[...]] is refused whatever it changes", name)
+		require.Contains(t, msg, "An update must leave no [[...]] outside code, including ones the fact already had.")
+	}
+	require.Equal(t, start, body())
+}
+
+// A learn that dedup-merges into an existing fact rewrites it: when the body
+// kept is the existing one and it holds [[...]], the learn is refused.
+func TestLearn_DedupMergeIntoLegacyFactRefused(t *testing.T) {
+	svc, ctx, emb := newPrinciplesTestRepo(t)
+	item := func(body string, conf float64) map[string]any {
+		return map[string]any{"topic": "architecture", "category": "modules", "title": "Dedup target",
+			"body": body, "confidence": conf, "sources": 1}
+	}
+	// The stub embedder embeds by length, so equal-length texts match exactly.
+	res, err := LearnHandler(emb)(ctx, learnItems(item("clean body, length 28 chars", 0.9)))
+	require.NoError(t, err)
+	require.False(t, res.IsError, resultText(t, res))
+	path := mergedFactPath(t, res)
+	// Plant [[x]] as a fact written before the rule would hold it, keeping the
+	// title and the length so the stub embedding is unchanged.
+	f, err := fact.ParseFact(path, readContent(t, svc, path))
+	require.NoError(t, err)
+	f.Body = "legacy [[x]], len 28 chars!"
+	content, err := fact.SerializeFact(f)
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, "agent/test", path, content, "plant legacy body", "")
+	require.NoError(t, err)
+
+	res, err = LearnHandler(emb)(ctx, learnItems(item("other body, length 28 chars", 0.5)))
+	require.NoError(t, err)
+	require.True(t, res.IsError, "the merge keeps the existing body, which holds [[x]]: "+resultText(t, res))
+	require.Contains(t, resultText(t, res), "dedup-merge into "+path)
+	require.Contains(t, resultText(t, res), "the body contains [[x]] (line 1)")
 }
 
 func TestUpdate_ArtifactMayGainWikiLinks(t *testing.T) {
@@ -131,11 +176,12 @@ func TestUpdate_ArtifactMayGainWikiLinks(t *testing.T) {
 }
 
 // The rule is in every description an agent reads before writing a body,
-// in the wording the user approved (2026-11-08), byte for byte.
+// in the wording the user approved (2026-11-08; the update strings are the
+// drafts for the resulting-body rule), byte for byte.
 const (
 	approvedLearnBodyTail = "There is no link syntax in a body: every reference, whether another fact's path or an external source such as a URL, goes in refs. `[[...]]` outside an inline code span or fenced code block is refused."
-	approvedUpdateBody    = "New body text. There is no link syntax in a body: every reference, whether another fact's path or an external source such as a URL, goes in refs. An edit that adds `[[...]]` outside an inline code span or fenced code block is refused; ones the body already has may stay or be removed."
-	approvedOpsTail       = "The body's leading and trailing whitespace is not stored. An edit that leaves an unclosed ``` fence in a body whose fences were balanced is refused, and so is one that adds `[[...]]` outside code: every reference, to a fact or to an external source, goes in refs."
+	approvedUpdateBody    = "New body text. There is no link syntax in a body: every reference, whether another fact's path or an external source such as a URL, goes in refs. A body that holds `[[...]]` outside an inline code span or fenced code block is refused, including ones the fact already had: an update to such a fact must remove them or move them to refs."
+	approvedOpsTail       = "The body's leading and trailing whitespace is not stored. An edit that leaves an unclosed ``` fence in a body whose fences were balanced is refused, and so is any update that leaves `[[...]]` outside code in the body, even ones it already held: every reference, to a fact or to an external source, goes in refs."
 	approvedInstructions  = "- **All references go in refs** — a body has no link syntax. Cite another fact by its path and an external source by its URL in refs, never in the body text. `[[...]]` outside an inline code span or fenced code block is refused on write.\n"
 )
 
