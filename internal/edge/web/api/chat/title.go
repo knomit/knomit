@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 	"unicode"
@@ -15,12 +16,18 @@ import (
 // A chat's title has two sources (decision, chat review 2026-11-08: auto-title
 // plus rename, chosen over rename-only and over auto-only):
 //
-//   - Auto: after the chat's FIRST COMPLETED turn, the chat's own model is asked
-//     once, with no tools, no thinking and a tight output budget, for a 3-6 word
-//     title (titlePrompt). A usable answer replaces the first-message name; a
-//     failed call or an unusable answer leaves that name. An answer cut off at
-//     the budget counts only when its first line was finished (firstLineEnded). There is no retry: the
-//     attempt is made once per chat (titleTried).
+//   - Auto: once the chat has COMPLETED titleAfterTurns (3) turns, the chat's own
+//     model is asked once, with no tools, no thinking and a tight output budget,
+//     for a 3-6 word title (titlePrompt), from the conversation so far (cut to
+//     titleContextRunes). Not after the first turn: people bind first ("bind to
+//     X") and only then start the real work, so the first turn has nothing to
+//     name. A turn counts only when it finished normally: a turn that errored or
+//     that the person stopped does not. A chat with fewer than three completed
+//     turns never gets an auto-title and keeps its first-message name until it is
+//     renamed. A usable answer replaces the first-message name; a failed call or
+//     an unusable answer leaves that name. An answer cut off at the budget counts
+//     only when its first line was finished (firstLineEnded). There is no retry:
+//     the attempt is made once per chat (titleTried).
 //   - User: PATCH /chats/{id} {"title"} renames the chat and marks it
 //     user-titled, and from then on auto-title never touches it, including an
 //     auto call already in flight when the rename lands.
@@ -31,7 +38,7 @@ import (
 // already carries the row.
 
 // titlePrompt is the auto-title request's instruction, sent as the last user
-// message after the chat's first exchange. Model-facing copy.
+// message after the conversation so far. Model-facing copy (approved verbatim).
 const titlePrompt = "Write a short title for this conversation, 3 to 6 words, that says what it is about. " +
 	"Name the subject, not the steps: leave out setup instructions such as binding to a repository. " +
 	"Reply with the title only, with no quotes and no closing punctuation."
@@ -41,9 +48,15 @@ const (
 	// words in any tokenizer, and no more. Thinking is off (NoThinking), so none
 	// of it is spent on reasoning.
 	titleMaxTokens = 32
-	// titleAnswerRunes is how much of the first answer the request carries:
-	// enough to say what the chat is about, bounded so the call stays small.
-	titleAnswerRunes = 2000
+	// titleAfterTurns is how many turns must complete normally before the one
+	// auto-title call is made.
+	titleAfterTurns = 3
+	// titleContextRunes bounds the conversation the request carries, in total.
+	// Each user message keeps up to titleMessageRunes and goes in first; the
+	// answers share what is left, each up to titleMessageRunes. Three turns at
+	// the caps (3 x 600 + 3 x 600) fit inside it.
+	titleContextRunes = 4000
+	titleMessageRunes = 600
 	// titleTimeout bounds the one call.
 	titleTimeout = 60 * time.Second
 	// titleMaxWords and titleMaxRunes bound what is accepted as a title. An
@@ -85,13 +98,15 @@ func (c *chat) setUserTitle(text string) (string, error) {
 	return t, nil
 }
 
-// maybeAutoTitle starts the auto-title call once per chat, after a turn that
-// completed. turn is that turn's view index (its user item): the call's cost is
-// added to it. It must be called from the turn's goroutine while c.turns still
-// counts it, so the chat's end waits for the call too.
+// maybeAutoTitle counts a turn that completed normally and, at the
+// titleAfterTurns-th, starts the one auto-title call. turn is that turn's view
+// index (its user item): the call's cost is added to it. It must be called from
+// the turn's goroutine while c.turns still counts it, so the chat's end waits
+// for the call too.
 func (c *chat) maybeAutoTitle(turn int) {
 	c.mu.Lock()
-	if c.ended || c.userTitled || c.titleTried || c.m.titleStream == nil {
+	c.turnsDone++
+	if c.turnsDone < titleAfterTurns || c.ended || c.userTitled || c.titleTried || c.m.titleStream == nil {
 		c.mu.Unlock()
 		return
 	}
@@ -108,31 +123,57 @@ func (c *chat) maybeAutoTitle(turn int) {
 	}()
 }
 
-// titleSnapshotLocked is the auto-title request: the turn's user message and
-// the answer's text (cut), then titlePrompt. No tools, no system prompt.
+// titleSnapshotLocked is the auto-title request: the conversation up to and
+// including the turn at view index turn (every user message, and each turn's
+// assistant text), cut to titleContextRunes as the constants say, then
+// titlePrompt. No tools, no system prompt.
 func (c *chat) titleSnapshotLocked(turn int) (llm.Snapshot, bool) {
 	if turn < 0 || turn >= len(c.view) || c.view[turn].Kind != "user" {
 		return llm.Snapshot{}, false
 	}
-	var answer strings.Builder
-	for _, it := range c.view[turn+1:] {
-		if it.Kind == "user" {
+	// The turns: each user message and its answer's text, in order.
+	type exchange struct{ user, answer string }
+	var turns []exchange
+	end := len(c.view)
+	for i := turn + 1; i < len(c.view); i++ {
+		if c.view[i].Kind == "user" {
+			end = i
 			break
 		}
-		if it.Kind == "assistant" && strings.TrimSpace(it.Text) != "" {
-			if answer.Len() > 0 {
-				answer.WriteString("\n\n")
+	}
+	for _, it := range c.view[:end] {
+		switch {
+		case it.Kind == "user":
+			turns = append(turns, exchange{user: it.Text})
+		case it.Kind == "assistant" && strings.TrimSpace(it.Text) != "" && len(turns) > 0:
+			x := &turns[len(turns)-1]
+			if x.answer != "" {
+				x.answer += "\n\n"
 			}
-			answer.WriteString(it.Text)
+			x.answer += it.Text
 		}
+	}
+	// The user messages go in first, then the answers share what is left.
+	left := titleContextRunes
+	for i := range turns {
+		turns[i].user = cutRunes(strings.TrimSpace(turns[i].user), min(titleMessageRunes, max(left, 0)))
+		left -= len([]rune(turns[i].user))
+	}
+	for i := range turns {
+		turns[i].answer = cutRunes(strings.TrimSpace(turns[i].answer), min(titleMessageRunes, max(left, 0)))
+		left -= len([]rune(turns[i].answer))
 	}
 	var s llm.Snapshot
 	entry := func(id string, role llm.Role, text string) llm.Item {
 		return llm.Item{ID: id, Hook: llm.HookConversation, Entry: &llm.Entry{ID: id, Role: role, Blocks: []llm.Block{{Kind: llm.BlockText, Text: text}}}}
 	}
-	s.Hooks[llm.HookConversation] = append(s.Hooks[llm.HookConversation], entry("title-user", llm.RoleUser, c.view[turn].Text))
-	if a := cutRunes(strings.TrimSpace(answer.String()), titleAnswerRunes); a != "" {
-		s.Hooks[llm.HookConversation] = append(s.Hooks[llm.HookConversation], entry("title-answer", llm.RoleAssistant, a))
+	for i, x := range turns {
+		if x.user != "" {
+			s.Hooks[llm.HookConversation] = append(s.Hooks[llm.HookConversation], entry(fmt.Sprintf("title-user-%d", i), llm.RoleUser, x.user))
+		}
+		if x.answer != "" {
+			s.Hooks[llm.HookConversation] = append(s.Hooks[llm.HookConversation], entry(fmt.Sprintf("title-answer-%d", i), llm.RoleAssistant, x.answer))
+		}
 	}
 	t := entry("title-ask", llm.RoleUser, titlePrompt)
 	t.Hook = llm.HookTurn
