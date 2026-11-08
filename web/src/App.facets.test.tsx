@@ -34,6 +34,8 @@ vi.mock('./api', async (importOriginal) => {
     api: {
       listClientSessions: vi.fn(),
       listOAuthPending: vi.fn().mockResolvedValue(null),
+      // The gear opens on Access, which reads the stored secrets.
+      listSecrets: vi.fn().mockResolvedValue([]),
       getFleet: vi.fn().mockRejectedValue(new Error('not in a fleet')), listFleetMembers: vi.fn().mockResolvedValue([]),
       repos: vi.fn(), listLenses: vi.fn(), listArchived: vi.fn(), getAgentBranch: vi.fn(),
       status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),

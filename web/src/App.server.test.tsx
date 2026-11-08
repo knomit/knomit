@@ -110,7 +110,7 @@ const gear = () => screen.getByTestId('server-toggle');
 const tabNames = () => screen.getAllByRole('tab').map(t => t.firstChild?.textContent ?? '');
 async function openServer() {
   await act(async () => { fireEvent.click(gear()); });
-  await screen.findByTestId('logs-facet');
+  await screen.findByTestId('access-page');
 }
 
 beforeEach(() => {
@@ -146,7 +146,8 @@ describe('the gear opens the server pages', () => {
     await waitFor(() => expect(tabNames()).toEqual(['Access', 'Logs']));
     expect(screen.getByRole('tablist', { name: 'Server pages' })).toBeInTheDocument();
     expect(screen.queryByTestId('facet-tabs')).toBeNull();
-    expect(screen.getByTestId('server-tab-logs')).toHaveAttribute('aria-selected', 'true');
+    // The gear opens on the first tab, Access.
+    expect(screen.getByTestId('server-tab-access')).toHaveAttribute('aria-selected', 'true');
     // The Fleet server page is gone (Q1): the fleet is a rail target.
     expect(screen.queryByTestId('server-tab-fleet')).toBeNull();
     expect(screen.queryByTestId('fleet-page')).toBeNull();
@@ -197,14 +198,10 @@ describe('the gear opens the server pages', () => {
     expect(screen.queryByTestId('server-tab-access-badge')).toBeNull();
   });
 
-  it('opens each page in the body: Logs with its toolbar, Access on Secrets, then Authorizations with its queue', async () => {
+  it('opens each page in the body: Access on Secrets first, Authorizations with its queue, then Logs with its toolbar', async () => {
     await primeApi({ oauth: [pending('p1', 'alpha')] });
     await mountApp();
     await openServer();
-    expect(screen.getByTestId('logs-facet')).toBeInTheDocument();
-    expect(screen.getByTestId('facet-toolbar')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId('server-tab-access'));
     expect(await screen.findByTestId('secrets-overview')).toBeInTheDocument();
     expect(screen.getByTestId('access-section-secrets')).toHaveAttribute('aria-current', 'true');
     fireEvent.click(await screen.findByTestId('access-section-auth'));
@@ -212,6 +209,10 @@ describe('the gear opens the server pages', () => {
     const list = await screen.findByTestId('auth-list');
     await waitFor(() => expect(within(list).getAllByTestId('oauth-row-item')).toHaveLength(1));
     expect(within(list).getByTestId('oauth-row-item')).toHaveTextContent('alpha');
+
+    fireEvent.click(screen.getByTestId('server-tab-logs'));
+    expect(await screen.findByTestId('logs-facet')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-toolbar')).toBeInTheDocument();
   });
 });
 
@@ -293,7 +294,7 @@ describe('the keyboard on a server page', () => {
 
     act(() => { fireEvent.keyDown(window, { key: 'Escape' }); });
     await act(async () => { await Promise.resolve(); });
-    expect(screen.getByTestId('logs-facet')).toBeInTheDocument();
+    expect(screen.getByTestId('access-page')).toBeInTheDocument();
     expect(gear()).toHaveAttribute('aria-pressed', 'true');
 
     await act(async () => { fireEvent.click(gear()); });
@@ -388,6 +389,7 @@ describe('a crashed server page', () => {
     await mountApp();
     logsCrash.on = true;
     await act(async () => { fireEvent.click(gear()); });
+    await act(async () => { fireEvent.click(screen.getByTestId('server-tab-logs')); });
     const card = await screen.findByTestId('panel-error');
     expect(card).toHaveTextContent('The server pages hit an error');
 

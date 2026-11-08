@@ -298,7 +298,7 @@ describe('TopBar — the gear', () => {
     const plain = screen.getByTestId('server-toggle');
     expect(plain).toHaveAttribute('aria-pressed', 'false');
     expect(plain).not.toHaveStyle({ background: '#1a231d' });
-    expect(plain.getAttribute('title')).toBe('Server: logs and access');
+    expect(plain.getAttribute('title')).toBe('Server: access and logs');
     const glyph = plain.innerHTML;
     unmount();
     render(bar({ server: { page: 'logs', pages: ['logs', 'access'], onPage: vi.fn(), authCount: null } }));

@@ -20,7 +20,7 @@ vi.mock('./api', async (importOriginal) => {
       status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),
       search: vi.fn(), stats: vi.fn(), activity: vi.fn(), explain: vi.fn(), completions: vi.fn(),
       fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(), listRepoCreates: vi.fn(),
-      listOAuthPending: vi.fn(), getFleet: vi.fn(), listFleetMembers: vi.fn(),
+      listOAuthPending: vi.fn(), listSecrets: vi.fn(), getFleet: vi.fn(), listFleetMembers: vi.fn(),
     },
   };
 });
@@ -34,6 +34,8 @@ async function primeEmptyApi({ readOnly = false } = {}) {
   m.listArchived.mockResolvedValue([]);
   m.listRepoCreates.mockResolvedValue([]);
   m.listOAuthPending.mockResolvedValue(null);
+  // The gear opens on Access, which reads the stored secrets.
+  m.listSecrets.mockResolvedValue([]);
   m.getFleet.mockRejectedValue(new Error('not in a fleet'));
   m.listFleetMembers.mockResolvedValue([]);
   m.getAgentBranch.mockResolvedValue('machine/test');

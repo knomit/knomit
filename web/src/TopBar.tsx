@@ -161,7 +161,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
   };
   // Where the gear returns to from the server pages: the target under them,
   // named in its tooltip so the destination is one hover away.
-  const gearTitle = held ? heldReason : serverOpen ? `Back to ${target.name}` : 'Server: logs and access';
+  const gearTitle = held ? heldReason : serverOpen ? `Back to ${target.name}` : 'Server: access and logs';
   const tabStyle = (on: boolean, disabled: boolean): CSSProperties => ({
     display: 'flex', alignItems: 'center', gap: 6,
     padding: '0 11px', fontSize: 12, border: 'none', borderRadius: 0, background: 'none',

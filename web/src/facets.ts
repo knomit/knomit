@@ -325,11 +325,10 @@ export function viewReducer(s: ViewState, a: ViewAction): ViewState {
       return { ...landed, facet: 'settings', lastFacet: s.lastFacet ?? s.facet };
     }
     case 'TOGGLE_SERVER':
-      // Opening lands on Logs (the second tab: Access is first, but Logs is
-      // what the gear has always opened on). Closing changes nothing else:
+      // Opening lands on Access, the first page. Closing changes nothing else:
       // the target and its facet were never left. (App offers no gear when
       // serverPagesFor gives no page.)
-      return { ...s, server: s.server === null ? 'logs' : null };
+      return { ...s, server: s.server === null ? 'access' : null };
     case 'SET_SERVER_PAGE':
       return s.server === a.page ? s : { ...s, server: a.page };
     case 'SET_FOCUS':

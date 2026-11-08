@@ -343,10 +343,11 @@ describe('the server pages', () => {
   const ops = { kind: 'repo' as const, repo: 'ops-kb' };
   const onActivity: ViewState = { ...initView(), facet: 'activity', lastFacet: null, server: null };
 
-  it('the gear opens them on Logs and closes them, leaving the facet, the pin and the draft untouched', () => {
+  it('the gear opens them on Access, the first page, and closes them, leaving the facet, the pin and the draft untouched', () => {
     const start: ViewState = { ...onActivity, pinned: { kind: 'archived', id: 'a1' }, draft: 'lens', draftShown: false };
     const open = viewReducer(start, { type: 'TOGGLE_SERVER' });
-    expect(open.server).toBe('logs');
+    expect(open.server).toBe('access');
+    expect(open.server).toBe(serverPagesFor(false)[0]);
     const closed = viewReducer({ ...open, server: 'logs' }, { type: 'TOGGLE_SERVER' });
     expect(closed).toEqual({ ...start, server: null });
   });
