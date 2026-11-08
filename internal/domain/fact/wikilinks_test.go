@@ -7,6 +7,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// approvedWikiLinkTail is the shared tail of both refusals as the user
+// approved it (2026-11-08).
+const approvedWikiLinkTail = "knomit has no link syntax in a body: it neither resolves nor renders [[...]], and every reference, to another fact or to an external source, goes in refs. Put the cited fact's path (kb/<topic>/<category>/<id>.md, as knomit_query returned it) in refs, and keep the body plain text. To show [[...]] literally, as in TOML or a regex, put it in an inline code span or a fenced code block."
+
 func wikiTexts(body string) []string {
 	var out []string
 	for _, l := range WikiLinks(body) {
@@ -64,6 +68,9 @@ func TestCheckWikiLinks_ErrorSaysWhatToSend(t *testing.T) {
 	require.Contains(t, msg, "kb/<topic>/<category>/<id>.md")
 	require.Contains(t, msg, "keep the body plain text")
 	require.Contains(t, msg, "inline code span or a fenced code block", "the error must name the code exemption")
+	require.Equal(t, "wiki link in fact body: the body contains [[f6db3a49]] (line 2). "+approvedWikiLinkTail, msg,
+		"the approved wording (2026-11-08), byte for byte")
+	require.Contains(t, msg, "external source")
 }
 
 func TestCheckWikiLinks_ListsAtMostThree(t *testing.T) {
@@ -89,6 +96,9 @@ func TestCheckWikiLinkEdit_NoMoreThanBefore(t *testing.T) {
 	require.Contains(t, err.Error(), "so the body would hold 3 [[...]] outside code where it holds 2 now")
 	require.Contains(t, err.Error(), "none may be added")
 	require.Contains(t, err.Error(), "refs")
+
+	require.Equal(t, "wiki link in fact body: the edit adds [[new]] (line 1), so the body would hold 3 [[...]] outside code where it holds 2 now. Ones the body already has may stay or be removed, but none may be added. "+approvedWikiLinkTail,
+		err.Error(), "the approved wording (2026-11-08), byte for byte")
 
 	err = CheckWikiLinkEdit("clean", "clean [[x]]")
 	require.Error(t, err, "a body with none may not gain one")

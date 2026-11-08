@@ -130,29 +130,39 @@ func TestUpdate_ArtifactMayGainWikiLinks(t *testing.T) {
 	require.False(t, res.IsError, resultText(t, res))
 }
 
-// The rule is in every description an agent reads before writing a body.
+// The rule is in every description an agent reads before writing a body,
+// in the wording the user approved (2026-11-08), byte for byte.
+const (
+	approvedLearnBodyTail = "There is no link syntax in a body: every reference, whether another fact's path or an external source such as a URL, goes in refs. `[[...]]` outside an inline code span or fenced code block is refused."
+	approvedUpdateBody    = "New body text. There is no link syntax in a body: every reference, whether another fact's path or an external source such as a URL, goes in refs. An edit that adds `[[...]]` outside an inline code span or fenced code block is refused; ones the body already has may stay or be removed."
+	approvedOpsTail       = "The body's leading and trailing whitespace is not stored. An edit that leaves an unclosed ``` fence in a body whose fences were balanced is refused, and so is one that adds `[[...]]` outside code: every reference, to a fact or to an external source, goes in refs."
+	approvedInstructions  = "- **All references go in refs** — a body has no link syntax. Cite another fact by its path and an external source by its URL in refs, never in the body text. `[[...]]` outside an inline code span or fenced code block is refused on write.\n"
+)
+
 func TestWikiLinkRule_InServedDescriptions(t *testing.T) {
 	learnBody := learnToolSchemaProperties()["body"].(map[string]any)["description"].(string)
-	require.Contains(t, learnBody, "There is no inline link syntax: link another fact only by putting its path in refs.")
-	require.Contains(t, learnBody, "`[[...]]` outside an inline code span or fenced code block is refused.")
+	require.True(t, strings.HasSuffix(learnBody, " "+approvedLearnBodyTail), learnBody)
+	require.True(t, strings.HasPrefix(learnBody, "Fact body in natural language. State compound conditions in full"), "the text before the rule is unchanged")
+	require.Contains(t, learnBody, "external source")
 
 	updBody := updateToolSchemaProperties()["body"].(map[string]any)["description"].(string)
-	require.Contains(t, updBody, "There is no inline link syntax: link another fact only by putting its path in refs.")
-	require.Contains(t, updBody, "An edit that adds `[[...]]` outside an inline code span or fenced code block is refused")
+	require.Equal(t, approvedUpdateBody, updBody)
+	require.Contains(t, updBody, "external source")
 
-	require.Contains(t, opsDescription, "one that adds `[[...]]` outside code: link facts through refs.")
+	require.True(t, strings.HasSuffix(opsDescription, "\n\n"+approvedOpsTail), opsDescription)
+	require.Contains(t, opsDescription, "external source")
 
 	// The served tools/list bytes carry the same text.
-	raw, err := json.Marshal(updateTool())
-	require.NoError(t, err)
-	require.Contains(t, string(raw), "adds `[[...]]` outside code")
-	raw, err = json.Marshal(learnTool())
-	require.NoError(t, err)
-	require.Contains(t, string(raw), "outside an inline code span or fenced code block is refused")
+	for _, tool := range []any{learnTool(), updateTool()} {
+		raw, err := json.Marshal(tool)
+		require.NoError(t, err)
+		require.Contains(t, string(raw), "external source")
+	}
 }
 
 func TestWikiLinkRule_InServerInstructions(t *testing.T) {
 	text := ProfileInstructions("code", "kb", nil)
-	require.True(t, strings.Contains(text, "**Link only through refs**"), "the Writing Fact Bodies section must state the rule")
-	require.Contains(t, text, "`[[...]]` outside an inline code span or fenced code block is refused on write")
+	require.Contains(t, text, "- **Anchor high-confidence rules in refs**")
+	require.Contains(t, text, approvedInstructions, "the Writing Fact Bodies section must state the rule, as approved")
+	require.Contains(t, text, "external source")
 }

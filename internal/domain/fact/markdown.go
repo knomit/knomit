@@ -84,7 +84,7 @@ func WikiLinks(body string) []WikiLink {
 var ErrWikiLinkInBody = errors.New("wiki link in fact body")
 
 // wikiLinkAdvice is the part of every refusal that says what to send instead.
-const wikiLinkAdvice = "knomit has no inline link syntax: it neither resolves nor renders [[...]], and a fact links to another only through refs. " +
+const wikiLinkAdvice = "knomit has no link syntax in a body: it neither resolves nor renders [[...]], and every reference, to another fact or to an external source, goes in refs. " +
 	"Put the cited fact's path (kb/<topic>/<category>/<id>.md, as knomit_query returned it) in refs, and keep the body plain text. " +
 	"To show [[...]] literally, as in TOML or a regex, put it in an inline code span or a fenced code block."
 

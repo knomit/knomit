@@ -151,7 +151,7 @@ func learnToolSchemaProperties() map[string]any {
 // bodyLinkRule opens the link rule in the body descriptions of knomit_learn
 // and knomit_update; each ends it with what that tool refuses
 // (fact.CheckWikiLinks, fact.CheckWikiLinkEdit).
-const bodyLinkRule = "There is no inline link syntax: link another fact only by putting its path in refs. "
+const bodyLinkRule = "There is no link syntax in a body: every reference, whether another fact's path or an external source such as a URL, goes in refs. "
 
 // learnFactInput is the JSON shape of a single fact in the input array.
 type learnFactInput struct {
