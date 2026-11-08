@@ -75,10 +75,11 @@ describe('TargetRail', () => {
     expect(screen.queryByTestId('rail-lens-dev')).toBeNull();
   });
 
-  it('labels the search "Find repository or lens" and names its shortcut', () => {
+  it('labels the search "Search" and names its shortcut', () => {
     renderRail();
     const input = screen.getByTestId('rail-search') as HTMLInputElement;
-    expect(input.placeholder).toBe('Find repository or lens');
+    expect(input.placeholder).toBe('Search');
+    expect(input.getAttribute('aria-label')).toBe('Search');
     expect(screen.getByTestId('target-rail').textContent).toContain('⌘K');
   });
 

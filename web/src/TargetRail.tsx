@@ -180,8 +180,8 @@ export function TargetRail({
           type="text"
           value={query}
           onChange={e => setQuery(e.target.value)}
-          placeholder="Find repository or lens"
-          aria-label="Find repository or lens"
+          placeholder="Search"
+          aria-label="Search"
           spellCheck={false}
           autoComplete="off"
           style={searchInput}
