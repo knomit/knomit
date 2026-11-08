@@ -56,6 +56,19 @@ describe('ConnectionsPanel', () => {
     expect(screen.getByTestId('panel-retracted')).toHaveTextContent('1 retracted');
   });
 
+  // A retracted row is followable (user ruling 2026-11-08): the mark says the
+  // fact is gone NOW, and a click opens it at its own commit, where it exists.
+  // It keeps the retracted look.
+  it('a retracted row keeps its look and hops to its own commit', () => {
+    const onHop = vi.fn();
+    render(<ConnectionsPanel {...base} open="in" onHop={onHop} incoming={[group('kb/gone.md', 'Gone', true)]} />);
+    const title = screen.getByText('Gone');
+    expect(title).toHaveStyle({ textDecoration: 'line-through' });
+    expect(screen.getByText('retracted')).toBeInTheDocument();
+    fireEvent.click(title);
+    expect(onHop).toHaveBeenCalledExactlyOnceWith('kb/gone.md', 'kb/gone.md-c');
+  });
+
   // Closed it must be truly gone: transparent AND visibility:hidden, so it can
   // neither paint over the header nor be reached by a screen reader, and
   // pointerEvents:'none' so it cannot swallow clicks aimed at the fact body.

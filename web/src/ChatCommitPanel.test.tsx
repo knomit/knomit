@@ -110,8 +110,8 @@ describe('a commit chip opens the commit in the side panel', () => {
     expect(fact).toHaveTextContent('THE OLD TEXT');
     expect(fact).not.toHaveTextContent('THE NEW TEXT');
     expect(fx.calls.some(c => c.route === `GET ${REPO}/facts/${CHANGED}`)).toBe(false);
-    // The band says which version: the second of three, not v3, on an anchored date.
-    expect(await within(fact).findByTestId('version-walker')).toHaveTextContent('v2');
+    // The band's history button is there, and counts nothing (no vN).
+    expect((await within(fact).findByTestId('version-walker')).textContent).toBe('↺');
     // The edge counts are this commit's too.
     await waitFor(() => expect(within(fact).getByTestId('connections-in')).toHaveTextContent('2'));
     expect(within(fact).getByTestId('connections-out')).toHaveTextContent('1');
@@ -163,8 +163,8 @@ describe('a commit chip opens the commit in the side panel', () => {
     expect(urls().filter(u => u.includes(`/commits/${FULL}/facts/${GONE}/`) && /incoming|outgoing/.test(u)).every(u => u.endsWith('?fallback=before'))).toBe(true);
     // Browse's own badge names the commit that retracted it.
     expect(within(fact).getByTestId('retracted-version-badge')).toHaveTextContent('retracted at abc1234');
-    // The version is the one on screen, the one before the retraction.
-    expect(await within(fact).findByTestId('version-walker')).toHaveTextContent('v1');
+    // The history button is there, a bare ↺ (no vN).
+    expect((await within(fact).findByTestId('version-walker')).textContent).toBe('↺');
   });
 
   it('a commit with no facts shows the commit and an empty list, whatever else the server listed, and no error', async () => {

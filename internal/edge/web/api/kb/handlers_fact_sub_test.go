@@ -35,3 +35,24 @@ func TestBuildGraphRefItems_AnchorsToSourceCommit(t *testing.T) {
 		t.Errorf("got[1] self: %q, want %q", got, wantHref1)
 	}
 }
+
+// A retracted entry is linked at its own commit like a live one: the deleted
+// mark is the fact's state NOW, the link how a reader still follows it. Only an
+// entry with no commit has no link. Sabotage: restore the `!ref.Deleted` gate.
+func TestBuildGraphRefItems_RetractedEntryIsLinked(t *testing.T) {
+	b := hal.URLBuilder{Base: "https://k.example.com"}
+	got := buildGraphRefItems(b, "alpha", hal.Anchor{Branch: "main"}, []index.RefSummary{
+		{Path: "kb/gone.md", Title: "Gone", Commit: "77aa", Deleted: true},
+		{Path: "kb/nocommit.md", Title: "No commit", Deleted: true},
+	})
+	if !got[0].Deleted {
+		t.Fatal("the deleted mark is kept")
+	}
+	want := "https://k.example.com/repos/alpha/branches/main/commits/77aa/facts/kb/gone.md"
+	if h := got[0].Links["self"].Href; h != want {
+		t.Errorf("retracted self: %q, want %q", h, want)
+	}
+	if _, ok := got[1].Links["self"]; ok {
+		t.Errorf("an entry with no commit has no link: %v", got[1].Links)
+	}
+}

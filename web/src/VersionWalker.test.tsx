@@ -16,10 +16,25 @@ beforeEach(() => {
   ]});
 });
 
-it('shows the current version and opens history at the newest commit on click', async () => {
+// A jump point to history, nothing more (user, 2026-11-08): no "vN" count, the
+// ↺ glyph as plain text (not the ⏱ that macOS draws as a colour emoji), named by
+// aria-label and title. SABOTAGE: render a count, or drop the aria-label.
+it('is a bare ↺ named "Open history", with no count', async () => {
+  render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" onScrub={vi.fn()} />);
+  const btn = await screen.findByTestId('version-walker');
+  expect(btn.textContent).toBe('↺');
+  expect(btn).not.toHaveTextContent(/v\d/);
+  expect(btn).toHaveAccessibleName('Open history');
+  // Pinned as attributes: title alone also names the button, so the name
+  // check above would pass without the aria-label.
+  expect(btn).toHaveAttribute('aria-label', 'Open history');
+  expect(btn).toHaveAttribute('title', 'Open history');
+});
+
+it('opens history at the newest commit on click', async () => {
   const onScrub = vi.fn();
-  render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" currentCommit="v3head" onScrub={onScrub} />);
-  await waitFor(() => screen.getByText(/v3/i));
+  render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" onScrub={onScrub} />);
+  await screen.findByTestId('version-walker');
   // Single control — no prev/next stepper.
   expect(screen.queryByTestId('walker-prev')).toBeNull();
   expect(screen.queryByTestId('walker-next')).toBeNull();
@@ -29,35 +44,24 @@ it('shows the current version and opens history at the newest commit on click', 
   expect(onScrub).toHaveBeenCalledWith('v3head');
 });
 
-it('positions on the newest version when currentCommit is the live branch tip', async () => {
-  // In LIVE mode the HEAD fact read returns as_of.commit = the branch tip,
-  // which is not one of the fact's own version commits. The control must still
-  // label the newest version and open history at it.
-  const onScrub = vi.fn();
-  render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" currentCommit="branchTipNotAVersion" onScrub={onScrub} />);
-  await waitFor(() => screen.getByText(/v3/i));   // newest position
-  fireEvent.click(screen.getByTestId('version-walker'));
-  expect(onScrub).toHaveBeenCalledWith('v3head');
-});
-
 it('renders for a single-version fact and opens its history', async () => {
   (api.factCommits as any).mockResolvedValue({ entries: [{ commit: 'only', date: '', message: '' }] });
   const onScrub = vi.fn();
-  render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" currentCommit="only" onScrub={onScrub} />);
+  render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" onScrub={onScrub} />);
   await waitFor(() => screen.getByTestId('version-walker'));
   fireEvent.click(screen.getByTestId('version-walker'));
   expect(onScrub).toHaveBeenCalledWith('only');
 });
 
 it('suppresses the focus ring so it does not look "selected" after click', async () => {
-  render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" currentCommit="v3head" onScrub={vi.fn()} />);
+  render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" onScrub={vi.fn()} />);
   const btn = await screen.findByTestId('version-walker');
   expect(btn.style.outline).toBe('none');
 });
 
 it('renders nothing when the fact has no versions', async () => {
   (api.factCommits as any).mockResolvedValue({ entries: [] });
-  const { container } = render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" currentCommit="x" onScrub={vi.fn()} />);
+  const { container } = render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" onScrub={vi.fn()} />);
   await waitFor(() => expect(api.factCommits).toHaveBeenCalled());
   expect(container.querySelector('[data-testid="version-walker"]')).toBeNull();
 });

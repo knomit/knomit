@@ -192,6 +192,34 @@ describe('a fact in Browse and in the chat panel', () => {
     expect(window.location.search).toBe(before);
   });
 
+  // At the commit that retracted the fact (a version the timeline lists) the
+  // view shows its last version (fallback, as_of = OLDER). Materialize reads
+  // THAT version: at the anchor the fact does not exist and the read 404s.
+  // The page URL is not given the other commit: Browse writes only the
+  // materialize options, and its anchor stays the retract commit.
+  // SABOTAGE: materialize at the anchor (AT).
+  it.each([
+    ['Browse', () => inBrowse(AT)],
+    ['the panel', () => inPanel({ commit: AT })],
+  ])('in %s, materialize at a retract commit reads the last live version', async (_where, mount) => {
+    const last = { ...FACT, body: 'WHAT IT SAID', as_of: { commit: OLDER, date: '2026-09-01T10:00:00Z' } };
+    const fx = stubFleetFetch({ ...common, ...routes(`${BRANCH}/commits/${AT}`, last) });
+    const v = within(await settled(mount()));
+    fireEvent.click(v.getByTestId('materialize-btn'));
+    const pages = `GET ${BRANCH}/commits/${OLDER}/facts/${PATH}/materialize/pages`;
+    await waitFor(() => expect(fx.calls.map(c => c.route)).toContain(pages));
+    expect(fx.calls.some(c => c.route.includes(`/commits/${AT}/facts/${PATH}/materialize`))).toBe(false);
+    expect(window.location.search).not.toContain(OLDER);
+  });
+
+  it('at a commit where the fact exists, materialize reads at that commit', async () => {
+    const at = { ...FACT, as_of: { commit: AT, date: '2026-10-01T10:00:00Z' } };
+    const fx = stubFleetFetch({ ...common, ...routes(`${BRANCH}/commits/${AT}`, at) });
+    const b = within(await settled(inBrowse(AT)));
+    fireEvent.click(b.getByTestId('materialize-btn'));
+    await waitFor(() => expect(fx.calls.map(c => c.route)).toContain(`GET ${BRANCH}/commits/${AT}/facts/${PATH}/materialize/pages`));
+  });
+
   it('Browse\'s materialize still writes the URL', async () => {
     stubFleetFetch({ ...common, ...routes(BRANCH, { ...FACT, as_of: { commit: NEWEST, date: '2026-11-01T10:00:00Z' } }) });
     const b = within(await settled(inBrowse()));

@@ -40,7 +40,7 @@ import (
 //     anchor answers the other way at both anchors;
 //   - incoming vs outgoing: the two sets of every version are disjoint;
 //   - per item: every collection the handlers emit has at least two items on
-//     each path of the item loop (live, and retracted with no self link), each
+//     each path of the item loop (live, and retracted), each
 //     with its own path, title, type and commit, and on E no item's commit is
 //     the request's anchor.
 const (
@@ -175,8 +175,8 @@ func decodeRefs(t *testing.T, rec *httptest.ResponseRecorder) refsBody {
 
 // requireRefs checks body's items, in order, against want: each item's own
 // path, title, type, commit and deleted flag, a committed_at, and a self link
-// pinned to the item's OWN commit under branchPrefix (none for a retracted
-// item). commits resolves want's step names.
+// pinned to the item's OWN commit under branchPrefix (a retracted item
+// included: the fixture moves nothing). commits resolves want's step names.
 func requireRefs(t *testing.T, body refsBody, commits map[string]string, branchPrefix string, want ...wantRef) {
 	t.Helper()
 	require.Equal(t, len(want), body.Count, "count")
@@ -191,10 +191,8 @@ func requireRefs(t *testing.T, body refsBody, commits map[string]string, branchP
 		require.Equal(t, commit, got.Commit, "item %d commit (%s)", i, w.step)
 		require.Equal(t, w.deleted, got.Deleted, "item %d deleted", i)
 		require.NotZero(t, got.CommittedAt, "item %d committed_at", i)
-		if w.deleted {
-			require.NotContains(t, got.Links, "self", "item %d: a retracted item has no self link", i)
-			continue
-		}
+		// A retracted item is linked too, at its own commit, where it exists:
+		// "deleted" says it is gone NOW, not that it cannot be followed.
 		require.Equal(t, branchPrefix+"/commits/"+commit+"/facts/"+w.path,
 			got.Links["self"].Href, "item %d self link", i)
 	}

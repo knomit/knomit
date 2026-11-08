@@ -190,7 +190,7 @@ export function FactActions({ fact, histAnchor, onScrub, onRetract, readOnly = f
               // WHEN THIS VERSION OF THE FACT WAS COMMITTED — not the anchor's
               // date. It sits here, left of the control strip, for two reasons:
               // the band never scrolls, so it survives a long fact; and it lands
-              // beside the version chip, so "v4 · 3d ago" reads as one
+              // beside the history button (↺), so the two read together as one
               // statement. Deliberately NOT inside the strip — every cell in
               // there is a control, and this is a readout.
               //
@@ -221,8 +221,8 @@ export function FactActions({ fact, histAnchor, onScrub, onRetract, readOnly = f
               into history and rotates the left rail into a timeline, and it
               removes itself while its own commits load and on a fact with no
               recorded versions — over here it can come and go without leaving
-              a hole, beside the date it is read with, which is where
-              "v2 · 3d ago" reads as one statement.
+              a hole, beside the date it is read with. (It carried a "vN"
+              count until 2026-11-08; it is now a bare ↺, see VersionWalker.)
 
               This separation used to be carried by a border drawn around the
               openers. The border is gone (nothing else in the fact's chrome
@@ -233,7 +233,6 @@ export function FactActions({ fact, histAnchor, onScrub, onRetract, readOnly = f
                 repo={histAnchor.repo}
                 branch={histAnchor.branch}
                 factPath={histAnchor.path}
-                currentCommit={fact.commit_hash}
                 onScrub={onScrub ?? (() => {})}
               />
             )}

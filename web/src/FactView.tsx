@@ -227,6 +227,20 @@ function ConfirmModal({ message, onConfirm, onCancel }: {
   );
 }
 
+/**
+ * The commit to materialize the shown fact at: the anchor, unless the fact
+ * does not exist there. At the commit that retracted it (a version the
+ * timeline lists) the anchored read used ?fallback=before and returned the
+ * last live version, whose commit (as_of.commit → commit_hash) differs from
+ * the anchor; materializing at the anchor would ask for a fact that is not
+ * there. A read that did not fall back answers with the anchor itself, so this
+ * is the anchor everywhere else. Live (no anchor): the branch tip.
+ */
+function materializeCommit(anchorCommit: string | null | undefined, fact: Pick<Fact, 'commit_hash'>): string | undefined {
+  if (!anchorCommit) return undefined;
+  return fact.commit_hash || anchorCommit;
+}
+
 const EMPTY_REF_COMMITS: Map<string, string> = new Map();
 // Stable identities, so a default does not defeat the memo with a fresh array.
 const EMPTY_EDGES: RefGroup[] = [];
@@ -617,7 +631,7 @@ export function FactView({ reading, dispatch, onScrub, onHopRef, onHopEdge, repo
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
         <MaterializeView
-          target={{ repo: anchor.repo, branch: anchor.branch, path: anchor.path, commit: anchorCommit ?? undefined }}
+          target={{ repo: anchor.repo, branch: anchor.branch, path: anchor.path, commit: materializeCommit(anchorCommit, fact) }}
           title={fact.title || fact.path}
           options={mat.options}
           onOptionsChange={options => setMat(m => ({ ...m, options }))}

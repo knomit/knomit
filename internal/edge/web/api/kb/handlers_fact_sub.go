@@ -270,6 +270,21 @@ func handleFactOutgoing(b hal.URLBuilder, ri *repos.RepoInstance, repoName, bran
 // item's _links.self is anchored to the entry's own commit (incoming → the
 // source's commit; outgoing → the target's commit) so callers can navigate
 // directly to the version that produced or received the ref-event.
+//
+// A RETRACTED entry (Deleted) is linked too. Its mark says the fact does not
+// exist NOW; the link is how a reader still follows it (user ruling
+// 2026-11-08). The entry's commit is one where its fact exists, in both
+// directions, so the link needs no fallback:
+//   - incoming: IncomingAtCommit reports a commit of THIS branch at which the
+//     row's path holds the citing blob (the edge's source_commit, else the
+//     branch's commit for it now, else the latest in its history), so a
+//     renamed citer is not pinned to the commit that wrote the blob at its
+//     old path;
+//   - outgoing: the target_commit is resolveTargetCommit's
+//     ResolveActiveCommitForPath, the target's last added/modified commit at
+//     or before the citer's commit, never a deletion.
+//
+// An entry with no commit has no link.
 func buildGraphRefItems(b hal.URLBuilder, repoName string, a hal.Anchor, refs []index.RefSummary) []graphRefEntry {
 	items := make([]graphRefEntry, 0, len(refs))
 	for _, ref := range refs {
@@ -281,7 +296,7 @@ func buildGraphRefItems(b hal.URLBuilder, repoName string, a hal.Anchor, refs []
 			CommittedAt: ref.CommittedAt,
 			Deleted:     ref.Deleted,
 		}
-		if !ref.Deleted {
+		if ref.Commit != "" {
 			anchor := hal.Anchor{Branch: a.Branch, Commit: ref.Commit}
 			item.Links = hal.LinkMap{"self": {Href: b.Fact(repoName, anchor, ref.Path)}}
 		}
