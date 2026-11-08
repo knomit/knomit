@@ -190,8 +190,8 @@ func TestHandleCommit_Shared_RefusedAttachKeepsClone(t *testing.T) {
 	f.sess.mu.Unlock()
 
 	rec := postCommit(t, f.s, f.sess.ID)
-	if rec.Code == http.StatusOK || rec.Code == http.StatusAccepted {
-		t.Fatalf("the attach must be refused; got %d, body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("the attach must be refused as 400 Origin not allowed; got %d, body=%s", rec.Code, rec.Body.String())
 	}
 	state, after := sessSnapshot(f.sess)
 	if state != stateApplied || after == nil || after != before {

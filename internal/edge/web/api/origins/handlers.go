@@ -25,6 +25,7 @@ import (
 	"knomit/internal/engine/store"
 	"knomit/internal/engine/store/merge"
 	"knomit/internal/engine/store/remotesync"
+	"knomit/internal/foundation/pki"
 )
 
 // createSessionRequest is the expected JSON body for POST /origin/session.
@@ -1279,7 +1280,15 @@ func writeCommitProblem(w http.ResponseWriter, r *http.Request, b hal.URLBuilder
 		hal.WriteProblem(w, http.StatusBadRequest, "Origin not allowed", err.Error(), r.URL.Path)
 	case errors.Is(err, repos.ErrRegistryUnavailable):
 		hal.WriteProblem(w, http.StatusServiceUnavailable, "Registry unavailable", err.Error(), r.URL.Path)
+	case errors.Is(err, repos.ErrPeerCredential), errors.Is(err, repos.ErrCertNotAnInput),
+		errors.Is(err, pki.ErrUnsupportedOriginScheme), errors.Is(err, knomitfact.ErrSymlinkNotFollowed):
+		// The client's input (a credential for a fleet peer, a chosen cert
+		// method, a URL scheme) or the incoming store's content (a symlinked
+		// ontology) is refused; retrying the same input cannot succeed.
+		hal.WriteProblem(w, http.StatusUnprocessableEntity, "Origin refused", err.Error(), r.URL.Path)
 	default:
+		// A genuine failure of ours (reading the incoming store's identity, a
+		// probe, the registry's store): the commit changed nothing.
 		hal.WriteProblem(w, http.StatusInternalServerError, "Commit failed", err.Error(), r.URL.Path)
 	}
 }
