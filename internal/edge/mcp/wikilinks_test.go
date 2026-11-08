@@ -88,9 +88,9 @@ func TestUpdate_WikiLinkEditRule_FullBody(t *testing.T) {
 	isErr, msg = call(bodyArgs("Legacy, reworded: see [[a1b2c3d4]].\n\nAlso [[some-slug]]."))
 	require.False(t, isErr, "keeping existing ones must be accepted: "+msg)
 
-	isErr, msg = call(bodyArgs("Legacy, cleaned: see the fact in refs."))
+	isErr, msg = call(bodyArgs("Legacy, reworded: see the fact in refs."))
 	require.False(t, isErr, "removing them must be accepted: "+msg)
-	require.Equal(t, "Legacy, cleaned: see the fact in refs.", body())
+	require.Equal(t, "Legacy, reworded: see the fact in refs.", body())
 }
 
 func TestUpdate_WikiLinkEditRule_Ops(t *testing.T) {

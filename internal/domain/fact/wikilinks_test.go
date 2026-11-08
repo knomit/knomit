@@ -78,7 +78,7 @@ func TestCheckWikiLinkEdit_NoMoreThanBefore(t *testing.T) {
 
 	require.NoError(t, CheckWikiLinkEdit(legacy, legacy+"\n\nmore prose"), "keeping existing ones is allowed")
 	require.NoError(t, CheckWikiLinkEdit(legacy, "old and [[slug]]"), "removing one is allowed")
-	require.NoError(t, CheckWikiLinkEdit(legacy, "all gone"), "the cleanup is allowed")
+	require.NoError(t, CheckWikiLinkEdit(legacy, "all gone"), "an edit that removes all of them is allowed")
 	require.NoError(t, CheckWikiLinkEdit("a", "a\n\n```\n[[x]]\n```"), "adding one in code is allowed")
 
 	err := CheckWikiLinkEdit(legacy, legacy+" plus [[new]]")

@@ -63,7 +63,7 @@ func TestFactPut_WikiLinkEditRule(t *testing.T) {
 	seedDatedFactBody(t, ri, path, "legacy [[a1b2c3d4]]")
 	rec = put(path, "legacy, reworded [[a1b2c3d4]]")
 	require.Equal(t, http.StatusOK, rec.Code, "keeping an existing one is allowed: "+rec.Body.String())
-	rec = put(path, "legacy, cleaned")
+	rec = put(path, "legacy, reworded without it")
 	require.Equal(t, http.StatusOK, rec.Code, "removing it is allowed: "+rec.Body.String())
 
 	rec = put("kb/technology/dated/fresh.md", "fresh [[y]]")
