@@ -89,7 +89,9 @@ describe('ChatSidePanel', () => {
     expect(screen.getByTestId('fact-band-path')).toHaveTextContent('kb/decisions/web/one.md');
     await waitFor(() => expect(screen.getByTestId('connections-in')).toHaveTextContent('2'));
     expect(screen.getByTestId('connections-out')).toHaveTextContent('1');
-    await waitFor(() => expect(screen.getByTestId('version-walker')).toHaveTextContent('v3'));
+    // The history button counts nothing: a bare ↺, named by its aria-label.
+    await waitFor(() => expect(screen.getByTestId('version-walker').textContent).toBe('↺'));
+    expect(screen.getByTestId('version-walker')).toHaveAccessibleName('Open history');
     expect(screen.getByTestId('fact-body').querySelector('strong')).toHaveTextContent('SSE');
     // The band is the chrome: there is no row above it, and the × sits in its actions.
     expect(screen.queryByTestId('chat-panel-header')).toBeNull();
@@ -202,7 +204,9 @@ describe('ChatSidePanel', () => {
   it('materialize is Browse\'s control and view, at the commit the fact was read at, and its back returns to the fact', async () => {
     const FULL = 'abc1234' + 'f'.repeat(33);
     const AT = '/api/v1/repos/r1/branches/main/commits/' + FULL + '/facts/kb/decisions/web/one.md';
-    stubFleetFetch({ ...routes(), [`GET ${AT}`]: { body: FACT } });
+    // An anchored read that did not fall back answers with the anchor as its
+    // commit (readFact: head = the anchor), as the server does.
+    stubFleetFetch({ ...routes(), [`GET ${AT}`]: { body: { ...FACT, commit_hash: FULL } } });
     render(<Harness />);
     act(() => api.open({ ...F1, commit: FULL } as PanelEntry));
     await screen.findByTestId('fact-title');
