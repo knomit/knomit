@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Dispatch, ReactNode } from 'react';
+import type { Dispatch } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Fact, FactRef } from './api';
 import type { Action } from './state';
@@ -379,15 +379,6 @@ export function FactBody({ fact, dispatch, onRefClick, repoNames = NO_REPO_NAMES
         </div>
       )}
     </>
-  );
-}
-
-export function StatBox({ label, value, color }: { label: string; value: ReactNode; color: string }) {
-  return (
-    <div style={{ borderLeft: `3px solid ${color}`, padding: '10px 16px', background: '#1a1a2a', borderRadius: '0 6px 6px 0', minWidth: 90 }}>
-      <div style={{ fontSize: 10, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>{label}</div>
-      <div style={{ fontFamily: 'var(--k-font-display)', fontSize: 22, fontWeight: 600, color: '#eee', letterSpacing: '-0.01em', marginTop: 2 }}>{value}</div>
-    </div>
   );
 }
 
