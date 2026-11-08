@@ -46,8 +46,8 @@ func TestWikiLinks_ProseCountsCodeIsExempt(t *testing.T) {
 		// F2: a fence opened on a list-marker or blockquote line.
 		{"fence on a dash list line", "- ```toml\n  [[oauth.client]]\n  ```\n\nprose [[z]]", []string{"[[z]]"}},
 		{"fence on a numbered list line", "1. ```\n   [[a]]\n   ```\n\n2) ```\n   [[b]]\n   ```\n[[z]]", []string{"[[z]]"}},
-		{"fence in a blockquote", "> ```\n> [[a]]\n> ```\n\n[[z]]", []string{"[[z]]"}},
-		{"fence in a quoted list", "> - ```\n>   [[a]]\n>   ```\n\n[[z]]", []string{"[[z]]"}},
+		{"fence in a blockquote", "> ~~~\n> [[a]]\n> ~~~\n\n[[z]]", []string{"[[z]]"}},
+		{"fence in a quoted list", "> - ~~~\n>   [[a]]\n>   ~~~\n\n[[z]]", []string{"[[z]]"}},
 		{"list item prose still counts", "- see [[a]]\n* and [[b]]\n+ and [[c]]\n3. and [[d]]", []string{"[[a]]", "[[b]]", "[[c]]", "[[d]]"}},
 		{"quoted prose still counts", "> see [[a]]", []string{"[[a]]"}},
 		{"bold is not a list marker", "**[[a]]**", []string{"[[a]]"}},
