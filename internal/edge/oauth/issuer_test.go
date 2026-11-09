@@ -841,3 +841,40 @@ func TestApprove_FullyRevokedSubjectStaysRevoked(t *testing.T) {
 		t.Fatalf("grants = %v, unchanged = %v; want none revived", set, p.GrantsUnchanged)
 	}
 }
+
+// Consent path 3 is gone: its routes answer 404 and /oauth/authorize sets no
+// cookie and offers no provider sign-in.
+func TestRoutes_NoIDPEndpoints(t *testing.T) {
+	f := newIssuerFixture(t)
+	for _, p := range []string{"/oauth/idp/start/x", "/oauth/idp/callback"} {
+		resp := f.get(t, p, nil)
+		_ = body(t, resp)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s: status %d, want 404", p, resp.StatusCode)
+		}
+	}
+	resp, err := f.browser.Post(f.srv.URL+"/oauth/idp/decide", "application/x-www-form-urlencoded", strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = body(t, resp)
+	if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("POST /oauth/idp/decide: status %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestAuthorize_SetsNoCookie(t *testing.T) {
+	f := newIssuerFixture(t)
+	_, ch := pkce()
+	resp := f.get(t, "/oauth/authorize", f.authorizeQuery(ch))
+	page := body(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, page)
+	}
+	if c := resp.Cookies(); len(c) != 0 {
+		t.Errorf("authorize set cookies %v", c)
+	}
+	if strings.Contains(page, "/oauth/idp/") {
+		t.Error("waiting page links to the removed provider sign-in")
+	}
+}

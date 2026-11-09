@@ -31,9 +31,6 @@ var (
 	ErrRevoked       = errors.New("oauth: token revoked")
 	ErrReused        = errors.New("oauth: rotated refresh token presented again; family revoked")
 	ErrWrongAudience = errors.New("oauth: token not issued for this resource")
-	// ErrNoLongerAllowed: the family's approval no longer stands (its
-	// identity-provider subject left the allow list); it has been revoked.
-	ErrNoLongerAllowed = errors.New("oauth: the approval behind this token no longer stands; family revoked")
 )
 
 const (
@@ -50,14 +47,7 @@ type Store struct {
 	accessTTL  time.Duration
 	refreshTTL time.Duration
 	now        func() time.Time
-	// refreshCheck, when set, must accept a family for its refresh token
-	// to be exchanged; a refused family is revoked (SetRefreshCheck).
-	refreshCheck func(Family) bool
 }
-
-// SetRefreshCheck installs the check every refresh must pass. Call it once,
-// before serving.
-func (s *Store) SetRefreshCheck(ok func(Family) bool) { s.refreshCheck = ok }
 
 func NewStore(db *sql.DB, accessTTL, refreshTTL time.Duration) *Store {
 	return &Store{db: db, accessTTL: accessTTL, refreshTTL: refreshTTL, now: time.Now}
@@ -335,12 +325,6 @@ func (s *Store) Refresh(ctx context.Context, refresh, clientID, resource string,
 		return Issued{}, e
 	}
 	reuse := func() (Issued, error) { return revokeWith(ErrReused) }
-	// The family's approval must still stand (3c ruling W9): a family
-	// approved through the identity provider by someone no longer on the
-	// allow list is revoked here, all of it, not merely refused.
-	if s.refreshCheck != nil && !s.refreshCheck(r.family) {
-		return revokeWith(ErrNoLongerAllowed)
-	}
 	if r.rotated {
 		return reuse()
 	}
