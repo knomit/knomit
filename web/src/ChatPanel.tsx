@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import type { CSSProperties, KeyboardEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { CSSProperties, KeyboardEvent, WheelEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { markdownPlugins, markdownComponents } from './markdown';
 import { ChatToolGroup } from './ChatToolGroup';
@@ -15,7 +15,7 @@ import { boundAfter, compactCount, sessionCost } from './chatState';
 import type { ChatState, ChatTurn, ToolCall } from './chatState';
 import type { ApprovalDecision } from './chatApi';
 import {
-  CHAT_CONTINUE_MESSAGE, CHAT_INPUT_PLACEHOLDER, CHAT_REPLY_PLACEHOLDER, CHAT_SEND, CHAT_STOP, CHAT_STOP_KEY, COMPOSER_HINT, CONTEXT_LABEL,
+  CHAT_CONTINUE_MESSAGE, CHAT_INPUT_PLACEHOLDER, CHAT_JUMP_LATEST, CHAT_REPLY_PLACEHOLDER, CHAT_SEND, CHAT_STOP, CHAT_STOP_KEY, COMPOSER_HINT, CONTEXT_LABEL,
   NOT_SENT, NOT_SENT_RETRY,
 } from './chatCopy';
 
@@ -73,7 +73,7 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   onStop: () => void;
   onSelect: (call: ToolCall) => void;
   onAnswer: (callId: string, decision: ApprovalDecision) => void;
-  /** Start an empty chat with the same model (the notices' action). */
+  /** Start an empty chat with the same model (the context-full notice's action). */
   onNewChat?: () => void;
   /** The answers' fact links: the repos a repo chip may name, the fact open in
    *  the side panel, and what a link does. */
@@ -149,16 +149,101 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // Follow or read. At the bottom, the transcript follows what streams in. The
+  // reader scrolling up stops that, and nothing moves the view until they
+  // scroll back down to within FOLLOW_SLACK_PX, click the pill, or send.
+  // A wheel step up leaves at once, however small: during a fast stream a
+  // gentle scroll that stays inside the slack would otherwise be re-pinned by
+  // the next frame. Any other scroll (a scrollbar drag) leaves when scrollTop
+  // DECREASED and the bottom is more than the slack away. Our own writes and
+  // content growth only ever move scrollTop down, so they never count.
+  // While following, native scroll anchoring is off: we pin the bottom
+  // ourselves, and an anchoring adjustment during a reflow (a resize) would
+  // lower scrollTop and read as the reader leaving. While reading it is on,
+  // so the text being read stays put when something above it changes size.
+  const following = useRef(true);
+  const [follow, setFollow] = useState(true);
+  const lastTop = useRef(0);
+  const smoothing = useRef(false);
+  const frame = useRef(0);
+  const setFollowing = useCallback((on: boolean) => {
+    following.current = on;
+    if (!on) smoothing.current = false;
+    setFollow(on);
+  }, []);
+  const toBottom = useCallback((el: HTMLElement, smooth: boolean) => {
+    const top = el.scrollHeight - el.clientHeight;
+    if (smooth && typeof el.scrollTo === 'function') el.scrollTo({ top, behavior: 'smooth' });
+    else el.scrollTop = top;
+    lastTop.current = el.scrollTop;
+  }, []);
+  // One write per frame, however many deltas arrived in it. Not while hidden
+  // (display:none measures 0): a write there would lose the place the browser
+  // keeps; the ResizeObserver pins again when the chat is shown.
+  const pin = useCallback(() => {
+    if (frame.current) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = 0;
+      const el = scroller.current;
+      if (el && following.current && el.clientHeight > 0) toBottom(el, smoothing.current);
+    });
+  }, [toBottom]);
+  // Reset the handle too: StrictMode (main.tsx) mounts, cleans up and mounts
+  // again with the same refs, and a stale non-zero handle would make pin()
+  // return early forever.
+  useEffect(() => () => { cancelAnimationFrame(frame.current); frame.current = 0; }, []);
+  const jumpToLatest = useCallback((smooth: boolean) => {
+    const el = scroller.current;
+    if (!el) return;
+    setFollowing(true);
+    smoothing.current = smooth && !reducedMotion();
+    toBottom(el, smoothing.current);
+  }, [setFollowing, toBottom]);
+  const onTranscriptScroll = () => {
+    const el = scroller.current;
+    // Hidden (display:none) it reads 0 for everything: nothing to learn.
+    if (!el || el.clientHeight === 0) return;
+    const top = el.scrollTop;
+    const gap = el.scrollHeight - top - el.clientHeight;
+    if (following.current) {
+      if (gap > FOLLOW_SLACK_PX && top < lastTop.current - 1) setFollowing(false);
+      else if (gap <= FOLLOW_SLACK_PX) smoothing.current = false;
+    } else if (gap <= 1 || (gap <= FOLLOW_SLACK_PX && top > lastTop.current)) {
+      // Back at the bottom by coming DOWN to it: the scroll a wheel step up
+      // makes also lands inside the slack, and must not re-arm following.
+      setFollowing(true);
+    }
+    lastTop.current = top;
+  };
+  const onTranscriptWheel = (e: WheelEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    // Nothing above to scroll to: the transcript cannot move, nobody left.
+    if (e.deltaY < 0 && following.current && el.scrollTop > 0) setFollowing(false);
+  };
+  useLayoutEffect(() => {
+    if (following.current) pin();
+  }, [state.turns, state.approvals, pin]);
+  // Growth no render announced (a fact chip resolving, the composer's height,
+  // the chat being shown again).
   useEffect(() => {
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [state.turns, state.approvals]);
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => { if (following.current) pin(); });
+    ro.observe(el);
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
+    return () => ro.disconnect();
+  }, [pin]);
 
+  const send = (text: string) => {
+    jumpToLatest(false);
+    onSend(text);
+  };
   const submit = () => {
     const text = draft.trim();
     if (!text || state.running) return;
     setDraft('');
-    onSend(text);
+    send(text);
   };
   const editResend = (text: string) => { setDraft(text); box.current?.focus(); };
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -181,7 +266,9 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
 
   return (
     <div ref={root} data-testid="chat-panel" style={panel}>
-      <div ref={scroller} data-testid="chat-transcript" style={transcript}>
+      <div style={transcriptWrap}>
+      <div ref={scroller} data-testid="chat-transcript" style={{ ...transcript, overflowAnchor: follow ? 'none' : 'auto' }}
+        onScroll={onTranscriptScroll} onWheel={onTranscriptWheel}>
         <div style={TRANSCRIPT_COLUMN}>
           {state.turns.map((t, ti) => {
             const live = state.running && ti === state.turns.length - 1;
@@ -218,7 +305,7 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
                 })}
                 {t.stopped && !live && (
                   <StoppedMark latest={ti === state.turns.length - 1} onEdit={() => editResend(t.user)}
-                    onContinue={() => { if (!state.running) onSend(CHAT_CONTINUE_MESSAGE); }} />
+                    onContinue={() => { if (!state.running) send(CHAT_CONTINUE_MESSAGE); }} />
                 )}
                 <TurnNotices turn={t} modelName={modelName} onNewChat={onNewChat} />
                 {t.usage && !live && (
@@ -232,6 +319,10 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
           })}
           {actionError && <div role="alert"><NoticeLine tone="blocked" testId="chat-action-error" lead={actionError} /></div>}
         </div>
+      </div>
+      {!follow && (
+        <button type="button" data-testid="chat-jump-latest" onClick={() => jumpToLatest(true)} style={jumpPill}>{CHAT_JUMP_LATEST}</button>
+      )}
       </div>
       <div style={{ ...COLUMN, flexShrink: 0, paddingBottom: 14 }}>
         <div style={composer}>
@@ -295,12 +386,33 @@ function shown(el: HTMLElement | null): boolean {
   return true;
 }
 
+/** How close to the bottom still counts as "at the bottom" (following). */
+export const FOLLOW_SLACK_PX = 24;
+
+function reducedMotion(): boolean {
+  return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 const panel: CSSProperties = { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 };
+// The transcript's box, so the jump pill can float over its bottom edge.
+const transcriptWrap: CSSProperties = { flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' };
 const transcript: CSSProperties = { flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 0', display: 'flex', flexDirection: 'column' };
 const turnBox = (sep: boolean): CSSProperties => ({ padding: '18px 0 14px', ...(sep ? { borderTop: '1px solid #1c1c1c' } : {}) });
-const composer: CSSProperties = { background: '#171717', border: '1px solid #2e2e2e', borderRadius: 12, padding: '10px 12px 8px' };
+// The composer's raised surface and edge; the jump pill wears the same.
+const RAISED_BG = '#171717';
+const RAISED_EDGE = '1px solid #2e2e2e';
+const RAISED_INK = '#ddd';
+const composer: CSSProperties = { background: RAISED_BG, border: RAISED_EDGE, borderRadius: 12, padding: '10px 12px 8px' };
+// Quiet: the composer's surface, fully rounded, 13px, a soft shadow. Keyboard
+// focus gets the app's button ring (index.css button:focus-visible).
+const jumpPill: CSSProperties = {
+  position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)', zIndex: 1,
+  background: RAISED_BG, border: RAISED_EDGE, borderRadius: 999, padding: '5px 14px',
+  color: RAISED_INK, fontFamily: 'inherit', fontSize: 13, lineHeight: '18px', whiteSpace: 'nowrap', cursor: 'pointer',
+  boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+};
 const input: CSSProperties = {
-  display: 'block', width: '100%', resize: 'none', background: 'transparent', color: '#ddd', border: 'none',
+  display: 'block', width: '100%', resize: 'none', background: 'transparent', color: RAISED_INK, border: 'none',
   padding: '2px 2px 8px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none',
 };
 // The Stop/Send button always stays on this row: the meter and the hint wrap
