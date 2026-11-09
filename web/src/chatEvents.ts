@@ -83,7 +83,7 @@ const route = (h: Hub, name: string, e: MessageEvent) => {
 
 function attach(h: Hub): void {
   const es = h.es;
-  for (const name of CHAT_EVENT_NAMES) es.addEventListener(name, (e: MessageEvent) => { if (h.es === es) route(h, name, e); });
+  for (const name of CHAT_EVENT_NAMES) es.addEventListener(name, (e: MessageEvent) => route(h, name, e));
   // A CONNECTING error is the transport retrying; only CLOSED is ours to fix.
   es.addEventListener('error', () => { if (h.es === es && es.readyState === CLOSED) scheduleReopen(h); });
 }
