@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
 import { HistoryIcon } from './icons';
+import { FACT_ACTION_REST } from './utils';
 
 interface Entry {
   commit: string;
@@ -70,17 +71,26 @@ export function VersionWalker({ repo, branch, factPath, onScrub }: Props) {
       onClick={openHistory}
       title="Open history"
       aria-label="Open history"
+      // Styled exactly as the Materialize button beside it (FactChrome): muted
+      // at rest, the accent only on hover, through the shared .k-materialize
+      // rule (App.css), and .k-bare's ring for keyboard focus only. It used to
+      // be the accent (#7c9) at rest, an inline colour that also outranked any
+      // :hover; and an inline `outline: none` that hid the keyboard ring too.
+      className="k-bare k-materialize"
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 4,
         // NO BORDER OF ITS OWN. This sits inside the fact header's control
         // strip, which draws the border and the dividers; a chip border here
         // would nest one inside the other. The strip's cells are separated by
-        // hairlines, not by each child re-stating its own outline.
-        background: 'none', border: 'none', borderRadius: 0,
-        outline: 'none',
+        // hairlines, not by each child re-stating its own outline. No inline
+        // border-radius either: it outranked .k-bare:focus-visible's 4px and
+        // squared the keyboard ring that Materialize draws rounded.
+        background: 'none', border: 'none',
         padding: 2, cursor: 'pointer',
-        color: '#7c9',
+        ['--k-materialize-rest' as string]: FACT_ACTION_REST, opacity: 0.75,
       }}
+      onMouseEnter={e => { e.currentTarget.style.opacity = '1'; }}
+      onMouseLeave={e => { e.currentTarget.style.opacity = '0.75'; }}
     >
       <HistoryIcon color="currentColor" size={HISTORY_ICON_SIZE} />
     </button>

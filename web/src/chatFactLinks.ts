@@ -180,16 +180,32 @@ const cacheKey = (prefer: string, handle: string): string => `${prefer}\u0001${h
 export function resetFactCache(): void { cache.clear(); inFlight.clear(); }
 
 /**
- * useTurnFacts resolves the FINISHED turns' cited handles. Each effect run
- * sends ONE POST /facts/resolve per distinct preference list (one in the usual
- * chat, which stays bound to one target) with every candidate of every
- * finished turn not yet answered or being asked; a turn that finishes later
- * gets one call for its new handles. A turn still streaming (null) is not
- * asked about: its text is still growing. A failed call is not retried: its
- * handles are remembered as not facts and stay code. An answer that arrives
- * after the chat unmounted is kept in the cache and changes no state.
+ * useTurnFacts resolves the turns' cited handles, the turn still streaming
+ * included. Each effect run sends ONE POST /facts/resolve per distinct
+ * preference list (one in the usual chat, which stays bound to one target)
+ * with every candidate of every turn not yet answered or being asked. What
+ * keeps a stream from asking per delta is that skip (cache and inFlight): a
+ * streamed delta that completes no new code span asks nothing, and one that
+ * does asks for that handle only. The run is keyed on the candidates, not the
+ * text, which only saves re-running the effect.
+ * Only a CLOSED code span is a candidate (factCandidates; remark agrees), so a
+ * path still streaming is never asked about and never drawn as a link.
+ * A failed call is not retried: its handles are remembered as not facts and
+ * stay code. An answer that arrives after the chat unmounted is kept in the
+ * cache and changes no state. A null answer is not asked about.
  *
- * prefers[i] is turn i's preference list (turnPrefer).
+ * prefers[i] is turn i's preference list (turnPrefer), and the cache is keyed
+ * by it. A streaming turn's list can change: on each call it makes, and when a
+ * call that was still running settles (a running call counts; if it then fails
+ * it is dropped). Nothing here pins the list while an answer streams. It holds
+ * steady in practice only because of the ORDER a model streams in: text after
+ * a tool call arrives after that call's result, and any text before the call
+ * becomes the call's group lead (ChatPanel's blocksOf), which is not part of
+ * the answer. So the answer text a chip is drawn in is read under the turn's
+ * settled list, and the finished turn renders as it did while streaming. If a
+ * provider ever streamed answer text while a call of the same turn was still
+ * running, a change of list would re-key its handles: they would be asked
+ * again, and show as code until the new answer came back.
  */
 export function useTurnFacts(answers: (string | null)[], prefers: string[][]): ReadonlyMap<string, ResolvedFact>[] {
   const [, setVersion] = useState(0);

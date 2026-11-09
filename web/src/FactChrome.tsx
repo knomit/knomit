@@ -3,7 +3,7 @@ import type { Dispatch, ReactNode, RefObject } from 'react';
 import type { Fact, RefGroup } from './api';
 import type { Action } from './state';
 import { READ_ONLY_TITLE } from './state';
-import { relativeTime } from './utils';
+import { relativeTime, FACT_ACTION_REST } from './utils';
 import type { EdgeDir } from './utils';
 import { RetractIcon, NewspaperIcon } from './icons';
 import { FactBand } from './FactBand';
@@ -255,7 +255,7 @@ export function FactActions({ fact, histAnchor, onScrub, onRetract, readOnly = f
                 onClick={onMaterialize}
                 style={{
                   background: 'none', border: 'none', padding: 2,
-                  ['--k-materialize-rest' as string]: '#8a96a8',
+                  ['--k-materialize-rest' as string]: FACT_ACTION_REST,
                   cursor: 'pointer', display: 'flex', alignItems: 'center', opacity: 0.75,
                 }}
                 onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}

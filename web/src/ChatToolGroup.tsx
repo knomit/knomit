@@ -115,7 +115,7 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
               <div key={c.id} data-testid={`chat-tool-row-${c.id}`} data-state={c.state} data-error={c.isError || undefined} style={{ position: 'relative' }}>
                 <ToolCallDot call={c} testId={`chat-tool-dot-${c.id}`} onTimeline />
                 <button type="button" data-testid={`chat-tool-select-${c.id}`} disabled={!canOpen}
-                  aria-pressed={selected} onClick={() => onSelect(c)} style={rowBtn(selected)}>
+                  aria-current={selected ? 'true' : undefined} onClick={() => onSelect(c)} style={rowBtn(selected)}>
                   <ToolCallLine call={c} testPrefix="chat-tool" />
                 </button>
                 {ap && <ApprovalCard approval={ap} onAnswer={d => onAnswer(c.id, d)} />}

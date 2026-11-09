@@ -34,6 +34,7 @@ function mount(snap: ChatSnapshot = snapshot(), extra: Record<string, Parameters
   return { fx, onGone, ...utils };
 }
 const callsTo = (fx: ReturnType<typeof stubFleetFetch>, part: string) => fx.calls.filter(c => c.route.includes(part));
+const settle = () => new Promise(r => setTimeout(r, 30));
 
 beforeEach(() => { installFakeEventSource(); });
 afterEach(() => { cleanup(); uninstallFakeEventSource(); vi.unstubAllGlobals(); });
@@ -100,10 +101,22 @@ describe('ChatFacet', () => {
     // The result is in the result panel, not in the chat panel.
     expect(within(screen.getByTestId('chat-panel')).queryByText(/alpha/)).toBeNull();
 
-    // Selecting the row again closes the panel without another fetch.
+    // Selecting the row again leaves the panel open on the same call, with no
+    // other fetch (user, 2026-11-09: a second click must not close the panel;
+    // it used to toggle). SABOTAGE: restore the close-on-same-id branch in
+    // ChatFacet's onSelect -> red.
+    const before = screen.getByTestId('chat-result-panel');
     fireEvent.click(screen.getByTestId('chat-tool-select-tu_1'));
-    expect(screen.queryByTestId('chat-result-panel')).toBeNull();
+    await settle();
+    const after = screen.getByTestId('chat-result-panel');
+    expect(after).toBe(before);
+    expect(within(after).getByTestId('chat-result-text')).toHaveTextContent('alpha beta');
+    expect(screen.getByTestId('chat-tool-select-tu_1')).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByTestId('chat-tool-select-tu_1')).not.toHaveAttribute('aria-pressed');
     expect(callsTo(fx, '/calls/')).toHaveLength(1);
+    // The panel's own × still closes it.
+    fireEvent.click(screen.getByTestId('chat-panel-close'));
+    expect(screen.queryByTestId('chat-result-panel')).toBeNull();
   });
 
   it('a running call cannot be selected yet', async () => {

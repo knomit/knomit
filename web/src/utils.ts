@@ -264,6 +264,10 @@ export const EDGE_LABEL: Record<EdgeDir, string> = { in: 'cited by', out: 'cites
 // body. Shared so the warning in the header and the message it opens read as
 // the same failure rather than two unrelated red things.
 export const EDGE_ERROR = '#f66';
+/** The fact header's icon actions at rest (Materialize and the history button):
+ *  the --k-materialize-rest both set, so the shared .k-materialize rule
+ *  (App.css) shows them muted until hover. One value, so the two cannot drift. */
+export const FACT_ACTION_REST = '#8a96a8';
 
 /**
  * noMouseFocus stops a MOUSE press from focusing a control, while leaving

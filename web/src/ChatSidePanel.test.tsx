@@ -300,14 +300,14 @@ describe('the side panel in the chat page', () => {
     expect(screen.getByTestId('chat-columns').querySelector('.k-chat-result')).toBeNull();
     await openStep('tu_1');
     expect(await screen.findByTestId('chat-result-text')).toHaveTextContent('RESULT-ONE');
-    expect(screen.getByTestId('chat-tool-select-tu_1')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('chat-tool-select-tu_2')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('chat-tool-select-tu_1')).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByTestId('chat-tool-select-tu_2')).not.toHaveAttribute('aria-current');
     expect(panelW()).toBe('470px');
     // Another step moves the highlight and the panel.
     fireEvent.click(screen.getByTestId('chat-tool-select-tu_2'));
     await screen.findByTestId('chat-result-fact');
-    expect(screen.getByTestId('chat-tool-select-tu_2')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('chat-tool-select-tu_1')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('chat-tool-select-tu_2')).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByTestId('chat-tool-select-tu_1')).not.toHaveAttribute('aria-current');
   });
 
   it('the chat column reflows beside the panel instead of being covered', async () => {
@@ -356,7 +356,7 @@ describe('the side panel in the chat page', () => {
     await screen.findByTestId('chat-result-text');
     fireEvent.click(screen.getByTestId('chat-panel-close'));
     expect(screen.queryByTestId('chat-side-panel')).toBeNull();
-    expect(screen.getByTestId('chat-tool-select-tu_1')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('chat-tool-select-tu_1')).not.toHaveAttribute('aria-current');
   });
 
   it('Esc closes it when nothing is running and the composer is not focused', async () => {

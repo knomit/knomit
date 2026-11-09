@@ -277,8 +277,11 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onBrowseFact, repos,
   const { state, actionError, notSent, landed, send, stop, answer } = useChatSession(chat.id, onGone);
   // A failed "New chat" (from a notice) is shown, not swallowed.
   const [newChatError, setNewChatError] = useState('');
-  // The side panel: absent until a step (or, later, a fact link) opens it. The
-  // step that is open stays highlighted; clicking it again closes the panel.
+  // The side panel: absent until a step, a fact link or a commit link opens it.
+  // The step that is open stays highlighted. Every opener only OPENS: clicking
+  // the item already shown leaves the panel open on it (user, 2026-11-09:
+  // "clicking on something twice should not make the right panel close"); a
+  // step used to toggle. The panel closes by its own × and by Esc.
   const [panel, dispatchPanel] = useReducer(panelReducer, initialPanelState);
   const { width: panelWidth, onSplitterDown } = usePanelWidth();
   const openEntry = shownEntry(panel);
@@ -288,9 +291,8 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onBrowseFact, repos,
   const openFactKey = openEntry?.kind === 'fact' && !openEntry.commit ? factKey(openEntry.repo, openEntry.branch, openEntry.path)
     : openEntry?.kind === 'commit' ? commitKey(openEntry.repo, openEntry.branch, openEntry.commit) : null;
   const onSelect = useCallback((c: ToolCall) => {
-    if (selectedId === c.id) dispatchPanel({ type: 'close' });
-    else dispatchPanel({ type: 'open', entry: { kind: 'result', callId: c.id } });
-  }, [selectedId]);
+    dispatchPanel({ type: 'open', entry: { kind: 'result', callId: c.id } });
+  }, []);
   const onOpenFact = (f: ResolvedFact) => {
     dispatchPanel({ type: 'open', entry: { kind: 'fact', repo: f.repo, branch: f.branch, path: f.path } });
   };

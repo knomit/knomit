@@ -99,20 +99,97 @@ describe('chat fact links', () => {
     expect(resolveCalls(fx)).toHaveLength(0);
   });
 
-  it('a turn that finishes later gets one call, for its own new handles only', async () => {
+  // Chat review 2, 2026-11-09: the turn still streaming is asked too (it used
+  // to wait for turn_done), in the same call as the finished turns; finishing
+  // it asks nothing more. SABOTAGE: pass null for the live turn in ChatPanel
+  // again -> red.
+  it('a streaming turn is resolved as it streams, with the finished ones, and finishing it asks nothing more', async () => {
     const live = { ...snapshot([
       { kind: 'user', text: 'q1' }, { kind: 'assistant', text: 'see `3fc77970`' },
       { kind: 'user', text: 'q2' }, { kind: 'assistant', text: 'and `aaaaaaa1`, `3fc77970`' },
     ]), running: true };
     const { fx } = mount(live);
-    await screen.findByTestId('fact-link');
-    await settle();
-    expect(resolveCalls(fx).map(c => c.body)).toEqual([{ handles: ['3fc77970'], prefer: [] }]);
+    await waitFor(() => expect(screen.getAllByTestId('fact-link')).toHaveLength(3));
+    expect(screen.getByTestId('chat-stop')).toBeInTheDocument(); // still streaming
+    expect(resolveCalls(fx).map(c => c.body)).toEqual([{ handles: ['3fc77970', 'aaaaaaa1'], prefer: [] }]);
     fx.set(`GET ${BASE}`, { body: { ...live, running: false } });
     act(() => { chatStream('chat-a')!.emit('turn_done', { turn: 2 }); });
-    await waitFor(() => expect(resolveCalls(fx)).toHaveLength(2));
-    expect(resolveCalls(fx)[1].body).toEqual({ handles: ['aaaaaaa1'], prefer: [] });
-    await waitFor(() => expect(screen.getAllByTestId('fact-link')).toHaveLength(3));
+    await waitFor(() => expect(screen.queryByTestId('chat-stop')).toBeNull());
+    await settle();
+    expect(resolveCalls(fx)).toHaveLength(1);
+    expect(screen.getAllByTestId('fact-link')).toHaveLength(3);
+  });
+
+  // Chat review 2, 2026-11-09 (t-fly): while an answer streamed, its citations
+  // were plain `kb/...md` code until turn_done. Now a CLOSED code span is a
+  // chip mid-stream; a path whose closing backtick has not arrived is neither
+  // asked about nor drawn; deltas that complete no span ask nothing; a chip is
+  // not remounted by later deltas; and the finished rendering is exactly what a
+  // turn finished before it was seen renders.
+  // SABOTAGE: pass null for the live turn in ChatPanel -> red (no chip before
+  // turn_done); drop useTurnFacts' `cache.has(k) || inFlight.has(k)` skip ->
+  // red (answered handles are asked again with each new one). That skip, not
+  // the effect's [sig] key, is what keeps lookups from growing per delta: a
+  // text-keyed effect would only re-run and ask nothing. The [sig] key is NOT
+  // pinned here (it saves effect runs, not requests).
+  it('a streaming answer draws a complete reference as a chip before the turn ends, and never a partial one', async () => {
+    const PATH = 'kb/invariants/security/3fc77970.md';
+    const { fx, unmount } = mount({ ...snapshot([{ kind: 'user', text: 'q' }]), running: true });
+    await screen.findByTestId('chat-turn-0');
+    const es = chatStream('chat-a')!;
+    const delta = (text: string) => act(() => { es.emit('text_delta', { text, turn: 0 }); });
+    const text = () => screen.getByTestId('chat-text');
+
+    // The path is still arriving: no candidate, no call, no link, no code span.
+    delta('It is `kb/invariants/sec');
+    delta('urity/3fc77');
+    await settle();
+    expect(resolveCalls(fx)).toHaveLength(0);
+    expect(screen.queryByTestId('fact-link')).toBeNull();
+    expect(text().querySelector('code')).toBeNull();
+    expect(text()).toHaveTextContent('It is `kb/invariants/security/3fc77');
+
+    // Its closing backtick arrives: one call, and a chip while still running.
+    delta('970.md` and');
+    const chip = await within(text()).findByTestId('fact-link');
+    expect(chip).toHaveAttribute('data-type', 'policy');
+    expect(chip).toHaveTextContent(POLICY.title);
+    expect(screen.getByTestId('chat-stop')).toBeInTheDocument();
+    expect(resolveCalls(fx).map(c => c.body)).toEqual([{ handles: [PATH], prefer: [] }]);
+
+    // Deltas that complete no code span ask nothing and keep the same chip node.
+    for (const d of [' then', ' some', ' more', ' prose.', ' Also ']) delta(d);
+    // A second reference, its closing backtick not yet in.
+    delta('`aaaa');
+    delta('aaa1');
+    await settle();
+    expect(resolveCalls(fx)).toHaveLength(1);
+    expect(within(text()).getAllByTestId('fact-link')).toHaveLength(1);
+    expect(within(text()).getByTestId('fact-link')).toBe(chip);
+    expect(text()).toHaveTextContent('`aaaaaaa1');
+
+    // It closes: one more call, for that handle only; the first chip stays put.
+    delta('`.');
+    await waitFor(() => expect(within(text()).getAllByTestId('fact-link')).toHaveLength(2));
+    expect(resolveCalls(fx).map(c => c.body)).toEqual([{ handles: [PATH], prefer: [] }, { handles: ['aaaaaaa1'], prefer: [] }]);
+    expect(within(text()).getAllByTestId('fact-link')[0]).toBe(chip);
+
+    // The turn ends: nothing more is asked, and it renders exactly as the same
+    // answer does when it was finished before the chat first saw it.
+    const ANS = `It is \`${PATH}\` and then some more prose. Also \`aaaaaaa1\`.`;
+    const done = snapshot([{ kind: 'user', text: 'q' }, { kind: 'assistant', text: ANS }]);
+    fx.set(`GET ${BASE}`, { body: done });
+    act(() => { es.emit('turn_done', { turn: 0 }); });
+    await waitFor(() => expect(screen.queryByTestId('chat-stop')).toBeNull());
+    await settle();
+    expect(resolveCalls(fx)).toHaveLength(2);
+    const streamed = text().innerHTML;
+    expect(streamed).not.toContain('chat-caret');
+    unmount();
+    resetFactCache();
+    mount(done);
+    await waitFor(() => expect(screen.getAllByTestId('fact-link')).toHaveLength(2));
+    expect(text().innerHTML).toBe(streamed);
   });
 
   it('prefers the repos the turn worked in: its calls\' repo or lens, then the binding in force', async () => {
@@ -241,7 +318,12 @@ describe('chat fact links', () => {
     mount();
     const turn0 = await screen.findByTestId('chat-turn-0');
     const chip = (await within(turn0).findAllByTestId('fact-link'))[0];
-    expect(chip).toHaveAttribute('title', POLICY.title);
+    // Chat review 2, 2026-11-09: no native tooltip over the hover card (it
+    // showed two boxes); the accessible name is still the fact's title, from
+    // the visible text. SABOTAGE: restore title={f.title} -> red; drop the
+    // title span -> red.
+    expect(chip).not.toHaveAttribute('title');
+    expect(chip).toHaveAccessibleName(POLICY.title);
     expect(chip).toHaveAttribute('data-type', 'policy');
     expect(chip).toHaveTextContent(POLICY.title);
     const tile = within(chip).getByTestId('fact-link-glyph');
@@ -293,12 +375,24 @@ describe('chat fact links', () => {
     const panel = await screen.findByTestId('chat-side-panel');
     expect(await within(panel).findByTestId('fact-title')).toHaveTextContent(POLICY.title);
     expect(chip).toHaveAttribute('data-open', 'true');
+    // The chip that opened the panel's entry is its current item, as a tool row is.
+    // SABOTAGE: drop aria-current from FactLink -> red.
+    expect(chip).toHaveAttribute('aria-current', 'true');
     // The same fact cited in the other turn is highlighted as well: it is what is open.
     const other = within(screen.getByTestId('chat-turn-0')).getAllByTestId('fact-link')[0];
     expect(other).toHaveAttribute('data-open', 'true');
+    // A second click on the same chip leaves the panel open on the same fact
+    // (user, 2026-11-09: clicking twice must not close the panel).
+    const shown = screen.getByTestId('chat-side-panel');
+    fireEvent.click(chip);
+    await settle();
+    expect(screen.getByTestId('chat-side-panel')).toBe(shown);
+    expect(within(shown).getByTestId('fact-title')).toHaveTextContent(POLICY.title);
+    expect(chip).toHaveAttribute('data-open', 'true');
     // Closing the panel takes the highlight away.
     fireEvent.click(within(panel).getByTestId('chat-panel-close'));
     expect(chip).not.toHaveAttribute('data-open');
+    expect(chip).not.toHaveAttribute('aria-current');
   });
 
   // Chat review, 2026-11-08: a clicked chip kept a bright "selected" border.
@@ -372,18 +466,6 @@ describe('chat fact links', () => {
     expect(within(card).getByTestId('fact-band-path')).toHaveTextContent(POLICY.path);
     expect(within(card).queryByRole('button')).toBeNull(); // Cmd-click on the link goes to Browse
     vi.useRealTimers();
-  });
-
-  it('a turn still streaming is not resolved: its text is still growing', async () => {
-    const { fx } = mount({ ...snapshot([
-      { kind: 'user', text: 'q' },
-      { kind: 'assistant', text: 'see `3fc77970`' },
-    ]), running: true });
-    const turn = await screen.findByTestId('chat-turn-0');
-    await within(turn).findByText('3fc77970');
-    await new Promise(r => setTimeout(r, 30));
-    expect(resolveCalls(fx)).toHaveLength(0);
-    expect(screen.queryByTestId('fact-link')).toBeNull();
   });
 });
 
