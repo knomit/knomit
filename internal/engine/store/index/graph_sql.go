@@ -112,6 +112,20 @@ func graphNodeIDByProps(ctx context.Context, ex storegit.CtxExecer, label string
 	if len(identity) == 0 {
 		return 0, fmt.Errorf("graphNodeIDByProps: empty identity for label %q", label)
 	}
+	query, args := graphNodeIDByPropsSQL(label, identity)
+	var nodeID int64
+	err := ex.QueryRowContext(ctx, query, args...).Scan(&nodeID)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("graphNodeIDByProps(%s): %w", label, err)
+	}
+	return nodeID, nil
+}
+
+// graphNodeIDByPropsSQL builds graphNodeIDByProps's statement and arguments.
+func graphNodeIDByPropsSQL(label string, identity map[string]string) (string, []any) {
 	keys := sortedKeys(identity)
 
 	var sb strings.Builder
@@ -131,16 +145,7 @@ func graphNodeIDByProps(ctx context.Context, ex storegit.CtxExecer, label string
 		args = append(args, identity[k])
 	}
 	sb.WriteString(` LIMIT 1`)
-
-	var nodeID int64
-	err := ex.QueryRowContext(ctx, sb.String(), args...).Scan(&nodeID)
-	if err == sql.ErrNoRows {
-		return 0, nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("graphNodeIDByProps(%s): %w", label, err)
-	}
-	return nodeID, nil
+	return sb.String(), args
 }
 
 // graphMergeNode finds-or-creates the node with `label` and the given identity
@@ -191,6 +196,15 @@ func graphSetNodeProps(ctx context.Context, ex storegit.CtxExecer, nodeID int64,
 	return nil
 }
 
+// graphMergeEdgeSQL is graphMergeEdge's statement (a package const so the
+// planner-statistics guard can EXPLAIN the exact string).
+const graphMergeEdgeSQL = `
+		INSERT INTO edges(source_id, target_id, type)
+		SELECT ?, ?, ?
+		WHERE NOT EXISTS (
+			SELECT 1 FROM edges WHERE source_id = ? AND target_id = ? AND type = ?
+		)`
+
 // graphMergeEdge creates an edge of edgeType from srcID to tgtID unless an
 // identical one already exists. Equivalent to cypher MERGE (a)-[:TYPE]->(b).
 //
@@ -206,12 +220,7 @@ func graphSetNodeProps(ctx context.Context, ex storegit.CtxExecer, nodeID int64,
 // violation rather than a silent duplicate, so the single-statement form is
 // what keeps MERGE idempotent instead of merely failing loudly.
 func graphMergeEdge(ctx context.Context, ex storegit.CtxExecer, srcID, tgtID int64, edgeType string) error {
-	if _, err := ex.ExecContext(ctx, `
-		INSERT INTO edges(source_id, target_id, type)
-		SELECT ?, ?, ?
-		WHERE NOT EXISTS (
-			SELECT 1 FROM edges WHERE source_id = ? AND target_id = ? AND type = ?
-		)`, srcID, tgtID, edgeType, srcID, tgtID, edgeType); err != nil {
+	if _, err := ex.ExecContext(ctx, graphMergeEdgeSQL, srcID, tgtID, edgeType, srcID, tgtID, edgeType); err != nil {
 		return fmt.Errorf("graphMergeEdge(%s): insert: %w", edgeType, err)
 	}
 	return nil

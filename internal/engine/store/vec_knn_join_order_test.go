@@ -43,8 +43,10 @@ type vecKNNCase struct {
 // lookups. Under the stale statistics the inner loops degrade to full SCANs
 // (`SCAN f USING COVERING INDEX …`, `SCAN bf`, the subquery's `SCAN bf2`):
 // vec0 still runs once, but each of its k rows scans facts or branch_facts.
-// That is a known residual, tracked in #731; in that state only the outer loop
-// is asserted.
+// That is SQLite's cost model, not something the SQL can pin (#731): in that
+// state only the outer loop is asserted. What keeps production out of that
+// state is TestVecKNN_StalePlannerStatsRefreshed, which asserts the SEARCH
+// inner loops on every pooled connection while a batch lands.
 //
 // Written as a plain JOIN, SQLite planned `SCAN f USING COVERING INDEX …`
 // outer and re-ran the whole KNN once per facts row (#725): every indexed fact
@@ -58,38 +60,83 @@ func TestVecKNN_JoinOrderKeepsVec0Outer(t *testing.T) {
 	for _, stats := range []string{"no statistics", "ANALYZE", "stale one-fact statistics"} {
 		t.Run(stats, func(t *testing.T) {
 			db, cases := vecKNNFixture(t)
+			// Hold EVERY pooled connection: planner statistics are per
+			// connection, and database/sql hands out the most recently used idle
+			// one first, so a test that plants statistics and then EXPLAINs
+			// through the *sql.DB sees them only by that accident of reuse.
+			conns := holdPool(t, db)
 			if stats != "no statistics" {
-				_, err := db.Exec(`ANALYZE`)
+				_, err := conns[0].ExecContext(context.Background(), `ANALYZE`)
 				require.NoError(t, err)
+				reloadStatistics(t, conns)
 			}
 			stale := stats == "stale one-fact statistics"
 			if stale {
-				plantOneFactStatistics(t, db)
+				plantOneFactStatistics(t, conns)
 			}
-			for _, c := range cases {
-				loops, sub := vecKNNPlan(t, db, c.sql, c.args)
-				plan := strings.Join(append(append([]string{}, loops...), sub...), "\n")
-				require.NotEmpty(t, loops, "%s: no loops in the plan", c.name)
-				require.True(t, strings.HasPrefix(loops[0], "SCAN "+c.alias+" VIRTUAL TABLE"),
-					"%s: the outer loop must be the vec0 table %q, got plan:\n%s", c.name, c.alias, plan)
-				if !stale { // stale: the inner SCANs are #731
-					requireEverySearch(t, c.name, plan, append(loops[1:], sub...))
-				}
+			for ci, conn := range conns {
+				for _, c := range cases {
+					loops, sub := vecKNNPlan(t, conn, c.sql, c.args)
+					plan := strings.Join(append(append([]string{}, loops...), sub...), "\n")
+					require.NotEmpty(t, loops, "conn %d: %s: no loops in the plan", ci, c.name)
+					require.True(t, strings.HasPrefix(loops[0], "SCAN "+c.alias+" VIRTUAL TABLE"),
+						"conn %d: %s: the outer loop must be the vec0 table %q, got plan:\n%s", ci, c.name, c.alias, plan)
+					if !stale { // stale: the inner SCANs are SQLite's cost model, see TestVecKNN_StalePlannerStatsRefreshed
+						requireEverySearch(t, c.name, plan, append(loops[1:], sub...))
+					}
+					if ci != 0 {
+						continue // the rows do not depend on the connection
+					}
 
-				plain := strings.ReplaceAll(c.sql, "CROSS JOIN", "JOIN")
-				plainLoops, plainSub := vecKNNPlan(t, db, plain, c.args)
-				t.Logf("%s\n  pinned: %s\n  plain:  %s", c.name, strings.Join(append(loops, sub...), " | "),
-					strings.Join(append(plainLoops, plainSub...), " | "))
-				got := vecKNNRows(t, db, c.sql, c.args, c.ordered)
-				require.NotEmpty(t, got, "%s: the fixture must give the read rows to compare", c.name)
-				if c.filtered {
-					require.Less(t, len(got), c.k,
-						"%s: the k window must straddle rows the filter drops, or the order is not tested against it", c.name)
+					plain := strings.ReplaceAll(c.sql, "CROSS JOIN", "JOIN")
+					plainLoops, plainSub := vecKNNPlan(t, conn, plain, c.args)
+					t.Logf("%s\n  pinned: %s\n  plain:  %s", c.name, strings.Join(append(loops, sub...), " | "),
+						strings.Join(append(plainLoops, plainSub...), " | "))
+					got := vecKNNRows(t, conn, c.sql, c.args, c.ordered)
+					require.NotEmpty(t, got, "%s: the fixture must give the read rows to compare", c.name)
+					if c.filtered {
+						require.Less(t, len(got), c.k,
+							"%s: the k window must straddle rows the filter drops, or the order is not tested against it", c.name)
+					}
+					require.Equal(t, vecKNNRows(t, conn, plain, c.args, c.ordered), got,
+						"%s: pinning the join order must not change the rows", c.name)
 				}
-				require.Equal(t, vecKNNRows(t, db, plain, c.args, c.ordered), got,
-					"%s: pinning the join order must not change the rows", c.name)
 			}
 		})
+	}
+}
+
+// holdPool checks out every connection of db's pool at once, so a test can
+// act on each of them (planner statistics are per connection). Until they are
+// closed, anything else using db blocks: work through the returned conns.
+func holdPool(t *testing.T, db *sql.DB) []*sql.Conn {
+	t.Helper()
+	n := db.Stats().MaxOpenConnections
+	require.Greater(t, n, 1, "a pool of one connection cannot show per-connection statistics")
+	var conns []*sql.Conn
+	for i := 0; i < n; i++ {
+		c, err := db.Conn(context.Background())
+		require.NoError(t, err)
+		conns = append(conns, c)
+	}
+	t.Cleanup(func() { releasePool(conns) })
+	return conns
+}
+
+// releasePool gives the connections back (closing twice is harmless).
+func releasePool(conns []*sql.Conn) {
+	for _, c := range conns {
+		_ = c.Close()
+	}
+}
+
+// reloadStatistics makes each held connection re-read sqlite_stat1, which only
+// the connection that ran an ANALYZE does by itself.
+func reloadStatistics(t *testing.T, conns []*sql.Conn) {
+	t.Helper()
+	for _, c := range conns {
+		_, err := c.ExecContext(context.Background(), `ANALYZE sqlite_schema`)
+		require.NoError(t, err)
 	}
 }
 
@@ -199,9 +246,12 @@ func vecKNNVector(x float64, n int) []float32 {
 
 // plantOneFactStatistics replaces the planner statistics of the tables the
 // KNN reads join with those of a one-fact store, as sqlite_stat1 held them in
-// the #725 store before its 501-fact commit, and reloads them.
-func plantOneFactStatistics(t *testing.T, db *sql.DB) {
+// the #725 store before its 501-fact commit, and reloads them on EVERY
+// connection in conns.
+func plantOneFactStatistics(t *testing.T, conns []*sql.Conn) {
 	t.Helper()
+	ctx := context.Background()
+	db := conns[0]
 	for _, st := range [][3]string{
 		{"facts", "facts_origin", "1 1"},
 		{"facts", "facts_kind", "1 1"},
@@ -210,25 +260,30 @@ func plantOneFactStatistics(t *testing.T, db *sql.DB) {
 		{"branch_facts", "branch_facts_fact", "1 1"},
 		{"branch_facts", "sqlite_autoindex_branch_facts_1", "1 1 1"},
 	} {
-		_, err := db.Exec(`DELETE FROM sqlite_stat1 WHERE tbl = ? AND idx = ?`, st[0], st[1])
+		_, err := db.ExecContext(ctx, `DELETE FROM sqlite_stat1 WHERE tbl = ? AND idx = ?`, st[0], st[1])
 		require.NoError(t, err)
-		_, err = db.Exec(`INSERT INTO sqlite_stat1(tbl, idx, stat) VALUES (?, ?, ?)`, st[0], st[1], st[2])
+		_, err = db.ExecContext(ctx, `INSERT INTO sqlite_stat1(tbl, idx, stat) VALUES (?, ?, ?)`, st[0], st[1], st[2])
 		require.NoError(t, err)
 	}
 	for _, tbl := range []string{"facts_vec_rowids", "fact_titles_vec_rowids"} {
-		_, err := db.Exec(`UPDATE sqlite_stat1 SET stat = '1' WHERE tbl = ? AND idx IS NULL`, tbl)
+		_, err := db.ExecContext(ctx, `UPDATE sqlite_stat1 SET stat = '1' WHERE tbl = ? AND idx IS NULL`, tbl)
 		require.NoError(t, err)
 	}
-	_, err := db.Exec(`ANALYZE sqlite_schema`)
-	require.NoError(t, err)
+	reloadStatistics(t, conns)
+}
+
+// knnQuerier is what the plan and row helpers need; both *sql.DB and a held
+// *sql.Conn satisfy it.
+type knnQuerier interface {
+	QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error)
 }
 
 // vecKNNPlan is the plan's loops: top holds the top-level SCAN/SEARCH rows
 // (parent is the root), outermost first; sub holds the SCAN/SEARCH rows nested
 // under anything else (a subquery). Temp b-tree rows are left out.
-func vecKNNPlan(t *testing.T, db *sql.DB, q string, args []any) (top, sub []string) {
+func vecKNNPlan(t *testing.T, db knnQuerier, q string, args []any) (top, sub []string) {
 	t.Helper()
-	rows, err := db.Query("EXPLAIN QUERY PLAN "+q, args...)
+	rows, err := db.QueryContext(context.Background(), "EXPLAIN QUERY PLAN "+q, args...)
 	require.NoError(t, err)
 	defer rows.Close()
 	for rows.Next() {
@@ -250,9 +305,9 @@ func vecKNNPlan(t *testing.T, db *sql.DB, q string, args []any) (top, sub []stri
 
 // vecKNNRows runs q and returns its rows, each rendered as text: in the order
 // q returns them when ordered, else sorted.
-func vecKNNRows(t *testing.T, db *sql.DB, q string, args []any, ordered bool) []string {
+func vecKNNRows(t *testing.T, db knnQuerier, q string, args []any, ordered bool) []string {
 	t.Helper()
-	rows, err := db.Query(q, args...)
+	rows, err := db.QueryContext(context.Background(), q, args...)
 	require.NoError(t, err)
 	defer rows.Close()
 	cols, err := rows.Columns()

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/engine/store/facts"
@@ -127,12 +128,20 @@ func Open(path string) (*Service, error) {
 		// (internal/sqlite/vec.go) so every pooled connection is configured, not just the first.
 	}
 
-	// Update query planner statistics (one-time hint, not per-connection).
-	db.Exec("PRAGMA optimize")
-
 	if err := migrate.All(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store.Open: %w", err)
+	}
+
+	// Repair planner statistics that went stale while no process was running
+	// (a crash mid-pass, statistics written by another binary). It runs after
+	// the migrations so the tables exist, and with 0x10000 so every table is
+	// considered: a plain `PRAGMA optimize` at open has used no table yet on
+	// this connection and only analyzes never-analyzed indexes, never size
+	// drift. analysis_limit bounds the scan. Best-effort; later Opens'
+	// connections load the repaired statistics from disk, so no schema bump.
+	if _, err := db.Exec(index.OptimizeStatsSQL); err != nil {
+		log.Debug().Err(err).Msg("store.Open: optimize failed (query plans may drift)")
 	}
 
 	gits := storegit.NewStorer(db)

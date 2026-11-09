@@ -118,6 +118,10 @@ type Index struct {
 	// before the watermark moves: the window in which branch_facts is ahead
 	// of meta.last_commit.
 	beforeSyncCAS func()
+	// afterStatsCheckpoint fires in Sync after each in-pass planner-statistics
+	// checkpoint (statsCheckpoint), with the count of facts indexed so far, so
+	// a test can observe what every pooled connection plans mid-pass.
+	afterStatsCheckpoint func(n int)
 	// beforeRefEdgesWrite fires inside applyBlobRefs's transaction, after the
 	// claim is written and before the edges are: an error from it aborts the
 	// transaction, which is how a test stands in for a crash between the two.
@@ -479,6 +483,7 @@ func (si *Index) Sync(ctx context.Context, branch string) error {
 			}
 			if rec != nil {
 				indexed = append(indexed, *rec)
+				si.statsCheckpoint(ctx, len(indexed))
 			}
 		}
 		log.Info().Int("files", len(paths)).Msg("index sync: full rebuild complete")
@@ -502,6 +507,7 @@ func (si *Index) Sync(ctx context.Context, branch string) error {
 			}
 			if rec != nil {
 				indexed = append(indexed, *rec)
+				si.statsCheckpoint(ctx, len(indexed))
 			}
 		}
 		// Deletions are deliberately NOT scope-filtered. The filter guards what
@@ -524,20 +530,15 @@ func (si *Index) Sync(ctx context.Context, branch string) error {
 		si.writePostCommitDerivedFrom(ctx, branch, rec.Path, rec.BlobHash, rec.SourceCommit, rec.Refs)
 	}
 
-	// Let SQLite refresh its statistics as the corpus grows, so a long-lived
-	// instance does not drift back into the blind-planner state Rebuild's
-	// ANALYZE fixed. This is cheap and self-limiting: optimize only re-analyzes
-	// on missing stats or large size drift, so steady-state syncs pay nothing.
-	// The 0x10000 bit is required — without it optimize considers only tables
-	// touched on this pooled connection, which under database/sql is arbitrary.
+	// Final planner-statistics refresh for the pass (see statsCheckpoint for
+	// the in-pass ones). Cheap and self-limiting: optimize only re-analyzes on
+	// missing stats or large size drift, so steady-state syncs pay nothing, and
+	// it bumps the schema cookie only when sqlite_stat1 changed so every pooled
+	// connection reloads. The 0x10000 bit is required — without it optimize
+	// considers only tables touched on this pooled connection, which under
+	// database/sql is arbitrary.
 	if len(indexed) > 0 {
-		// analysis_limit is per-connection and must ride the same Exec: without
-		// it, 0x10000 (consider ALL tables) can trigger an unbounded ANALYZE on a
-		// large corpus while LockBranch is held.
-		if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
-			`PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002`); err != nil {
-			log.Debug().Err(err).Msg("sync: optimize failed (query plans may drift)")
-		}
+		si.refreshPlannerStats(ctx, OptimizeStatsSQL)
 	}
 
 	if si.beforeSyncCAS != nil {
@@ -687,10 +688,9 @@ func (si *Index) Rebuild(ctx context.Context, branch string, progress model.Rebu
 	// Runs outside any transaction — under _txlock=immediate an open tx is a
 	// process-wide write lock, and ANALYZE needs only its own brief one.
 	// Best-effort: degraded query plans must never fail a rebuild.
-	if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
-		`PRAGMA analysis_limit=1000; ANALYZE`); err != nil {
-		log.Warn().Err(err).Msg("rebuild: analyze failed (query plans may be degraded)")
-	}
+	// refreshPlannerStats also makes every pooled connection reload the new
+	// statistics (ANALYZE reloads only the connection that ran it).
+	si.refreshPlannerStats(ctx, `PRAGMA analysis_limit=1000; ANALYZE`)
 
 	// Bump THIS branch's version only. A branch whose rebuild failed keeps its
 	// old (or absent) row and is retried on the next startup on its own, without

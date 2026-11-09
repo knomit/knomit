@@ -64,6 +64,14 @@ func (si *Index) SetBeforeSyncCASHookForTest(f func()) {
 	si.beforeSyncCAS = f
 }
 
+// SetAfterStatsCheckpointHookForTest installs f to run in Sync after each
+// in-pass planner-statistics checkpoint, with the number of facts indexed so
+// far; nil removes it.
+func (si *Index) SetAfterStatsCheckpointHookForTest(f func(n int)) {
+	mustBeTest("SetAfterStatsCheckpointHookForTest")
+	si.afterStatsCheckpoint = f
+}
+
 // SetBeforeRefEdgesWriteHookForTest installs f to run inside the reference
 // edge transaction, after the claim is written and before the edges are; an
 // error aborts the transaction. nil removes it.
@@ -553,5 +561,25 @@ func VecKNNQueriesForTest() []VecKNNQueryForTest {
 			func(a KNNArgsForTest) []any { return []any{a.BranchID, a.Vec, a.K} }},
 		{"methodology", methodologyKNNSQL, "fv",
 			func(a KNNArgsForTest) []any { return []any{a.BranchID, a.Vec, a.K, a.MinVec} }},
+	}
+}
+
+// GraphWriteStatementForTest is one hot graph write statement (run about 11
+// times per indexed fact) with arguments that plan like a real call.
+type GraphWriteStatementForTest struct {
+	Name string
+	SQL  string
+	Args []any
+}
+
+// GraphWriteStatementsForTest lists graphMergeEdge's statement and
+// graphNodeIDByProps's statement for a Fact node (path + blob_hash identity),
+// whose plans depend on edges / node_labels statistics (#731).
+func GraphWriteStatementsForTest() []GraphWriteStatementForTest {
+	mustBeTest("GraphWriteStatementsForTest")
+	q, args := graphNodeIDByPropsSQL("Fact", map[string]string{"path": "kb/x.md", "blob_hash": "abc"})
+	return []GraphWriteStatementForTest{
+		{"graphMergeEdge", graphMergeEdgeSQL, []any{1, 2, "SIMILAR_TO", 1, 2, "SIMILAR_TO"}},
+		{"graphNodeIDByProps", q, args},
 	}
 }
