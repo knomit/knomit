@@ -119,19 +119,40 @@ a { color: inherit; }
 .k-prose.k-chat-answer tr:last-child td { border-bottom: 0; }
 .k-chat-table-scroll { max-width: 100%; overflow-x: auto; margin: 0 0 12px; }
 
+/* Every chip an answer's markdown is swapped for (a fact link, a repo chip, a
+   commit link) is ONE inline box aligned ONE way, .k-chat-chip:
+   - ON THE TEXT'S BASELINE. The chip's words are its baseline (align-items:
+     baseline); its mark (a fact's type glyph, a repo's colour dot) is centred
+     beside them (.k-chat-chip-mark) and takes no part. vertical-align: baseline
+     then puts the chip's words on the line's own baseline, whatever the line's
+     size: prose, a list item, a table cell.
+   - IT NEVER SETS ITS LINE'S HEIGHT. A chip is 1px border + its line + 1px
+     border (21px for a fact link). That fits the answer's 14px/1.65 line (23px)
+     but not a table cell's 12.5px/1.45 one (18px), where it used to push the
+     cell's baseline 2-4px below the row's other cells. margin-block: -2px takes
+     the chip's border box out of the line box's sum, so a line with a chip is
+     exactly as tall as one without, and nothing about how it is drawn changes.
+     On the doubled class: markdown.css's `.k-prose :first-child { margin-top:
+     0 }` (0,2,0) would otherwise zero it on a chip that opens its paragraph or
+     cell, and only there.
+   Each kind sets its own font, line height and ground; none sets a height or
+   a vertical-align of its own. The repo chip used to (height 20px at
+   vertical-align -3px, centred): it rode 5px low and spread its line by 3px,
+   the same fault the fact link had until 2026-11-08. */
+.k-chat-chip {
+  display: inline-flex; align-items: baseline; vertical-align: baseline;
+  box-sizing: border-box; white-space: nowrap;
+}
+.k-prose.k-chat-answer .k-chat-chip { margin-block: -2px; }
+.k-chat-chip-mark { display: flex; align-items: center; justify-content: center; flex: none; align-self: center; }
+
 /* Fact links (design §3; mockup .fp / .rp / .more / .hc). A resolved fact cited
-   in an answer: the type's glyph on its colour, then the title.
-   ON THE TEXT'S BASELINE. The title is the chip's baseline (align-items:
-   baseline; the glyph is centred and takes no part), so vertical-align:
-   baseline puts the chip's words on the line's own baseline. Its height comes
-   from the title's 19px line plus the 1px borders (21px), which sits inside
-   the answer's 14px/1.65 line box: a line holding a chip is as tall as one
-   without. It used to be height 21px at vertical-align -4px, whose baseline
-   was the glyph's, so the chip rode off the line and pushed it apart. */
+   in an answer: the type's glyph on its colour, then the title. A .k-chat-chip:
+   its 19px line plus the borders is 21px tall. */
 .k-fact-link {
-  display: inline-flex; align-items: baseline; gap: 5px; max-width: 250px; vertical-align: baseline;
-  box-sizing: border-box; padding: 0 8px 0 4px; margin: 0; border-radius: 5px; background: #161a21; border: 1px solid #263041;
-  color: #cbd6e6; font-size: 12.5px; line-height: 19px; white-space: nowrap; font-family: var(--k-font-body); font-weight: 400;
+  gap: 5px; max-width: 250px;
+  padding: 0 8px 0 4px; margin-inline: 0; border-radius: 5px; background: #161a21; border: 1px solid #263041;
+  color: #cbd6e6; font-size: 12.5px; line-height: 19px; font-family: var(--k-font-body); font-weight: 400;
   cursor: pointer; text-align: left;
 }
 /* No selected look: a clicked chip goes back to rest (chat review, 2026-11-08).
@@ -141,17 +162,19 @@ a { color: inherit; }
 .k-fact-link:focus { outline: none; }
 .k-fact-link:focus-visible { outline: 2px solid #4a7ab5; outline-offset: 2px; }
 .k-fact-link-title { overflow: hidden; text-overflow: ellipsis; min-width: 0; line-height: 19px; }
-.k-fact-link-glyph { width: 16px; height: 16px; border-radius: 4px; display: flex; align-items: center; justify-content: center; flex: none; align-self: center; }
+.k-fact-link-glyph { width: 16px; height: 16px; border-radius: 4px; }
 /* In the column narrowed beside the side panel, links in tables cap at 150px. */
 .k-chat-main--narrow .k-chat-answer td .k-fact-link { max-width: 150px; }
-/* A commit link: the timeline's CommitHash as a bare button, underlined on hover. */
-.k-commit-link { background: none; border: none; padding: 0; margin: 0; cursor: pointer; font: inherit; line-height: inherit; }
+/* A commit link: the timeline's CommitHash as a bare button, underlined on hover.
+   A .k-chat-chip with no ground: the hash is its baseline. */
+.k-commit-link { background: none; border: none; padding: 0; margin-inline: 0; cursor: pointer; font: inherit; line-height: inherit; }
 .k-commit-link:hover, .k-commit-link:focus-visible { text-decoration: underline; text-decoration-color: #34507a; text-underline-offset: 3px; outline: none; }
 .k-commit-link.k-commit-link--open { text-decoration: underline; text-decoration-color: #6ea8fe; text-underline-offset: 3px; }
 .k-fact-more { font-size: 11.5px; color: #7a8aa0; margin-left: 4px; white-space: nowrap; }
 .k-repo-link {
-  display: inline-flex; align-items: center; gap: 5px; vertical-align: -3px; height: 20px; box-sizing: border-box; padding: 0 7px;
-  border-radius: 10px; border: 1px solid #2a2a2a; background: #151515; font-size: 12px; color: #c8c8c8; line-height: 1; white-space: nowrap;
+  /* A .k-chat-chip: the name's 18px line plus the borders is 20px tall, the pill the mockup draws. */
+  gap: 5px; padding: 0 7px;
+  border-radius: 10px; border: 1px solid #2a2a2a; background: #151515; font-size: 12px; color: #c8c8c8; line-height: 18px;
   font-family: var(--k-font-body);
 }
 .k-fact-card {
@@ -169,6 +192,19 @@ a { color: inherit; }
   display: flex; align-items: center; gap: 8px;
 }
 .k-fact-card-path > [data-testid=fact-band-path] { flex: 1; }
+
+/* An approval's three answers (ChatToolGroup's ApprovalCard, option B1 of the
+   2026-11-09 chat review): text links, not buttons drawn as buttons. Grey at
+   rest, Allow green; hover lifts the words and lays a faint ground under them;
+   keyboard focus keeps the app's ring, on :focus-visible. */
+.k-approval-answer {
+  background: none; border: none; padding: 1px 5px; border-radius: 3px; color: #8a8a8a;
+  font: inherit; line-height: inherit; cursor: pointer;
+}
+.k-approval-answer--allow { color: #9fd4b4; }
+.k-approval-answer:hover { color: #e2e2e2; background: #232323; }
+.k-approval-answer:focus { outline: none; }
+.k-approval-answer:focus-visible { outline: 2px solid #4a7ab5; outline-offset: 2px; }
 
 /* The streaming caret: until the turn ends. */
 .k-chat-caret { display: inline-block; width: 7px; height: 15px; margin-left: 2px; vertical-align: -2px; background: #e8c27a; border-radius: 1px; }

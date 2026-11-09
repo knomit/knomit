@@ -62,9 +62,9 @@ export function FactLink({ handle }: { handle: string }) {
           second, text-only box over it. The accessible name is the visible
           title text below (the glyph's SVG carries no text). */}
       <button ref={chip} type="button" data-testid="fact-link" data-type={f.type} data-open={open ? 'true' : undefined}
-        aria-current={open ? 'true' : undefined} className="k-fact-link"
+        aria-current={open ? 'true' : undefined} className="k-chat-chip k-fact-link"
         onMouseDown={noMouseFocus} onClick={onClick} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}>
-        <span data-testid="fact-link-glyph" className="k-fact-link-glyph" style={{ background: ts.bg }}>
+        <span data-testid="fact-link-glyph" className="k-chat-chip-mark k-fact-link-glyph" style={{ background: ts.bg }}>
           <TypeIcon type={f.type} color={ts.color} size={11} />
         </span>
         <span className="k-fact-link-title">{f.title}</span>
@@ -123,18 +123,20 @@ export function CommitLink({ handle }: { handle: string }) {
   const { repo, branch, commit } = f;
   const open = env.openKey === commitKey(repo, branch, commit);
   return (
-    <button type="button" data-testid="commit-link" data-open={open ? 'true' : undefined} aria-current={open ? 'true' : undefined} className={open ? 'k-commit-link k-commit-link--open' : 'k-commit-link'} title={commit}
+    <button type="button" data-testid="commit-link" data-open={open ? 'true' : undefined} aria-current={open ? 'true' : undefined} className={open ? 'k-chat-chip k-commit-link k-commit-link--open' : 'k-chat-chip k-commit-link'} title={commit}
       onClick={e => { e.preventDefault(); env.onCommit?.(repo, branch, commit); }}>
       <CommitHash commit={commit} />
     </button>
   );
 }
 
-/** A repo chip: the repo's colour dot (RepoDot) and its name, in a pill. */
+/** A repo chip: the repo's colour dot (RepoDot) and its name, in a pill. Like
+ *  every chip in an answer it is a .k-chat-chip (App.css): the name is its
+ *  baseline, the dot is centred beside it. */
 export function RepoLink({ name }: { name: string }) {
   return (
-    <span data-testid="repo-link" className="k-repo-link">
-      <RepoDot repo={name} size={7} testId="repo-link-dot" />{name}
+    <span data-testid="repo-link" className="k-chat-chip k-repo-link">
+      <span className="k-chat-chip-mark"><RepoDot repo={name} size={7} testId="repo-link-dot" /></span>{name}
     </span>
   );
 }
