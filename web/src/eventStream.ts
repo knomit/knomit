@@ -163,6 +163,11 @@ export class WailsEventSource implements EventSourceLike {
     this.readyState = CLOSED;
     this.listeners.clear();
     this.onopen = this.onmessage = this.onerror = null;
+    this.release();
+  }
+
+  /** Free the socket and every timer: a CLOSED source holds none. */
+  private release(): void {
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
     if (this.watchdog) { clearInterval(this.watchdog); this.watchdog = null; }
     this.dropSocket();
@@ -252,7 +257,7 @@ export class WailsEventSource implements EventSourceLike {
       if (f.closed) {
         // The server refused the subscription: final, as for EventSource.
         this.readyState = CLOSED;
-        this.dropSocket();
+        this.release();
       } else {
         this.readyState = CONNECTING;
       }

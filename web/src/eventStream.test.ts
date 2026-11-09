@@ -107,15 +107,27 @@ describe('WailsEventSource', () => {
     vi.useFakeTimers();
     const { sock, es, socks } = await make();
     const errs: { status?: number }[] = [];
-    es.addEventListener('error', ((e: { status?: number }) => errs.push(e)) as never);
+    // CLOSED already when the error dispatches: chatEvents' hub reopens on that.
+    const states: number[] = [];
+    es.addEventListener('error', ((e: { status?: number }) => { errs.push(e); states.push(es.readyState); }) as never);
     sock().push({ t: 'error', closed: true, status: 403 });
-    expect(es.readyState).toBe(2);
+    expect(states).toEqual([2]);
     expect(errs).toEqual([{ type: 'error', status: 403 }]);
     expect(streamErrorSuffix(errs[0])).toBe(' (HTTP 403)');
     expect(streamErrorSuffix({ type: 'error' })).toBe('');
     // Final: no reopen, however long we wait.
     await vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS * 3);
     expect(socks).toHaveLength(1);
+  });
+
+  it('a refused source holds no timer, before and after close()', async () => {
+    vi.useFakeTimers();
+    const { sock, es } = await make();
+    expect(vi.getTimerCount()).toBe(1); // the stale-stream watchdog
+    sock().push({ t: 'error', closed: true, status: 403 });
+    expect(vi.getTimerCount()).toBe(0);
+    es.close();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('reopens the Wails stream with backoff when it ends, resuming with the last event id', async () => {
