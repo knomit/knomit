@@ -107,9 +107,11 @@ describe('WailsEventSource', () => {
     vi.useFakeTimers();
     const { sock, es, socks } = await make();
     const errs: { status?: number }[] = [];
-    es.addEventListener('error', ((e: { status?: number }) => errs.push(e)) as never);
+    // CLOSED already when the error dispatches: chatEvents' hub reopens on that.
+    const states: number[] = [];
+    es.addEventListener('error', ((e: { status?: number }) => { errs.push(e); states.push(es.readyState); }) as never);
     sock().push({ t: 'error', closed: true, status: 403 });
-    expect(es.readyState).toBe(2);
+    expect(states).toEqual([2]);
     expect(errs).toEqual([{ type: 'error', status: 403 }]);
     expect(streamErrorSuffix(errs[0])).toBe(' (HTTP 403)');
     expect(streamErrorSuffix({ type: 'error' })).toBe('');

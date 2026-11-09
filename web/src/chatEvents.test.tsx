@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, cleanup } from '@testing-library/react';
 import { ChatFacet } from './ChatFacet';
-import { subscribeChatEvents, chatEventStreamCount } from './chatEvents';
-import { installFakeEventSource, uninstallFakeEventSource, streamsMatching, latestStream, CHAT_EVENTS_STREAM } from './testEventSource';
+import { subscribeChatEvents, chatEventStreamCount, REOPEN_INITIAL_MS, REOPEN_MAX_MS } from './chatEvents';
+import type { ChatEventListener } from './chatEvents';
+import { installFakeEventSource, uninstallFakeEventSource, streamsMatching, latestStream, CHAT_EVENTS_STREAM, FakeEventSource } from './testEventSource';
 import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatSnapshot } from './chatApi';
 
@@ -73,6 +74,82 @@ describe('the page\'s one chat events stream', () => {
     act(() => { latestStream(CHAT_EVENTS_STREAM)!.emit('text_delta', { chat: 'chat-a', text: 'x', turn: 0 }); });
     expect(a.mock.calls).toHaveLength(before);
     keep();
+  });
+});
+
+describe('the hub reopens a stream that ended CLOSED', () => {
+  // Released even when a test fails, so a failure does not leak the hub into the next test.
+  let offs: (() => void)[] = [];
+  const sub = (chatId: string, fn: ChatEventListener = () => {}) => { const off = subscribeChatEvents(chatId, fn); offs.push(off); return off; };
+  beforeEach(() => { offs = []; vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); });
+  afterEach(async () => { offs.forEach(off => off()); await flush(); vi.useRealTimers(); });
+
+  // EventSource sets CLOSED, then fires error, when it gives up for good.
+  const fail = (es: FakeEventSource, state = FakeEventSource.CLOSED) => { es.readyState = state; es.emit('error'); };
+  const readies = (fn: ReturnType<typeof vi.fn>) => fn.mock.calls.filter(c => c[0] === 'ready').length;
+
+  it('reopens after REOPEN_INITIAL_MS, and every subscriber hears the new stream\'s ready', async () => {
+    const a = vi.fn();
+    const b = vi.fn();
+    sub('chat-a', a);
+    sub('chat-b', b);
+    await flush();
+    expect(readies(a)).toBe(1);
+    fail(pageStreams()[0]);
+    vi.advanceTimersByTime(REOPEN_INITIAL_MS - 1);
+    expect(pageStreams()).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(pageStreams()).toHaveLength(2);
+    expect(pageStreams()[1].url).toBe('/api/v1/chats/events');
+    expect(chatEventStreamCount()).toBe(1);
+    await flush();
+    expect(readies(a)).toBe(2);
+    expect(readies(b)).toBe(2);
+    // The new stream is the one routed: an event on it reaches its chat.
+    act(() => { pageStreams()[1].emit('text_delta', { chat: 'chat-a', text: 'after', turn: 0 }); });
+    expect(a.mock.calls.filter(c => c[0] === 'text_delta')).toHaveLength(1);
+  });
+
+  it('backs off 1s, 2s, 4s … capped at REOPEN_MAX_MS, and a ready resets it to 1s', async () => {
+    FakeEventSource.emitReadyOnConnect = false;
+    sub('chat-a');
+    await flush();
+    const delays = [1000, 2000, 4000, 8000, 16000, 30000, 30000];
+    expect(REOPEN_MAX_MS).toBe(30000);
+    for (const [i, d] of delays.entries()) {
+      fail(pageStreams()[i]);
+      vi.advanceTimersByTime(d - 1);
+      expect(pageStreams()).toHaveLength(i + 1);
+      vi.advanceTimersByTime(1);
+      expect(pageStreams()).toHaveLength(i + 2);
+    }
+    const last = latestStream(CHAT_EVENTS_STREAM)!;
+    last.emit('ready', {});
+    fail(last);
+    vi.advanceTimersByTime(REOPEN_INITIAL_MS);
+    expect(pageStreams()).toHaveLength(delays.length + 2);
+  });
+
+  it('the last subscriber leaving drops a pending reopen: no timer, no stream', async () => {
+    const off = sub('chat-a');
+    await flush();
+    fail(pageStreams()[0]);
+    expect(vi.getTimerCount()).toBe(1);
+    off();
+    await flush();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(REOPEN_MAX_MS * 2);
+    expect(pageStreams()).toHaveLength(1);
+    expect(chatEventStreamCount()).toBe(0);
+  });
+
+  it('an error while CONNECTING is the transport\'s own retry: the hub opens no second stream', async () => {
+    sub('chat-a');
+    await flush();
+    fail(pageStreams()[0], FakeEventSource.CONNECTING);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(REOPEN_MAX_MS * 2);
+    expect(pageStreams()).toHaveLength(1);
   });
 });
 
