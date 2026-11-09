@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { ChatInfo } from './chatApi';
 import { ProviderIcon } from './icons';
-import { noMouseFocus } from './utils';
+import { chatTitleShown, noMouseFocus } from './utils';
 import { btn, confirmBox } from './manageStyles';
 import { formatCost } from './chatState';
 import { ChatTitleEdit } from './ChatTitleEdit';
@@ -90,7 +90,7 @@ export function ChatRailRow({ chat, index, providerKind, state, selected, locked
             <ProviderIcon kind={providerKind} name={chat.provider} color="currentColor" size={13} />
           </span>
           <span data-testid={`rail-chat-title-${chat.id}`} style={titleStyle}
-            onDoubleClick={onRename && !locked ? () => { setHover(false); setTipAt(null); setEditing(true); } : undefined}>{title}</span>
+            onDoubleClick={onRename && !locked ? () => { setHover(false); setTipAt(null); setEditing(true); } : undefined}>{chatTitleShown(title)}</span>
         </button>
       )}
       <button

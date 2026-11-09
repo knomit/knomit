@@ -124,9 +124,10 @@ describe('the Chats group', () => {
     expect(t.style.whiteSpace).toBe('nowrap');
     expect(t.style.textOverflow).toBe('ellipsis');
     expect(t.style.overflow).toBe('hidden');
-    expect(t.textContent).toBe('A very long title '.repeat(10));
+    // Capped for display (chatTitleShown, chat review 2026-11-09); the CSS ellipsis stays as the narrow fallback.
+    expect(t.textContent).toBe('A very long title A very…');
     // The mark's own <title> is the provider's name; nothing else is in the row.
-    expect(row.textContent).toBe('prov-a' + 'A very long title '.repeat(10));
+    expect(row.textContent).toBe('prov-a' + 'A very long title A very…');
   });
 
   it('falls back to the model name for a chat with no title yet', () => {
@@ -249,7 +250,7 @@ describe('the crumb', () => {
     render(<TopBar state={{ ...init, repo: 'alpha', context: { kind: 'repo', repo: 'alpha' } }} repos={[]} railOpen={false} onToggleRail={() => {}} onGear={() => {}} facets={['chat', 'settings']} facet="chat"
       label={{ kind: 'chat', name: long, sub: 'Sonnet 5.5', id: 'c1' }} />);
     const name = screen.getByTestId('target-label-name');
-    expect(name.textContent).toBe(long);
+    expect(name.textContent).toBe('bind to cyberai then see…'); // chatTitleShown, as the rail row
     expect(name.title).toBe(long);
     expect(name.style.flexShrink).toBe('1');
     expect(name.style.minWidth).toBe('0px');

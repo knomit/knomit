@@ -315,6 +315,35 @@ export function clampTitle(title: string, max: number = LIST_TITLE_MAX): string 
   return title.slice(0, end) + '…';
 }
 
+/** How many characters of a chat's title the rail row and the top bar show
+ *  before the "…" (the user's choice, chat review 2026-11-09). */
+export const CHAT_TITLE_SHOWN = 24;
+
+/**
+ * chatTitleShown is a chat's title as the rail's CHATS row and the top bar both
+ * show it: CHAT_TITLE_SHOWN characters (code points, so an emoji is never split)
+ * or fewer pass through unchanged. A longer one is cut at the last word boundary
+ * within the first CHAT_TITLE_SHOWN characters (a hard cut there when the first
+ * word alone is longer), its trailing whitespace and punctuation are trimmed, and
+ * "…" follows. Display only: the stored title (the server's titleOf, 300 runes)
+ * is untouched, and the CSS ellipsis on both stays as the narrow-width fallback.
+ */
+export function chatTitleShown(title: string): string {
+  const chars = Array.from(title);
+  if (chars.length <= CHAT_TITLE_SHOWN) return title;
+  const head = chars.slice(0, CHAT_TITLE_SHOWN);
+  // A boundary right after the 24th character keeps all 24; else the last space within them.
+  let end = /\s/.test(chars[CHAT_TITLE_SHOWN]) ? CHAT_TITLE_SHOWN : -1;
+  if (end < 0) {
+    for (let i = head.length - 1; i > 0; i--) {
+      if (/\s/.test(head[i]) && head.slice(0, i).join('').trim() !== '') { end = i; break; }
+    }
+  }
+  const cut = head.slice(0, end < 0 ? CHAT_TITLE_SHOWN : end).join('');
+  const trimmed = cut.replace(/[\s\p{P}]+$/u, '');
+  return (trimmed || cut.trimEnd()) + '…';
+}
+
 /** True only for an absolute http: or https: URL. Anything else (javascript:,
  *  data:, a relative string, junk) is not safe to render as a link href. */
 export function isHttpUrl(raw: string | undefined | null): raw is string {
