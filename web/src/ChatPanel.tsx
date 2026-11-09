@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { markdownPlugins, markdownComponents } from './markdown';
@@ -15,7 +15,7 @@ import { boundAfter, compactCount, sessionCost } from './chatState';
 import type { ChatState, ChatTurn, ToolCall } from './chatState';
 import type { ApprovalDecision } from './chatApi';
 import {
-  CHAT_CONTINUE_MESSAGE, CHAT_INPUT_PLACEHOLDER, CHAT_REPLY_PLACEHOLDER, CHAT_SEND, CHAT_STOP, CHAT_STOP_KEY, COMPOSER_HINT, CONTEXT_LABEL,
+  CHAT_CONTINUE_MESSAGE, CHAT_INPUT_PLACEHOLDER, CHAT_JUMP_LATEST, CHAT_REPLY_PLACEHOLDER, CHAT_SEND, CHAT_STOP, CHAT_STOP_KEY, COMPOSER_HINT, CONTEXT_LABEL,
   NOT_SENT, NOT_SENT_RETRY,
 } from './chatCopy';
 
@@ -56,7 +56,7 @@ const TRANSCRIPT_COLUMN: CSSProperties = { ...COLUMN, margin: 'auto auto 0' };
  * faint strip), its activity line, its final text as markdown, and a cost
  * footer; the server's price-tier warning; and the rounded box to write in.
  */
-export function ChatPanel({ state, selectedId, actionError, notSent, landed, modelName, context, onSend, onStop, onSelect, onAnswer, onNewChat, factLinks }: {
+export function ChatPanel({ state, selectedId, actionError, notSent, landed, modelName, context, onSend, onStop, onSelect, onAnswer, onNewChat, factLinks, onScreen = true }: {
   state: ChatState;
   selectedId: string | null;
   /** The last failed cancel or answer. */
@@ -73,8 +73,10 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   onStop: () => void;
   onSelect: (call: ToolCall) => void;
   onAnswer: (callId: string, decision: ApprovalDecision) => void;
-  /** Start an empty chat with the same model (the notices' action). */
+  /** Start an empty chat with the same model (the context-full notice's action). */
   onNewChat?: () => void;
+  /** Whether this chat is the one on screen: coming on screen starts it at the bottom, following. */
+  onScreen?: boolean;
   /** The answers' fact links: the repos a repo chip may name, the fact open in
    *  the side panel, and what a link does. */
   factLinks?: {
@@ -149,16 +151,101 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // Follow or read. At the bottom, the transcript follows what streams in; a
+  // scroll UP stops that and nothing moves the view until the reader comes
+  // back (by hand to within FOLLOW_SLACK_PX, the pill, End, a send, or the
+  // chat coming on screen). Only a DECREASE of scrollTop counts as the reader
+  // leaving: our own writes and content growth only ever move it down, so a
+  // scroll event that lands after the next delta grew the page (the bottom is
+  // then further than the slack) is not mistaken for a scroll up.
+  const following = useRef(true);
+  const [follow, setFollow] = useState(true);
+  const lastTop = useRef(0);
+  const smoothing = useRef(false);
+  const frame = useRef(0);
+  const setFollowing = useCallback((on: boolean) => {
+    following.current = on;
+    if (!on) smoothing.current = false;
+    setFollow(on);
+  }, []);
+  const toBottom = useCallback((el: HTMLElement, smooth: boolean) => {
+    const top = el.scrollHeight - el.clientHeight;
+    if (smooth && typeof el.scrollTo === 'function') el.scrollTo({ top, behavior: 'smooth' });
+    else el.scrollTop = top;
+    lastTop.current = el.scrollTop;
+  }, []);
+  // One write per frame, however many deltas arrived in it.
+  const pin = useCallback(() => {
+    if (frame.current) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = 0;
+      const el = scroller.current;
+      if (el && following.current) toBottom(el, smoothing.current);
+    });
+  }, [toBottom]);
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+  const jumpToLatest = useCallback((smooth: boolean) => {
+    const el = scroller.current;
+    if (!el) return;
+    setFollowing(true);
+    smoothing.current = smooth && !reducedMotion();
+    toBottom(el, smoothing.current);
+  }, [setFollowing, toBottom]);
+  const onTranscriptScroll = () => {
+    const el = scroller.current;
+    if (!el) return;
+    const top = el.scrollTop;
+    if (el.scrollHeight - top - el.clientHeight <= FOLLOW_SLACK_PX) {
+      smoothing.current = false;
+      if (!following.current) setFollowing(true);
+    } else if (top < lastTop.current - 1 && following.current) {
+      setFollowing(false);
+    }
+    lastTop.current = top;
+  };
+  useLayoutEffect(() => {
+    if (following.current) pin();
+  }, [state.turns, state.approvals, pin]);
+  // Growth no render announced (a fact chip resolving, the composer's height).
   useEffect(() => {
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [state.turns, state.approvals]);
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => { if (following.current) pin(); });
+    ro.observe(el);
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
+    return () => ro.disconnect();
+  }, [pin]);
+  // A chat that comes on screen (or is opened) starts at the bottom, following.
+  useLayoutEffect(() => {
+    if (onScreen) jumpToLatest(false);
+  }, [onScreen, jumpToLatest]);
+  // End jumps to the latest, as the pill does, unless focus is in something
+  // to type in (the composer keeps its own End) or outside this chat column.
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'End' || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const el = root.current;
+      if (!el || !shown(el)) return;
+      const active = document.activeElement;
+      if (typingIn(active)) return;
+      if (active && active !== document.body && !el.contains(active)) return;
+      e.preventDefault();
+      jumpToLatest(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [jumpToLatest]);
 
+  const send = (text: string) => {
+    jumpToLatest(false);
+    onSend(text);
+  };
   const submit = () => {
     const text = draft.trim();
     if (!text || state.running) return;
     setDraft('');
-    onSend(text);
+    send(text);
   };
   const editResend = (text: string) => { setDraft(text); box.current?.focus(); };
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -181,7 +268,8 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
 
   return (
     <div ref={root} data-testid="chat-panel" style={panel}>
-      <div ref={scroller} data-testid="chat-transcript" style={transcript}>
+      <div style={transcriptWrap}>
+      <div ref={scroller} data-testid="chat-transcript" style={transcript} onScroll={onTranscriptScroll}>
         <div style={TRANSCRIPT_COLUMN}>
           {state.turns.map((t, ti) => {
             const live = state.running && ti === state.turns.length - 1;
@@ -218,7 +306,7 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
                 })}
                 {t.stopped && !live && (
                   <StoppedMark latest={ti === state.turns.length - 1} onEdit={() => editResend(t.user)}
-                    onContinue={() => { if (!state.running) onSend(CHAT_CONTINUE_MESSAGE); }} />
+                    onContinue={() => { if (!state.running) send(CHAT_CONTINUE_MESSAGE); }} />
                 )}
                 <TurnNotices turn={t} modelName={modelName} onNewChat={onNewChat} />
                 {t.usage && !live && (
@@ -232,6 +320,10 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
           })}
           {actionError && <div role="alert"><NoticeLine tone="blocked" testId="chat-action-error" lead={actionError} /></div>}
         </div>
+      </div>
+      {!follow && (
+        <button type="button" data-testid="chat-jump-latest" onClick={() => jumpToLatest(true)} style={jumpPill}>{CHAT_JUMP_LATEST}</button>
+      )}
       </div>
       <div style={{ ...COLUMN, flexShrink: 0, paddingBottom: 14 }}>
         <div style={composer}>
@@ -295,12 +387,33 @@ function shown(el: HTMLElement | null): boolean {
   return true;
 }
 
+/** How close to the bottom still counts as "at the bottom" (following). */
+export const FOLLOW_SLACK_PX = 24;
+
+function reducedMotion(): boolean {
+  return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 const panel: CSSProperties = { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 };
+// The transcript's box, so the jump pill can float over its bottom edge.
+const transcriptWrap: CSSProperties = { flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' };
 const transcript: CSSProperties = { flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 0', display: 'flex', flexDirection: 'column' };
 const turnBox = (sep: boolean): CSSProperties => ({ padding: '18px 0 14px', ...(sep ? { borderTop: '1px solid #1c1c1c' } : {}) });
-const composer: CSSProperties = { background: '#171717', border: '1px solid #2e2e2e', borderRadius: 12, padding: '10px 12px 8px' };
+// The composer's raised surface and edge; the jump pill wears the same.
+const RAISED_BG = '#171717';
+const RAISED_EDGE = '1px solid #2e2e2e';
+const RAISED_INK = '#ddd';
+const composer: CSSProperties = { background: RAISED_BG, border: RAISED_EDGE, borderRadius: 12, padding: '10px 12px 8px' };
+// Quiet: the composer's surface, fully rounded, 13px, a soft shadow. Keyboard
+// focus gets the app's button ring (index.css button:focus-visible).
+const jumpPill: CSSProperties = {
+  position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)', zIndex: 1,
+  background: RAISED_BG, border: RAISED_EDGE, borderRadius: 999, padding: '5px 14px',
+  color: RAISED_INK, fontFamily: 'inherit', fontSize: 13, lineHeight: '18px', whiteSpace: 'nowrap', cursor: 'pointer',
+  boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+};
 const input: CSSProperties = {
-  display: 'block', width: '100%', resize: 'none', background: 'transparent', color: '#ddd', border: 'none',
+  display: 'block', width: '100%', resize: 'none', background: 'transparent', color: RAISED_INK, border: 'none',
   padding: '2px 2px 8px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none',
 };
 // The Stop/Send button always stays on this row: the meter and the hint wrap

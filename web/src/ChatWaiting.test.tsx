@@ -540,37 +540,36 @@ describe('live tool detail', () => {
 describe('notices: one line, never a filled box', () => {
   const PRICE = 'This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save.';
 
-  it('the price-tier line is the INFO tone, with the server\'s numbers: 95K of 100K, then the rest, then New chat', async () => {
-    const { onNewChat } = mount(snap([
+  it('the price-tier line is the INFO tone, with the server\'s numbers: 95K of 100K, then the rest, and no New chat link or tooltip', async () => {
+    mount(snap([
       { kind: 'user', text: 'q', warning: PRICE, warning_info: { kind: 'price_tier', prompt_tokens: 95_400, threshold: 95_000, tier_tokens: 100_000, mult: 5, model: 'claude-test-x' } },
       { kind: 'assistant', text: 'a' },
     ], { prompt_tokens: 95_400 }));
     await screen.findByTestId('chat-turn-0');
     const line = screen.getByTestId('chat-notice-price');
     expect(line.getAttribute('data-tone')).toBe('info');
-    expect(line.textContent).toBe("95.4K of 100K·Haiku 5.5's higher price tier is next (5×)·New chat");
-    expect(line.getAttribute('title')).toBe(PRICE);
+    expect(line.textContent).toBe("95.4K of 100K·Haiku 5.5's higher price tier is next (5×)");
+    // No "New chat" link and no tooltip (user, 2026-11-09: "the new chat starts
+    // completely uninitialized, so it's useless … the line itself is enough").
+    expect(screen.queryByTestId('chat-notice-price-action')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'New chat' })).toBeNull();
+    expect(line.getAttribute('title')).toBeNull();
+    expect(line.querySelector('[title]')).toBeNull();
     // "95.4K of 100K" is normal text, not a tone colour; the rest is footer grey.
     expect((screen.getByTestId('chat-notice-price-lead') as HTMLElement).style.color).toBe('rgb(212, 212, 212)');
     // No amber anywhere for the price tier: not on the line, the composer meter or the pill.
     expect(line.innerHTML).not.toMatch(/b8995a|184, 153, 90/i);
     for (const m of screen.getAllByTestId('context-meter')) expect((m.firstElementChild as HTMLElement).style.background).not.toMatch(/8a7444|138, 116, 68/i);
     expect(screen.getByTestId('context-meter').getAttribute('data-pct')).toBe('10');
-
-    // New chat asks for a chat like this one (the app starts it EMPTY, with the same model).
-    fireEvent.click(screen.getByTestId('chat-notice-price-action'));
-    expect(onNewChat).toHaveBeenCalledTimes(1);
-    expect(onNewChat).toHaveBeenCalledWith(CHAT);
   });
 
   it('a failed "New chat" is shown in the same one-line style with the existing "New chat hit an error", not swallowed', async () => {
     const onNewChat = vi.fn().mockRejectedValue(new Error('boom'));
     mount(snap([
-      { kind: 'user', text: 'q', warning: PRICE, warning_info: { kind: 'price_tier', prompt_tokens: 95_400, tier_tokens: 100_000, mult: 5 } },
-      { kind: 'assistant', text: 'a' },
+      { kind: 'user', text: 'q', error: 'full', error_info: { kind: 'context_full', needed: 1_020_000, window: 1_000_000 } },
     ]), { onNewChat });
     await screen.findByTestId('chat-turn-0');
-    fireEvent.click(screen.getByTestId('chat-notice-price-action'));
+    fireEvent.click(screen.getByTestId('chat-notice-full-action'));
     const line = await screen.findByTestId('chat-action-error');
     expect(onNewChat).toHaveBeenCalledWith(CHAT);
     expect(line.textContent).toBe('New chat hit an error');

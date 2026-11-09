@@ -60,7 +60,10 @@ export function NoticeLine({ tone, lead, leadColor, rest, restMono, title, actio
 
 /** The notices of one turn: its price-tier warning and, if it ended in one, the
  *  context-full block or the turn's error. `modelName` is the model's display
- *  name; `onNewChat` starts an empty chat with the same model. */
+ *  name; `onNewChat` starts an empty chat with the same model, offered on the
+ *  context-full line only. The price-tier line is the whole message: no link
+ *  and no hover sentence (a fresh chat starts uninitialized, so "New chat"
+ *  there helped nobody). */
 export function TurnNotices({ turn, modelName, onNewChat }: {
   turn: ChatTurn;
   modelName: string;
@@ -72,12 +75,12 @@ export function TurnNotices({ turn, modelName, onNewChat }: {
   return (
     <>
       {w && w.kind === 'price_tier' && (
-        <NoticeLine tone="info" testId="chat-notice-price" title={turn.warning ?? undefined} leadColor={TEXT} action={action}
+        <NoticeLine tone="info" testId="chat-notice-price" leadColor={TEXT}
           lead={noticeOf(noticeCount(w.prompt_tokens ?? 0), noticeCount(w.tier_tokens || w.threshold || 0))}
           rest={noticeTierNext(modelName, w.mult ?? 0)} />
       )}
       {!w && turn.warning && (
-        <NoticeLine tone="info" testId="chat-notice-price" title={turn.warning} leadColor={TEXT} lead={turn.warning} action={action} />
+        <NoticeLine tone="info" testId="chat-notice-price" leadColor={TEXT} lead={turn.warning} />
       )}
       {turn.error && e && e.kind === 'context_full' && (
         <NoticeLine tone="blocked" testId="chat-notice-full" title={turn.error} action={action}

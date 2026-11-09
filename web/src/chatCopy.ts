@@ -169,6 +169,8 @@ export const noticeOf = (n: string, m: string): string => `${n} of ${m}`;
 export const noticeTierNext = (model: string, mult: number): string =>
   `${model}'s higher price tier is next${mult > 0 ? ` (${parseFloat(mult.toFixed(2))}×)` : ''}`;
 export const NOTICE_NEW_CHAT = 'New chat';
+/** The pill over the transcript while the reader is scrolled up from the latest. */
+export const CHAT_JUMP_LATEST = 'Jump to latest ↓';
 export const NOTICE_FULL = 'Chat is full';
 /** `<needed> > <window>, nothing sent`; with no known size, just `nothing sent`. */
 export const noticeFullRest = (needed: string, window: string): string =>

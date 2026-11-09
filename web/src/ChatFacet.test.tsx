@@ -184,10 +184,10 @@ describe('ChatFacet', () => {
       });
       es.emit('turn_error', { message: 'The model declined to answer.', turn: 0 });
     });
-    // One footnote line, with the server's numbers; the server's sentence is its title.
+    // One footnote line, with the server's numbers; no hover sentence and no link (the line is enough).
     const notice = screen.getByTestId('chat-notice-price');
     expect(notice.textContent).toBe("95.4K of 100K·claude-test-x's higher price tier is next (5×)");
-    expect(notice.getAttribute('title')).toBe('This chat is nearing 100,000 tokens. Past that, each message costs more. Start a new chat to save.');
+    expect(notice.getAttribute('title')).toBeNull();
     expect(screen.getByTestId('chat-turn-error').textContent).toBe('The model declined to answer.');
     expect(screen.getByTestId('chat-text')).toHaveTextContent('partial answer');
     // The only buttons are the group-less panel's: Send. No retry.

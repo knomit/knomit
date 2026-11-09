@@ -325,7 +325,7 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onBrowseFact, repos,
           <div className={openEntry ? 'k-chat-main k-chat-main--narrow' : 'k-chat-main'} data-panel={openEntry ? 'open' : 'closed'}>
             <ChatPanel state={state} selectedId={selectedId} actionError={newChatError || actionError} notSent={notSent} landed={landed} modelName={chat.name || chat.model}
               context={{ used: state.ctxTokens, window: ctxWindow }}
-              onSend={send} onStop={stop} onSelect={onSelect} onAnswer={answer}
+              onSend={send} onStop={stop} onSelect={onSelect} onAnswer={answer} onScreen={onScreen && facet === 'chat'}
               factLinks={{ repos: repos ?? NO_REPOS, openKey: openFactKey, onOpen: onOpenFact, onBrowse: onBrowseFact ? f => onBrowseFact(chat.id, { repo: f.repo, branch: f.branch, path: f.path }) : undefined, onCommit: onOpenCommit }}
               onNewChat={onNewChat ? () => {
                 setNewChatError('');
