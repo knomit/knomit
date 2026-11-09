@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { CSSProperties, KeyboardEvent } from 'react';
+import type { CSSProperties, KeyboardEvent, TouchEvent, WheelEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { markdownPlugins, markdownComponents } from './markdown';
 import { ChatToolGroup } from './ChatToolGroup';
@@ -152,21 +152,30 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Follow or read. At the bottom, the transcript follows what streams in; a
-  // scroll UP stops that and nothing moves the view until the reader comes
-  // back (by hand to within FOLLOW_SLACK_PX, the pill, End, a send, or the
-  // chat coming on screen). Only a DECREASE of scrollTop counts as the reader
-  // leaving: our own writes and content growth only ever move it down, so a
-  // scroll event that lands after the next delta grew the page (the bottom is
-  // then further than the slack) is not mistaken for a scroll up.
+  // Follow or read. At the bottom, the transcript follows what streams in; the
+  // reader scrolling up stops that and nothing moves the view until they come
+  // back (scrolling DOWN to within FOLLOW_SLACK_PX, the pill, End, a send).
+  // Leaving is decided by intent first: a wheel, touch or key that scrolls the
+  // transcript up stops following at once, however small (a gentle scroll that
+  // stays inside the slack would otherwise be re-pinned by the next frame).
+  // A scrollbar drag has no such event, so a DECREASE of scrollTop more than
+  // the slack from the bottom also counts. Our own writes and content growth
+  // only ever move scrollTop down, so they never count as leaving.
+  // While following, native scroll anchoring is off: we pin the bottom
+  // ourselves, and an anchoring adjustment during a reflow (a resize) would
+  // lower scrollTop and read as the reader leaving. While reading it is on,
+  // so the text being read stays put when something above it changes size.
   const following = useRef(true);
   const [follow, setFollow] = useState(true);
   const lastTop = useRef(0);
   const smoothing = useRef(false);
   const frame = useRef(0);
+  const touchY = useRef<number | null>(null);
   const setFollowing = useCallback((on: boolean) => {
     following.current = on;
     if (!on) smoothing.current = false;
+    // At once, not at the next render: the next reflow may come first.
+    if (scroller.current) scroller.current.style.overflowAnchor = on ? 'none' : 'auto';
     setFollow(on);
   }, []);
   const toBottom = useCallback((el: HTMLElement, smooth: boolean) => {
@@ -184,7 +193,10 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
       if (el && following.current) toBottom(el, smoothing.current);
     });
   }, [toBottom]);
-  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+  // Reset the handle too: StrictMode (main.tsx) mounts, cleans up and mounts
+  // again with the same refs, and a stale non-zero handle would make pin()
+  // return early forever.
+  useEffect(() => () => { cancelAnimationFrame(frame.current); frame.current = 0; }, []);
   const jumpToLatest = useCallback((smooth: boolean) => {
     const el = scroller.current;
     if (!el) return;
@@ -192,17 +204,37 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
     smoothing.current = smooth && !reducedMotion();
     toBottom(el, smoothing.current);
   }, [setFollowing, toBottom]);
+  // The reader asked to go up: stop following now, whatever the distance.
+  const leave = useCallback(() => {
+    const el = scroller.current;
+    if (el && following.current && el.scrollTop > 0) setFollowing(false);
+  }, [setFollowing]);
   const onTranscriptScroll = () => {
     const el = scroller.current;
-    if (!el) return;
+    // Hidden (display:none) it reads 0 for everything: nothing to learn.
+    if (!el || el.clientHeight === 0) return;
     const top = el.scrollTop;
-    if (el.scrollHeight - top - el.clientHeight <= FOLLOW_SLACK_PX) {
-      smoothing.current = false;
-      if (!following.current) setFollowing(true);
-    } else if (top < lastTop.current - 1 && following.current) {
-      setFollowing(false);
+    const gap = el.scrollHeight - top - el.clientHeight;
+    if (following.current) {
+      if (gap > FOLLOW_SLACK_PX && top < lastTop.current - 1) setFollowing(false);
+      else if (gap <= FOLLOW_SLACK_PX) smoothing.current = false;
+    } else if (gap <= 1 || (gap <= FOLLOW_SLACK_PX && top > lastTop.current)) {
+      // Back at the bottom, by coming DOWN to it: a small scroll up that
+      // stays inside the slack must not re-arm following.
+      setFollowing(true);
     }
     lastTop.current = top;
+  };
+  const onTranscriptWheel = (e: WheelEvent<HTMLDivElement>) => {
+    if (e.deltaY < 0 && !innerScrollsUp(e.target as Element, e.currentTarget)) leave();
+  };
+  const onTouchStart = (e: TouchEvent<HTMLDivElement>) => { touchY.current = e.touches[0]?.clientY ?? null; };
+  const onTouchMove = (e: TouchEvent<HTMLDivElement>) => {
+    const y = e.touches[0]?.clientY;
+    // A finger moving down drags the content down: the reader is going up.
+    if (touchY.current !== null && y !== undefined && y > touchY.current + 2
+      && !innerScrollsUp(e.target as Element, e.currentTarget)) leave();
+    if (y !== undefined) touchY.current = y;
   };
   useLayoutEffect(() => {
     if (following.current) pin();
@@ -216,26 +248,37 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
     if (el.firstElementChild) ro.observe(el.firstElementChild);
     return () => ro.disconnect();
   }, [pin]);
-  // A chat that comes on screen (or is opened) starts at the bottom, following.
+  // A chat that comes on screen keeps what the reader was doing: following, it
+  // lands at the bottom (with whatever streamed meanwhile) and goes on
+  // following; scrolled up, it comes back at the same place, pill showing.
   useLayoutEffect(() => {
-    if (onScreen) jumpToLatest(false);
+    if (!onScreen) return;
+    const el = scroller.current;
+    if (!el) return;
+    if (following.current) jumpToLatest(false);
+    else if (Math.abs(el.scrollTop - lastTop.current) > 1) el.scrollTop = lastTop.current;
   }, [onScreen, jumpToLatest]);
-  // End jumps to the latest, as the pill does, unless focus is in something
-  // to type in (the composer keeps its own End) or outside this chat column.
+  // Keys, unless focus is in something to type in or outside this chat column:
+  // End jumps to the latest, as the pill does (the composer keeps its own
+  // End); PageUp, ArrowUp, Home and Shift+Space scroll up, so they leave.
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== 'End' || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      const end = e.key === 'End' && !e.shiftKey;
+      const up = UP_KEYS.has(e.key) || (e.key === ' ' && e.shiftKey);
+      if (!end && !up) return;
       const el = root.current;
       if (!el || !shown(el)) return;
       const active = document.activeElement;
       if (typingIn(active)) return;
       if (active && active !== document.body && !el.contains(active)) return;
+      if (up) { leave(); return; }
       e.preventDefault();
       jumpToLatest(true);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [jumpToLatest]);
+  }, [jumpToLatest, leave]);
 
   const send = (text: string) => {
     jumpToLatest(false);
@@ -269,7 +312,8 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   return (
     <div ref={root} data-testid="chat-panel" style={panel}>
       <div style={transcriptWrap}>
-      <div ref={scroller} data-testid="chat-transcript" style={transcript} onScroll={onTranscriptScroll}>
+      <div ref={scroller} data-testid="chat-transcript" style={{ ...transcript, overflowAnchor: follow ? 'none' : 'auto' }}
+        onScroll={onTranscriptScroll} onWheel={onTranscriptWheel} onTouchStart={onTouchStart} onTouchMove={onTouchMove}>
         <div style={TRANSCRIPT_COLUMN}>
           {state.turns.map((t, ti) => {
             const live = state.running && ti === state.turns.length - 1;
@@ -389,6 +433,22 @@ function shown(el: HTMLElement | null): boolean {
 
 /** How close to the bottom still counts as "at the bottom" (following). */
 export const FOLLOW_SLACK_PX = 24;
+
+/** Keys that scroll a box up, and so mean the reader is leaving the bottom. */
+const UP_KEYS = new Set(['PageUp', 'ArrowUp', 'Home']);
+
+/** Whether a box between `target` and `root` would take an upward scroll
+ *  itself (the thinking summary, a tall code block): then the transcript does
+ *  not move, and the reader has not left it. */
+function innerScrollsUp(target: Element | null, root: Element): boolean {
+  for (let n = target; n && n !== root; n = n.parentElement) {
+    if (n.scrollTop > 0 && n.scrollHeight > n.clientHeight) {
+      const o = getComputedStyle(n).overflowY;
+      if (o === 'auto' || o === 'scroll') return true;
+    }
+  }
+  return false;
+}
 
 function reducedMotion(): boolean {
   return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
