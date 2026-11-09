@@ -302,6 +302,17 @@ describe.each([['plain', false], ['StrictMode', true]] as const)('follow or read
       expect(el.scrollTop).toBe(795);
     });
 
+    it('End after an up key clears it: the next delta is followed at once, not held', async () => {
+      const el = await mountStreaming();
+      scrollTo(el, BOTTOM());
+      fireEvent.keyDown(document.body, { key: 'PageUp' });
+      fireEvent.keyDown(document.body, { key: 'End' });
+      geom.height = 1400;
+      delta('followed');
+      await frame();
+      expect(el.scrollTop).toBe(1200);
+    });
+
     it('an up key lapses: a later small scroll up inside the slack is not taken for it, and the held pin runs', async () => {
       const el = await mountStreaming();
       scrollTo(el, BOTTOM());
