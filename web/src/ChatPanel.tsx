@@ -155,12 +155,17 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   // Follow or read. At the bottom, the transcript follows what streams in; the
   // reader scrolling up stops that and nothing moves the view until they come
   // back (scrolling DOWN to within FOLLOW_SLACK_PX, the pill, End, a send).
-  // Leaving is decided by intent first: a wheel, touch or key that scrolls the
+  // Leaving is decided by intent first: a wheel or touch that scrolls the
   // transcript up stops following at once, however small (a gentle scroll that
   // stays inside the slack would otherwise be re-pinned by the next frame).
-  // A scrollbar drag has no such event, so a DECREASE of scrollTop more than
-  // the slack from the bottom also counts. Our own writes and content growth
-  // only ever move scrollTop down, so they never count as leaving.
+  // A key is not enough on its own, because with focus on <body> it may scroll
+  // some other box (the side panel): an up key only ARMS a leave, which the
+  // transcript's next scroll event confirms if scrollTop went down (by any
+  // amount), and which lapses after UP_KEY_WAIT_MS. While armed, pins are held
+  // so our own write cannot cancel the browser's keyboard scroll.
+  // A scrollbar drag has no event of its own, so a DECREASE of scrollTop more
+  // than the slack from the bottom also counts. Our own writes and content
+  // growth only ever move scrollTop down, so they never count as leaving.
   // While following, native scroll anchoring is off: we pin the bottom
   // ourselves, and an anchoring adjustment during a reflow (a resize) would
   // lower scrollTop and read as the reader leaving. While reading it is on,
@@ -171,6 +176,9 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   const smoothing = useRef(false);
   const frame = useRef(0);
   const touchY = useRef<number | null>(null);
+  // An up key waiting for the transcript to confirm it moved (a timer id; 0: none).
+  const upPending = useRef(0);
+  const clearUp = useCallback(() => { clearTimeout(upPending.current); upPending.current = 0; }, []);
   const setFollowing = useCallback((on: boolean) => {
     following.current = on;
     if (!on) smoothing.current = false;
@@ -188,20 +196,30 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
       const el = scroller.current;
-      if (el && following.current) toBottom(el, smoothing.current);
+      if (el && following.current && !upPending.current) toBottom(el, smoothing.current);
     });
   }, [toBottom]);
   // Reset the handle too: StrictMode (main.tsx) mounts, cleans up and mounts
   // again with the same refs, and a stale non-zero handle would make pin()
   // return early forever.
-  useEffect(() => () => { cancelAnimationFrame(frame.current); frame.current = 0; }, []);
+  useEffect(() => () => { cancelAnimationFrame(frame.current); frame.current = 0; clearUp(); }, [clearUp]);
+  // An up key: hold the pins and wait for the transcript to show it moved.
+  const armUp = useCallback(() => {
+    if (!following.current) return;
+    clearUp();
+    upPending.current = window.setTimeout(() => {
+      upPending.current = 0;
+      if (following.current) pin();
+    }, UP_KEY_WAIT_MS);
+  }, [clearUp, pin]);
   const jumpToLatest = useCallback((smooth: boolean) => {
     const el = scroller.current;
     if (!el) return;
+    clearUp();
     setFollowing(true);
     smoothing.current = smooth && !reducedMotion();
     toBottom(el, smoothing.current);
-  }, [setFollowing, toBottom]);
+  }, [clearUp, setFollowing, toBottom]);
   // The reader asked to go up: stop following now, whatever the distance.
   const leave = useCallback(() => {
     const el = scroller.current;
@@ -214,7 +232,11 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
     const top = el.scrollTop;
     const gap = el.scrollHeight - top - el.clientHeight;
     if (following.current) {
-      if (gap > FOLLOW_SLACK_PX && top < lastTop.current - 1) setFollowing(false);
+      if (upPending.current && top < lastTop.current) {
+        // The up key moved the transcript: the reader left, however little.
+        clearUp();
+        setFollowing(false);
+      } else if (gap > FOLLOW_SLACK_PX && top < lastTop.current - 1) setFollowing(false);
       else if (gap <= FOLLOW_SLACK_PX) smoothing.current = false;
     } else if (gap <= 1 || (gap <= FOLLOW_SLACK_PX && top > lastTop.current)) {
       // Back at the bottom, by coming DOWN to it: a small scroll up that
@@ -224,6 +246,8 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
     lastTop.current = top;
   };
   const onTranscriptWheel = (e: WheelEvent<HTMLDivElement>) => {
+    // A pinch-zoom (ctrl) or a mostly sideways swipe (a wide table) is not a scroll up.
+    if (e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
     if (e.deltaY < 0 && !innerScrollsUp(e.target as Element, e.currentTarget)) leave();
   };
   const onTouchStart = (e: TouchEvent<HTMLDivElement>) => { touchY.current = e.touches[0]?.clientY ?? null; };
@@ -258,7 +282,8 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   }, [onScreen, jumpToLatest]);
   // Keys, unless focus is in something to type in or outside this chat column:
   // End jumps to the latest, as the pill does (the composer keeps its own
-  // End); PageUp, ArrowUp, Home and Shift+Space scroll up, so they leave.
+  // End); PageUp, ArrowUp, Home and Shift+Space arm a leave that the
+  // transcript's own scroll must confirm (see above).
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -270,13 +295,13 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
       const active = document.activeElement;
       if (typingIn(active)) return;
       if (active && active !== document.body && !el.contains(active)) return;
-      if (up) { leave(); return; }
+      if (up) { armUp(); return; }
       e.preventDefault();
       jumpToLatest(true);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [jumpToLatest, leave]);
+  }, [jumpToLatest, armUp]);
 
   const send = (text: string) => {
     jumpToLatest(false);
@@ -432,7 +457,10 @@ function shown(el: HTMLElement | null): boolean {
 /** How close to the bottom still counts as "at the bottom" (following). */
 export const FOLLOW_SLACK_PX = 24;
 
-/** Keys that scroll a box up, and so mean the reader is leaving the bottom. */
+/** How long an up key waits for the transcript to scroll before it lapses. */
+const UP_KEY_WAIT_MS = 300;
+
+/** Keys that scroll a box up: the reader may be leaving the bottom. */
 const UP_KEYS = new Set(['PageUp', 'ArrowUp', 'Home']);
 
 /** Whether a box between `target` and `root` would take an upward scroll

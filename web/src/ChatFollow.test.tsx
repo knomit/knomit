@@ -40,6 +40,9 @@ const frame = () => act(async () => { await new Promise(r => requestAnimationFra
 const scrollTo = (el: HTMLElement, top: number) => { el.scrollTop = top; fireEvent.scroll(el); };
 const delta = (text: string) => act(() => { chatStream('chat-a')!.emit('text_delta', { text, turn: 0 }); });
 const pill = () => screen.queryByRole('button', { name: CHAT_JUMP_LATEST });
+/** Longer than ChatPanel's UP_KEY_WAIT_MS (300): an up key that saw no transcript scroll lapses. */
+const UP_WAIT = 350;
+const wait = (ms: number) => act(async () => { await new Promise(r => setTimeout(r, ms)); });
 const reducedMotion = (on: boolean) => vi.stubGlobal('matchMedia', vi.fn((q: string) => ({ matches: on && q.includes('reduce'), media: q, addEventListener() {}, removeEventListener() {} })));
 
 beforeEach(() => {
@@ -213,6 +216,24 @@ describe.each([['plain', false], ['StrictMode', true]] as const)('follow or read
       expect(pill()).not.toBeNull();
     });
 
+    it('a mostly sideways swipe (a wide table) with a little upward deltaY does not leave', async () => {
+      const el = await mountStreaming();
+      scrollTo(el, BOTTOM());
+      fireEvent.wheel(el, { deltaY: -3, deltaX: -40 });
+      expect(pill()).toBeNull();
+      fireEvent.wheel(el, { deltaY: -40, deltaX: -3 });
+      expect(pill()).not.toBeNull();
+    });
+
+    it('a pinch-zoom (ctrl+wheel) does not leave', async () => {
+      const el = await mountStreaming();
+      scrollTo(el, BOTTOM());
+      fireEvent.wheel(el, { deltaY: -10, ctrlKey: true });
+      expect(pill()).toBeNull();
+      fireEvent.wheel(el, { deltaY: -10 });
+      expect(pill()).not.toBeNull();
+    });
+
     it('a finger dragging the content down (scrolling up) leaves; dragging it up does not', async () => {
       const el = await mountStreaming();
       scrollTo(el, BOTTOM());
@@ -223,26 +244,77 @@ describe.each([['plain', false], ['StrictMode', true]] as const)('follow or read
       expect(pill()).not.toBeNull();
     });
 
-    it.each(['ArrowUp', 'PageUp', 'Home'])('%s outside a text field leaves; in the composer it does nothing', async (key) => {
+    it.each(['ArrowUp', 'PageUp', 'Home'])('%s outside a text field leaves once the transcript scrolls up, even under 24px; in the composer it does nothing', async (key) => {
       const el = await mountStreaming();
       scrollTo(el, BOTTOM());
       const box = screen.getByTestId('chat-input');
       box.focus();
       fireEvent.keyDown(box, { key });
+      scrollTo(el, 790); // something else moved it; the composer's key armed nothing
       expect(pill()).toBeNull();
       box.blur();
       const notPrevented = fireEvent.keyDown(document.body, { key });
       expect(notPrevented).toBe(true); // the browser still scrolls
+      expect(pill()).toBeNull(); // the key alone decides nothing
+      scrollTo(el, 780); // the browser's scroll for that key: 20px from the bottom
       expect(pill()).not.toBeNull();
     });
 
-    it('Shift+Space leaves; Space alone does not', async () => {
+    it('Shift+Space arms a leave; Space alone does not', async () => {
       const el = await mountStreaming();
       scrollTo(el, BOTTOM());
       fireEvent.keyDown(document.body, { key: ' ' });
+      scrollTo(el, 790);
       expect(pill()).toBeNull();
       fireEvent.keyDown(document.body, { key: ' ', shiftKey: true });
+      scrollTo(el, 780);
       expect(pill()).not.toBeNull();
+    });
+
+    it('an up key that scrolls something else (body focus after a click in the side panel) keeps following', async () => {
+      const el = await mountStreaming();
+      scrollTo(el, BOTTOM());
+      (document.activeElement as HTMLElement | null)?.blur();
+      expect(document.activeElement).toBe(document.body);
+      fireEvent.keyDown(document.body, { key: 'PageUp' });
+      fireEvent.keyDown(document.body, { key: 'ArrowUp' });
+      fireEvent.keyDown(document.body, { key: 'Home' });
+      await wait(UP_WAIT);
+      expect(pill()).toBeNull();
+      geom.height = 1400;
+      delta('still followed');
+      await frame();
+      expect(el.scrollTop).toBe(1200);
+    });
+
+    it('while an up key waits, pins are held and a scroll that did not go up does not confirm it', async () => {
+      const el = await mountStreaming();
+      scrollTo(el, BOTTOM());
+      fireEvent.keyDown(document.body, { key: 'PageUp' });
+      geom.height = 1400;
+      delta('arrives while the key waits');
+      await frame();
+      expect(el.scrollTop).toBe(800); // held: our write would cancel the browser's scroll
+      scrollTo(el, 800); // a scroll event that did not go up
+      expect(pill()).toBeNull();
+      scrollTo(el, 795);
+      expect(pill()).not.toBeNull();
+      expect(el.scrollTop).toBe(795);
+    });
+
+    it('an up key lapses: a later small scroll up inside the slack is not taken for it, and the held pin runs', async () => {
+      const el = await mountStreaming();
+      scrollTo(el, BOTTOM());
+      fireEvent.keyDown(document.body, { key: 'ArrowUp' });
+      geom.height = 1300;
+      delta('held');
+      await frame();
+      expect(el.scrollTop).toBe(800);
+      await wait(UP_WAIT);
+      await frame();
+      expect(el.scrollTop).toBe(1100); // the lapse ran the held pin
+      scrollTo(el, 1090);
+      expect(pill()).toBeNull();
     });
 
     it('scroll anchoring is off while following and back on while reading', async () => {
