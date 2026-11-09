@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -23,6 +24,8 @@ type fakeStream struct {
 	frames chan sseFrame
 	closed chan struct{}
 	once   sync.Once
+	// trySends counts TrySend calls (pings).
+	trySends atomic.Int32
 }
 
 func newFakeStream(sub string) *fakeStream {
@@ -41,6 +44,12 @@ func (f *fakeStream) Send(b []byte) error {
 	}
 	f.frames <- fr
 	return nil
+}
+
+// TrySend is Send, counted: a ping must never wait for room.
+func (f *fakeStream) TrySend(b []byte) error {
+	f.trySends.Add(1)
+	return f.Send(b)
 }
 func (f *fakeStream) ReceiveJSON(v any) error {
 	if f.sub == "" {
@@ -285,6 +294,42 @@ func TestServeSSEStream_ClosingTheStreamCancelsTheUpstream(t *testing.T) {
 	}
 	if ctx.Err() == nil {
 		t.Fatal("the upstream request context was not cancelled")
+	}
+}
+
+// A held stream whose upstream says nothing still carries a frame to the page
+// every ssePingInterval, sent without blocking, and the pings stop with the
+// stream. The page's watchdog (eventStream.ts STALE_STREAM_MS) depends on it to
+// tell a quiet stream from one Wails dropped without telling the page.
+func TestServeSSEStream_PingsAQuietStreamWithoutBlockingAndStopsWithIt(t *testing.T) {
+	old := ssePingInterval
+	ssePingInterval = 20 * time.Millisecond
+	t.Cleanup(func() { ssePingInterval = old })
+
+	f := newFakeStream(`{"path":"/api/v1/chats/events"}`)
+	pr, pw := io.Pipe() // an upstream that never writes
+	done := f.run(func(ctx context.Context, _, _ string) (*http.Response, error) {
+		go func() { <-ctx.Done(); pw.CloseWithError(ctx.Err()) }()
+		return &http.Response{StatusCode: 200, Body: pr}, nil
+	})
+	if fr := f.next(t); fr.T != "open" {
+		t.Fatalf("first frame = %+v, want open", fr)
+	}
+	for i := 0; i < 2; i++ {
+		if fr := f.next(t); fr.T != "ping" {
+			t.Fatalf("frame %d = %+v, want ping", i, fr)
+		}
+	}
+	if n := f.trySends.Load(); n < 2 {
+		t.Fatalf("pings sent with TrySend = %d, want >= 2 (a ping must never block)", n)
+	}
+	f.cancel()
+	<-done
+	time.Sleep(5 * ssePingInterval)
+	before := f.trySends.Load()
+	time.Sleep(5 * ssePingInterval)
+	if after := f.trySends.Load(); after != before {
+		t.Fatalf("pings went on after the stream ended: %d -> %d", before, after)
 	}
 }
 
