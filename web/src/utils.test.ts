@@ -335,47 +335,47 @@ describe('clampTitle', () => {
 });
 
 // Chat review, 2026-11-09: the user chose ONE display cap for a chat's title,
-// shared by the rail's CHATS row and the top bar: 24 characters (code points),
+// shared by the rail's CHATS row and the top bar: 20 characters (code points),
 // cut at a word boundary, trailing whitespace and punctuation trimmed, then "…".
-// SABOTAGE: return the title uncapped, or cap at 23 or 25 -> red.
+// SABOTAGE: return the title uncapped, or cap at 19 or 21 -> red.
 describe('chatTitleShown', () => {
-  it('is 24 characters', () => {
-    expect(CHAT_TITLE_SHOWN).toBe(24);
+  it('is 20 characters', () => {
+    expect(CHAT_TITLE_SHOWN).toBe(20);
   });
 
-  it('passes a title of exactly 24 characters through unchanged', () => {
-    const t = 'abcdefghij klmnopqrstuvw';
-    expect(Array.from(t)).toHaveLength(24);
-    expect(chatTitleShown(t)).toBe('abcdefghij klmnopqrstuvw');
+  it('passes a title of exactly 20 characters through unchanged', () => {
+    const t = 'abcdefghij klmnopqrs';
+    expect(Array.from(t)).toHaveLength(20);
+    expect(chatTitleShown(t)).toBe('abcdefghij klmnopqrs');
   });
 
-  it('cuts a 25-character title at the last word boundary in its first 24', () => {
-    const t = 'abcdefghij klmnopqrstuv x';
-    expect(Array.from(t)).toHaveLength(25);
-    expect(chatTitleShown(t)).toBe('abcdefghij klmnopqrstuv…');
+  it('cuts a 21-character title at the last word boundary in its first 20', () => {
+    const t = 'abcdefghij klmnopqr x';
+    expect(Array.from(t)).toHaveLength(21);
+    expect(chatTitleShown(t)).toBe('abcdefghij klmnopqr…');
   });
 
-  it('keeps all 24 when a word ends exactly there', () => {
-    expect(chatTitleShown('abcdefghij klmnopqrstuvw x')).toBe('abcdefghij klmnopqrstuvw…');
+  it('keeps all 20 when a word ends exactly there', () => {
+    expect(chatTitleShown('abcdefghij klmnopqrs x')).toBe('abcdefghij klmnopqrs…');
   });
 
   it('cuts a long sentence at a word boundary, never mid-word', () => {
-    expect(chatTitleShown('I am wondering what the biggest cybersecurity risks for AI agents are')).toBe('I am wondering what the…');
-    expect(chatTitleShown('bind to alpha then list the latest facts')).toBe('bind to alpha then list…');
+    expect(chatTitleShown('I am wondering what the biggest cybersecurity risks for AI agents are')).toBe('I am wondering what…');
+    expect(chatTitleShown('bind to alpha then list the latest facts')).toBe('bind to alpha then…');
   });
 
   it('trims the punctuation left before the cut', () => {
-    expect(chatTitleShown('Risks, threats, defences; and more')).toBe('Risks, threats…');
+    expect(chatTitleShown('Risks and threats, all of them')).toBe('Risks and threats…');
   });
 
-  it('hard-cuts a first word longer than 24 at 24', () => {
-    expect(chatTitleShown('Supercalifragilisticexpialidocious')).toBe('Supercalifragilisticexpi…');
+  it('hard-cuts a first word longer than 20 at 20', () => {
+    expect(chatTitleShown('Supercalifragilisticexpialidocious')).toBe('Supercalifragilistic…');
   });
 
   it('counts an emoji as one character and never splits it', () => {
-    // 23 letters, then the emoji as the 24th character: kept whole.
-    expect(chatTitleShown(`${'a'.repeat(23)}🔒more`)).toBe(`${'a'.repeat(23)}🔒…`);
-    // 24 emoji are 48 UTF-16 units but 24 characters: unchanged.
-    expect(chatTitleShown('🔒'.repeat(24))).toBe('🔒'.repeat(24));
+    // 19 letters, then the emoji as the 20th character: kept whole.
+    expect(chatTitleShown(`${'a'.repeat(19)}🔒more`)).toBe(`${'a'.repeat(19)}🔒…`);
+    // 20 emoji are 40 UTF-16 units but 20 characters: unchanged.
+    expect(chatTitleShown('🔒'.repeat(20))).toBe('🔒'.repeat(20));
   });
 });

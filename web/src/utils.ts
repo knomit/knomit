@@ -316,8 +316,9 @@ export function clampTitle(title: string, max: number = LIST_TITLE_MAX): string 
 }
 
 /** How many characters of a chat's title the rail row and the top bar show
- *  before the "…" (the user's choice, chat review 2026-11-09). */
-export const CHAT_TITLE_SHOWN = 24;
+ *  before the "…" (the user's choice, chat review 2026-11-09: 20, lowered
+ *  from 24, which the rail's 236px width still cut further by CSS). */
+export const CHAT_TITLE_SHOWN = 20;
 
 /**
  * chatTitleShown is a chat's title as the rail's CHATS row and the top bar both

@@ -125,9 +125,9 @@ describe('the Chats group', () => {
     expect(t.style.textOverflow).toBe('ellipsis');
     expect(t.style.overflow).toBe('hidden');
     // Capped for display (chatTitleShown, chat review 2026-11-09); the CSS ellipsis stays as the narrow fallback.
-    expect(t.textContent).toBe('A very long title A very…');
+    expect(t.textContent).toBe('A very long title A…');
     // The mark's own <title> is the provider's name; nothing else is in the row.
-    expect(row.textContent).toBe('prov-a' + 'A very long title A very…');
+    expect(row.textContent).toBe('prov-a' + 'A very long title A…');
   });
 
   it('falls back to the model name for a chat with no title yet', () => {
@@ -250,7 +250,7 @@ describe('the crumb', () => {
     render(<TopBar state={{ ...init, repo: 'alpha', context: { kind: 'repo', repo: 'alpha' } }} repos={[]} railOpen={false} onToggleRail={() => {}} onGear={() => {}} facets={['chat', 'settings']} facet="chat"
       label={{ kind: 'chat', name: long, sub: 'Sonnet 5.5', id: 'c1' }} />);
     const name = screen.getByTestId('target-label-name');
-    expect(name.textContent).toBe('bind to cyberai then see…'); // chatTitleShown, as the rail row
+    expect(name.textContent).toBe('bind to cyberai then…'); // chatTitleShown, as the rail row
     expect(name.title).toBe(long);
     expect(name.style.flexShrink).toBe('1');
     expect(name.style.minWidth).toBe('0px');
@@ -268,7 +268,7 @@ describe('the crumb', () => {
   it('the top bar draws the model name in grey after the title', () => {
     render(<TopBar state={{ ...init, repo: 'alpha', context: { kind: 'repo', repo: 'alpha' } }} repos={[]} railOpen={false} onToggleRail={() => {}} onGear={() => {}} facets={['chat', 'settings']} facet="chat"
       label={{ kind: 'chat', name: 'What changed this week?', sub: 'Sonnet 5.5', id: 'c1' }} />);
-    expect(screen.getByTestId('target-label')).toHaveTextContent('What changed this week?Sonnet 5.5');
+    expect(screen.getByTestId('target-label')).toHaveTextContent('What changed this…Sonnet 5.5'); // the title capped by chatTitleShown
     const sub = screen.getByTestId('target-label-sub');
     expect(sub).toHaveTextContent('Sonnet 5.5');
     expect(sub.style.color).toBe('rgb(122, 122, 122)');
