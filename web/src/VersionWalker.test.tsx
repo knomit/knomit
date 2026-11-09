@@ -6,6 +6,7 @@ import type { Fact } from './api';
 import { FactActions } from './FactChrome';
 import { computed } from './cascade.testutil';
 import { readFileSync } from 'node:fs';
+import { FACT_ACTION_REST } from './utils';
 
 vi.mock('./api', async (orig) => {
   const mod = await orig<typeof import('./api')>();
@@ -67,7 +68,10 @@ it('renders for a single-version fact and opens its history', async () => {
 
 // A mouse press draws no ring (it would look "selected" after a click), but the
 // keyboard's :focus-visible does: .k-bare's pair of rules, as on Materialize.
-// SABOTAGE: drop k-bare, or restore an inline `outline: none` -> red.
+// Its ring has .k-bare's rounded corners, as Materialize's does: no inline
+// border-radius may outrank the rule (review of #811: an inline 0 squared it).
+// SABOTAGE: drop k-bare, restore an inline `outline: none`, or an inline
+// `borderRadius: 0` -> red.
 it('draws no focus ring for the mouse, and the app\'s ring for keyboard focus', async () => {
   render(<VersionWalker repo="r" branch="b" factPath="kb/a.md" onScrub={vi.fn()} />);
   const btn = await screen.findByTestId('version-walker');
@@ -75,7 +79,9 @@ it('draws no focus ring for the mouse, and the app\'s ring for keyboard focus', 
   expect(btn.style.outline).toBe('');
   const css = readFileSync('src/App.css', 'utf8');
   expect(css).toMatch(/\.k-bare:focus \{ outline: none; \}/);
-  expect(css).toMatch(/\.k-bare:focus-visible \{ outline: 2px solid #4a7ab5;/);
+  expect(css).toMatch(/\.k-bare:focus-visible \{ outline: 2px solid #4a7ab5;[^}]*border-radius: 4px;/);
+  expect(btn.style.borderRadius).toBe('');
+  expect(computed(btn, 'border-radius', 1280)).toBe('');
 });
 
 // Chat review 2, 2026-11-09: the history icon sat in the accent green at rest.
@@ -101,6 +107,7 @@ it('rests in the Materialize button\'s muted colour and takes the accent only on
   const rest = hist.style.getPropertyValue('--k-materialize-rest');
   expect(rest).toBe(mat.style.getPropertyValue('--k-materialize-rest'));
   expect(rest).toBe('#8a96a8');
+  expect(rest).toBe(FACT_ACTION_REST);
   // The opacity lift on hover is Materialize's too.
   expect(hist.style.opacity).toBe(mat.style.opacity);
   fireEvent.mouseEnter(hist);

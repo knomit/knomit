@@ -111,7 +111,8 @@ describe('ChatFacet', () => {
     const after = screen.getByTestId('chat-result-panel');
     expect(after).toBe(before);
     expect(within(after).getByTestId('chat-result-text')).toHaveTextContent('alpha beta');
-    expect(screen.getByTestId('chat-tool-select-tu_1')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('chat-tool-select-tu_1')).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByTestId('chat-tool-select-tu_1')).not.toHaveAttribute('aria-pressed');
     expect(callsTo(fx, '/calls/')).toHaveLength(1);
     // The panel's own × still closes it.
     fireEvent.click(screen.getByTestId('chat-panel-close'));

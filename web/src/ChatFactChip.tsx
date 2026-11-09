@@ -62,7 +62,7 @@ export function FactLink({ handle }: { handle: string }) {
           second, text-only box over it. The accessible name is the visible
           title text below (the glyph's SVG carries no text). */}
       <button ref={chip} type="button" data-testid="fact-link" data-type={f.type} data-open={open ? 'true' : undefined}
-        className="k-fact-link"
+        aria-current={open ? 'true' : undefined} className="k-fact-link"
         onMouseDown={noMouseFocus} onClick={onClick} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}>
         <span data-testid="fact-link-glyph" className="k-fact-link-glyph" style={{ background: ts.bg }}>
           <TypeIcon type={f.type} color={ts.color} size={11} />
@@ -123,7 +123,7 @@ export function CommitLink({ handle }: { handle: string }) {
   const { repo, branch, commit } = f;
   const open = env.openKey === commitKey(repo, branch, commit);
   return (
-    <button type="button" data-testid="commit-link" data-open={open ? 'true' : undefined} className={open ? 'k-commit-link k-commit-link--open' : 'k-commit-link'} title={commit}
+    <button type="button" data-testid="commit-link" data-open={open ? 'true' : undefined} aria-current={open ? 'true' : undefined} className={open ? 'k-commit-link k-commit-link--open' : 'k-commit-link'} title={commit}
       onClick={e => { e.preventDefault(); env.onCommit?.(repo, branch, commit); }}>
       <CommitHash commit={commit} />
     </button>

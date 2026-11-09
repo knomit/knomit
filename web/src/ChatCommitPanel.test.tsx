@@ -88,6 +88,7 @@ describe('a commit chip opens the commit in the side panel', () => {
     expect(screen.getByTestId('chat-facet')).toBeInTheDocument();
     // The chip stays highlighted while its commit is on screen.
     expect(screen.getByTestId('commit-link')).toHaveAttribute('data-open', 'true');
+    expect(screen.getByTestId('commit-link')).toHaveAttribute('aria-current', 'true');
     expect(within(panel).getByTestId('commit-files-label')).toHaveTextContent('Facts affected · 3');
     expect(within(panel).getAllByTestId('timeline-file-row').map(r => r.getAttribute('data-action'))).toEqual(['added', 'modified', 'deleted']);
   });
@@ -387,6 +388,7 @@ describe('a commit chip opens the commit in the side panel', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByTestId('chat-side-panel')).toBeNull());
     expect(screen.getByTestId('commit-link')).not.toHaveAttribute('data-open');
+    expect(screen.getByTestId('commit-link')).not.toHaveAttribute('aria-current');
     fireEvent.click(screen.getByTestId('commit-link'));
     await screen.findByTestId('chat-commit');
   });

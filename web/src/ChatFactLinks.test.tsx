@@ -127,8 +127,11 @@ describe('chat fact links', () => {
   // not remounted by later deltas; and the finished rendering is exactly what a
   // turn finished before it was seen renders.
   // SABOTAGE: pass null for the live turn in ChatPanel -> red (no chip before
-  // turn_done); make the effect depend on the text instead of the candidates
-  // -> red (lookups grow per delta).
+  // turn_done); drop useTurnFacts' `cache.has(k) || inFlight.has(k)` skip ->
+  // red (answered handles are asked again with each new one). That skip, not
+  // the effect's [sig] key, is what keeps lookups from growing per delta: a
+  // text-keyed effect would only re-run and ask nothing. The [sig] key is NOT
+  // pinned here (it saves effect runs, not requests).
   it('a streaming answer draws a complete reference as a chip before the turn ends, and never a partial one', async () => {
     const PATH = 'kb/invariants/security/3fc77970.md';
     const { fx, unmount } = mount({ ...snapshot([{ kind: 'user', text: 'q' }]), running: true });
@@ -372,6 +375,9 @@ describe('chat fact links', () => {
     const panel = await screen.findByTestId('chat-side-panel');
     expect(await within(panel).findByTestId('fact-title')).toHaveTextContent(POLICY.title);
     expect(chip).toHaveAttribute('data-open', 'true');
+    // The chip that opened the panel's entry is its current item, as a tool row is.
+    // SABOTAGE: drop aria-current from FactLink -> red.
+    expect(chip).toHaveAttribute('aria-current', 'true');
     // The same fact cited in the other turn is highlighted as well: it is what is open.
     const other = within(screen.getByTestId('chat-turn-0')).getAllByTestId('fact-link')[0];
     expect(other).toHaveAttribute('data-open', 'true');
@@ -386,6 +392,7 @@ describe('chat fact links', () => {
     // Closing the panel takes the highlight away.
     fireEvent.click(within(panel).getByTestId('chat-panel-close'));
     expect(chip).not.toHaveAttribute('data-open');
+    expect(chip).not.toHaveAttribute('aria-current');
   });
 
   // Chat review, 2026-11-08: a clicked chip kept a bright "selected" border.

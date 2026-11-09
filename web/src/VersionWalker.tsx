@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
 import { HistoryIcon } from './icons';
+import { FACT_ACTION_REST } from './utils';
 
 interface Entry {
   commit: string;
@@ -37,8 +38,6 @@ interface Props {
 // no recorded versions.
 /** The history glyph's size: the materialize (newspaper) glyph's, so the two match. */
 const HISTORY_ICON_SIZE = 15;
-/** The resting colour: the Materialize button's (FactChrome), not the accent. */
-const HISTORY_REST = '#8a96a8';
 
 export function VersionWalker({ repo, branch, factPath, onScrub }: Props) {
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -83,10 +82,12 @@ export function VersionWalker({ repo, branch, factPath, onScrub }: Props) {
         // NO BORDER OF ITS OWN. This sits inside the fact header's control
         // strip, which draws the border and the dividers; a chip border here
         // would nest one inside the other. The strip's cells are separated by
-        // hairlines, not by each child re-stating its own outline.
-        background: 'none', border: 'none', borderRadius: 0,
+        // hairlines, not by each child re-stating its own outline. No inline
+        // border-radius either: it outranked .k-bare:focus-visible's 4px and
+        // squared the keyboard ring that Materialize draws rounded.
+        background: 'none', border: 'none',
         padding: 2, cursor: 'pointer',
-        ['--k-materialize-rest' as string]: HISTORY_REST, opacity: 0.75,
+        ['--k-materialize-rest' as string]: FACT_ACTION_REST, opacity: 0.75,
       }}
       onMouseEnter={e => { e.currentTarget.style.opacity = '1'; }}
       onMouseLeave={e => { e.currentTarget.style.opacity = '0.75'; }}
