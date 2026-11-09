@@ -690,12 +690,12 @@ func (si *Index) Rebuild(ctx context.Context, branch string, progress model.Rebu
 	// Runs outside any transaction — under _txlock=immediate an open tx is a
 	// process-wide write lock, and ANALYZE needs only its own brief one.
 	// Best-effort: degraded query plans must never fail a rebuild.
-	// RefreshPlannerStats also makes every pooled connection reload the new
-	// statistics (ANALYZE reloads only the connection that ran it; Rebuild's own
-	// DDL already invalidates them in practice, so this is belt and braces). Phases 1-3
-	// themselves get no in-pass checkpoints: they run with whatever statistics
-	// the connections hold when Rebuild starts.
-	if err := RefreshPlannerStats(ctx, si.rh.DB(), `PRAGMA analysis_limit=1000; ANALYZE`); err != nil {
+	// Propagation to the other pooled connections comes from Rebuild's own
+	// schema changes, which make each reload its statistics at its next
+	// statement. Phases 1-3 get no in-pass checkpoints: they run with whatever
+	// statistics the connections hold when Rebuild starts.
+	if _, err := conn(ctx, si.rh.DB()).ExecContext(ctx,
+		`PRAGMA analysis_limit=1000; ANALYZE`); err != nil {
 		log.Warn().Err(err).Msg("rebuild: analyze failed (query plans may be degraded)")
 	}
 

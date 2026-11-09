@@ -306,11 +306,9 @@ func TestGraphNodeIDByProps_NodeLabelsOnlyStale(t *testing.T) {
 // with the fresh statistics. (Rebuild's phases 1-3 themselves get no in-pass
 // checkpoints: they plan with the statistics held when Rebuild starts.)
 //
-// Sabotage run: dropping the closing ANALYZE makes this fail. Reverting it to
-// a bare ANALYZE with no schema bump does NOT: Rebuild's own DDL moves the
-// schema version (by 14 here) so every connection reloads from disk at its next
-// statement anyway, and the bump through RefreshPlannerStats is belt and braces
-// there. This test therefore guards the ANALYZE, not the propagation.
+// Sabotage (run and seen to fail): drop the closing ANALYZE. Propagation to
+// the other pooled connections comes from Rebuild's own schema changes (the
+// schema version moves by 14 here), not from a schema bump of its own.
 func TestRebuild_AnalyzeReachesEveryPooledConnection(t *testing.T) {
 	ctx := context.Background()
 	svc := openAbstractionTestService(t)
