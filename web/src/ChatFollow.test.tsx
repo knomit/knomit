@@ -256,7 +256,7 @@ describe.each([['plain', false], ['StrictMode', true]] as const)('follow or read
       const notPrevented = fireEvent.keyDown(document.body, { key });
       expect(notPrevented).toBe(true); // the browser still scrolls
       expect(pill()).toBeNull(); // the key alone decides nothing
-      scrollTo(el, 780); // the browser's scroll for that key: 20px from the bottom
+      scrollTo(el, 789); // the browser's scroll for that key: 1px up, 11px from the bottom
       expect(pill()).not.toBeNull();
     });
 
