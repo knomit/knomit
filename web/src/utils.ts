@@ -320,20 +320,26 @@ export function clampTitle(title: string, max: number = LIST_TITLE_MAX): string 
  *  from 24, which the rail's 236px width still cut further by CSS). */
 export const CHAT_TITLE_SHOWN = 20;
 
+/** Splits a title into graphemes, the unit chatTitleShown counts and cuts by. */
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
 /**
  * chatTitleShown is a chat's title as the rail's CHATS row and the top bar both
- * show it: CHAT_TITLE_SHOWN characters (code points, so an emoji is never split)
- * or fewer pass through unchanged. A longer one is cut at the last word boundary
- * within the first CHAT_TITLE_SHOWN characters (a hard cut there when the first
- * word alone is longer), its trailing whitespace and punctuation are trimmed, and
- * "…" follows. Display only: the stored title (the server's titleOf, 300 runes)
- * is untouched, and the CSS ellipsis on both stays as the narrow-width fallback.
+ * show it: CHAT_TITLE_SHOWN characters or fewer pass through unchanged. A
+ * character is a GRAPHEME (Intl.Segmenter), what a reader sees as one: a joined
+ * family emoji, a flag (two regional indicators) or a letter with a separate
+ * combining accent counts once and is never split by the cut. A longer one is
+ * cut at the last word boundary within the first CHAT_TITLE_SHOWN characters (a
+ * hard cut there when the first word alone is longer), its trailing whitespace
+ * and punctuation are trimmed, and "…" follows. Display only: the stored title
+ * (the server's titleOf, 300 runes) is untouched, and the CSS ellipsis on both
+ * stays as the narrow-width fallback.
  */
 export function chatTitleShown(title: string): string {
-  const chars = Array.from(title);
+  const chars = Array.from(graphemes.segment(title), s => s.segment);
   if (chars.length <= CHAT_TITLE_SHOWN) return title;
   const head = chars.slice(0, CHAT_TITLE_SHOWN);
-  // A boundary right after the 24th character keeps all 24; else the last space within them.
+  // A boundary right after the 20th character keeps all 20; else the last space within them.
   let end = /\s/.test(chars[CHAT_TITLE_SHOWN]) ? CHAT_TITLE_SHOWN : -1;
   if (end < 0) {
     for (let i = head.length - 1; i > 0; i--) {

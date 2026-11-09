@@ -335,7 +335,7 @@ describe('clampTitle', () => {
 });
 
 // Chat review, 2026-11-09: the user chose ONE display cap for a chat's title,
-// shared by the rail's CHATS row and the top bar: 20 characters (code points),
+// shared by the rail's CHATS row and the top bar: 20 characters (graphemes),
 // cut at a word boundary, trailing whitespace and punctuation trimmed, then "…".
 // SABOTAGE: return the title uncapped, or cap at 19 or 21 -> red.
 describe('chatTitleShown', () => {
@@ -377,5 +377,26 @@ describe('chatTitleShown', () => {
     expect(chatTitleShown(`${'a'.repeat(19)}🔒more`)).toBe(`${'a'.repeat(19)}🔒…`);
     // 20 emoji are 40 UTF-16 units but 20 characters: unchanged.
     expect(chatTitleShown('🔒'.repeat(20))).toBe('🔒'.repeat(20));
+  });
+
+  // Review of PR #815: counting code points split what a reader sees as one
+  // character. A character is a grapheme (Intl.Segmenter).
+  // SABOTAGE: count Array.from(title) code points again -> these three go red.
+  it('keeps a joined family emoji whole: man, woman, girl joined by ZWJs is one character', () => {
+    const family = '\u{1F468}‍\u{1F469}‍\u{1F467}'; // 5 code points
+    // The family is the 19th character; the 20th is "m".
+    expect(chatTitleShown(`${'a'.repeat(18)}${family}more`)).toBe(`${'a'.repeat(18)}${family}m…`);
+  });
+
+  it('keeps a flag whole: two regional indicators are one character', () => {
+    const flag = '\u{1F1EB}\u{1F1F7}'; // FR
+    expect(chatTitleShown(`${'a'.repeat(19)}${flag}more`)).toBe(`${'a'.repeat(19)}${flag}…`);
+  });
+
+  it('keeps a combining accent on its letter', () => {
+    const e = 'é'; // e + COMBINING ACUTE ACCENT, two code points
+    expect(chatTitleShown(`${'a'.repeat(19)}${e}more`)).toBe(`${'a'.repeat(19)}${e}…`);
+    // 20 of them are 40 code points but 20 characters: unchanged.
+    expect(chatTitleShown(e.repeat(20))).toBe(e.repeat(20));
   });
 });

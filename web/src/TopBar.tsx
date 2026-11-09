@@ -264,7 +264,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
               ) : (
                 <span className="k-bar-name" data-testid="target-label-name" title={label.name || undefined} style={barName}
                   onDoubleClick={canRename && target.id ? () => setRenaming(target.id ?? null) : undefined}>
-                  {/* A chat's title is shown as its rail row shows it (chatTitleShown: 24 characters, then "…"). */}
+                  {/* A chat's title is shown as its rail row shows it (chatTitleShown: 20 characters, then "…"). */}
                   {target.kind === 'chat' ? chatTitleShown(label.name) : label.name}
                 </span>
               )}
