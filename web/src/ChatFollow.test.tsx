@@ -188,6 +188,14 @@ describe.each([['plain', false], ['StrictMode', true]] as const)('follow or read
       expect(pill()).not.toBeNull();
     });
 
+    it('a wheel step up with nothing above to scroll to (scrollTop 0) does not leave', async () => {
+      const el = await mountStreaming();
+      geom.height = 200; // the transcript fits: nothing scrolls
+      scrollTo(el, 0);
+      fireEvent.wheel(el, { deltaY: -10 });
+      expect(pill()).toBeNull();
+    });
+
     it('a wheel step down, or one taken by a box inside that scrolls up itself, does not leave', async () => {
       const el = await mountStreaming();
       scrollTo(el, BOTTOM());
@@ -290,6 +298,18 @@ describe.each([['plain', false], ['StrictMode', true]] as const)('follow or read
       await frame();
       rerenderWith(true);
       expect(el.scrollTop).toBe(1300);
+      expect(pill()).toBeNull();
+    });
+
+    it('a scroll event while hidden (everything reads 0) does not stop following', async () => {
+      const el = await mountStreaming();
+      scrollTo(el, BOTTOM());
+      rerenderWith(false);
+      geom.client = 0;
+      scrollTo(el, 0);
+      geom.client = 200;
+      rerenderWith(true);
+      expect(el.scrollTop).toBe(800);
       expect(pill()).toBeNull();
     });
 
