@@ -778,7 +778,7 @@ func TestWait_DecisionBetweenReadAndRegisterIsSeen(t *testing.T) {
 // subject's FIRST approval. Before, a second approval re-granted every
 // ceiling permission, and SQLGrants.Grant's upsert cleared revoked_at, so a
 // narrowing the operator made with `knomit grants revoke` was undone by the
-// next approval — and with consent path 3 that approval is self-service.
+// next approval.
 // Sabotage: always writing grants in Approve turns this red on the write
 // check and on GrantsUnchanged.
 func TestApprove_ReapprovalNeverRevivesARevokedGrant(t *testing.T) {

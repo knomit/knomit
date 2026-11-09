@@ -42,16 +42,6 @@ type Identity struct {
 // one email SAN is an agent address.
 func (id Identity) IsInstance() bool { return id.AgentID != "" }
 
-// PrincipalKind is the principal kind the certificate authenticates as:
-// "instance" for an instance certificate. Any other certificate
-// authenticates as nothing (the TLS listener refuses it), so it is "other".
-func (id Identity) PrincipalKind() string {
-	if id.IsInstance() {
-		return "instance"
-	}
-	return "other"
-}
-
 // Usage says which side of a connection the certificate is on.
 type Usage int
 
@@ -81,9 +71,10 @@ func (u Usage) eku() x509.ExtKeyUsage {
 //  3. the key is ed25519 (ErrNotEd25519).
 //
 // The identity it returns is IdentityOf's: the key's fingerprint, and the
-// email SAN that says instance or operator. Nothing about the certificate's
-// names is refused here: a certificate the root signed is admitted, and what
-// its name makes it (instance or operator) decides what it may do.
+// email SAN that says whether it is an instance certificate. Nothing about the
+// certificate's names is refused here: a certificate the root signed is
+// admitted, and callers that need an instance (the TLS listener, bundle
+// install) check Identity.IsInstance.
 //
 // A stale CRL (NextUpdate past) is still ENFORCED here; warning about it is
 // the loader's job.
@@ -128,7 +119,7 @@ func VerifyInstanceChain(leaf *x509.Certificate, intermediates []*x509.Certifica
 // name, so whatever the certificate's names say, the principal is the key's.
 //
 // The kind is decided by the address alone (R3): exactly one email SAN that
-// is an agent address is an instance; anything else is an operator. Only
+// is an agent address is an instance; anything else is not (and authenticates nothing). Only
 // AgentIDOfEmail touches the address; the id it yields is never parsed.
 func IdentityOf(leaf *x509.Certificate) (Identity, error) {
 	pub, ok := leaf.PublicKey.(ed25519.PublicKey)

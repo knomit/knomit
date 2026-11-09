@@ -46,12 +46,15 @@ func TestAuthMiddleware_TLSListenerMapsTheCertificateToItsPrincipal(t *testing.T
 // is refused, not given a principal of its own.
 func TestTLSListener_RefusesNonInstanceCertificate(t *testing.T) {
 	f := pkitest.New(t)
-	other := f.Enroll(t, "alice@example.com")
 	h := AuthMiddleware(config.AuthConfig{Require: false}, false)(principalEcho())
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, tlsRequest("10.0.0.7:5555", other.Cert))
-	if rr.Code != http.StatusForbidden || !strings.Contains(rr.Body.String(), "only enrolled instance certificates") {
-		t.Fatalf("code=%d body=%q, want 403 naming enrolled instance certificates", rr.Code, rr.Body.String())
+	// Another address, and no email SAN at all.
+	for _, email := range []string{"alice@example.com", ""} {
+		other := f.Enroll(t, email)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, tlsRequest("10.0.0.7:5555", other.Cert))
+		if rr.Code != http.StatusForbidden || !strings.Contains(rr.Body.String(), "only enrolled instance certificates") {
+			t.Fatalf("email %q: code=%d body=%q, want 403 naming enrolled instance certificates", email, rr.Code, rr.Body.String())
+		}
 	}
 }
 

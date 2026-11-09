@@ -184,7 +184,7 @@ func IssueLeaf(root Root, pub ed25519.PublicKey, email string, validity time.Dur
 	}
 	cn := email
 	if cn == "" {
-		cn = "knomit operator " + Short(fp)
+		cn = "knomit " + Short(fp)
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,

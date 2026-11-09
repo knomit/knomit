@@ -91,11 +91,12 @@ func (f fleet) verify(c *x509.Certificate, usage Usage) (Identity, error) {
 func TestVerifyInstanceChain_RoundTripsInstanceAndNonInstance(t *testing.T) {
 	f := newFleet(t)
 	for _, c := range []struct {
-		email, agentID, kind string
+		email, agentID string
+		instance       bool
 	}{
-		{"laptop-ab12cd34@agents.knomit.io", "laptop-ab12cd34", "instance"},
-		{"ops@example.com", "", "other"},
-		{"", "", "other"},
+		{"laptop-ab12cd34@agents.knomit.io", "laptop-ab12cd34", true},
+		{"ops@example.com", "", false},
+		{"", "", false},
 	} {
 		leaf, pub := f.issue(t, c.email)
 		for _, usage := range []Usage{UsageClient, UsageServer} {
@@ -106,8 +107,8 @@ func TestVerifyInstanceChain_RoundTripsInstanceAndNonInstance(t *testing.T) {
 			if id.Fingerprint != Fingerprint(pub) || len(id.Fingerprint) != 64 {
 				t.Fatalf("Fingerprint %q, want full %q", id.Fingerprint, Fingerprint(pub))
 			}
-			if id.Email != c.email || id.AgentID != c.agentID || id.PrincipalKind() != c.kind {
-				t.Fatalf("%q: email %q agent %q kind %q", c.email, id.Email, id.AgentID, id.PrincipalKind())
+			if id.Email != c.email || id.AgentID != c.agentID || id.IsInstance() != c.instance {
+				t.Fatalf("%q: email %q agent %q instance %v", c.email, id.Email, id.AgentID, id.IsInstance())
 			}
 			if id.Serial.Cmp(leaf.SerialNumber) != 0 || !id.NotAfter.Equal(leaf.NotAfter) {
 				t.Fatal("serial/NotAfter not carried")
@@ -119,10 +120,10 @@ func TestVerifyInstanceChain_RoundTripsInstanceAndNonInstance(t *testing.T) {
 	}
 }
 
-// R3: instance versus operator is decided by the email SAN ALONE. Exactly one
+// R3: whether a certificate is an instance is decided by the email SAN ALONE. Exactly one
 // email SAN whose domain is exactly agents.knomit.io and whose local part,
 // +<op> dropped, is a valid (lower-case) agent id is an instance; anything
-// else is an operator. Nothing is case folded. A URI SAN (such as knomit://instance/<label>) makes nothing an
+// else is not an instance. Nothing is case folded. A URI SAN (such as knomit://instance/<label>) makes nothing an
 // instance. The principal is the key's fingerprint in every case.
 func TestIdentityOf_KindFromTheEmailSANAlone(t *testing.T) {
 	f := newFleet(t)

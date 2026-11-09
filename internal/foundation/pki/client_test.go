@@ -108,7 +108,7 @@ func TestDial_ServerCertificateWithoutEmailIsNotAnInstance(t *testing.T) {
 	addr := startServer(t, sdir, srvM.keyPath, &recorder{})
 	peer, dir := f.clientSide(t, "peer")
 	id, err := dial(t, addr, dir, peer.keyPath)
-	if err != nil || id.IsInstance() || id.PrincipalKind() != "other" || id.Fingerprint != Fingerprint(srvM.pub) {
+	if err != nil || id.IsInstance() || id.Fingerprint != Fingerprint(srvM.pub) {
 		t.Fatalf("identity %+v err=%v, want the server key as a non-instance certificate", id, err)
 	}
 }

@@ -13,6 +13,10 @@ func TestLoad_RemovedKeysAreBootErrors(t *testing.T) {
 	for _, tc := range []struct{ name, toml, env, wantKey string }{
 		{name: "idp table", toml: "[oauth.idp]\nprovider = \"github\"\n", wantKey: "[oauth.idp]"},
 		{name: "idp nested keys", toml: "[oauth.idp]\nclient_id = \"x\"\nallowed_subjects = [\"github-1\"]\n", wantKey: "[oauth.idp]"},
+		// A dotted key under [oauth] reports only "oauth.idp.client_id", never
+		// "oauth.idp", so these reach the prefix match, not the exact one.
+		{name: "idp dotted key under oauth", toml: "[oauth]\nidp.client_id = \"x\"\n", wantKey: "[oauth.idp]"},
+		{name: "idp dotted key at top level", toml: "oauth.idp.client_id = \"x\"\n", wantKey: "[oauth.idp]"},
 		{name: "idp secret env", toml: "", env: "KNOMIT_OAUTH_IDP_CLIENT_SECRET", wantKey: "KNOMIT_OAUTH_IDP_CLIENT_SECRET"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
