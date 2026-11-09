@@ -48,8 +48,12 @@ var sameLayerEdges = map[string]bool{
 	"foundation/config -> foundation/auth": true,
 	// auth.ListenTLS wraps the raw listener with pki.NewListener so a
 	// refused handshake delivers its alert instead of a reset (#543).
-	"foundation/auth -> foundation/pki":          true,
-	"foundation/serveraddr -> foundation/auth":   true,
+	"foundation/auth -> foundation/pki":        true,
+	"foundation/serveraddr -> foundation/auth": true,
+	// authz names a local caller from auth's kernel-reported Peer and the
+	// owner from auth.LocalPrincipal: one spelling per platform, owned by
+	// auth (unified authn/z plan, P1).
+	"foundation/authz -> foundation/auth":        true,
 	"foundation/serveraddr -> foundation/config": true,
 	// engine
 	"engine/store/git -> engine/store/migrate": true,
