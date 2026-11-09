@@ -70,6 +70,17 @@ describe('the transcript follows at the bottom and stays put when scrolled up', 
     expect(pill()).not.toBeNull();
   });
 
+  it('a scroll up between a delta and its frame wins: the queued follow does not pull the reader back', async () => {
+    const el = await mountStreaming();
+    scrollTo(el, BOTTOM());
+    geom.height = 1400;
+    delta('queued');
+    scrollTo(el, 300);
+    await frame();
+    expect(el.scrollTop).toBe(300);
+    expect(pill()).not.toBeNull();
+  });
+
   it('at the bottom a delta keeps it at the bottom', async () => {
     const el = await mountStreaming();
     scrollTo(el, BOTTOM());
