@@ -39,7 +39,7 @@ function isShown(el: HTMLElement | null): boolean {
  * this does is say what it reads (that fact on that branch, at the commit if there
  * is one) and where its controls go. A control that navigates lands in Browse, and
  * Browse's Back returns to the chat. The panel's only differences are the × in the
- * band and no retract button.
+ * view's top-right corner and no retract button.
  */
 function PanelFact({ repo, branch, path, commit, close, onBrowse, repos, repoNames, serverReadOnly, onScreen, runningRef }: {
   repo: string;
@@ -65,16 +65,20 @@ function PanelFact({ repo, branch, path, commit, close, onBrowse, repos, repoNam
   const reading = useMemo<FactReading>(() => ({
     context: { kind: 'repo', repo }, lens: null, lensWriteId: null, repo, branch, factPath: path, factSource: null,
     asOf: commit ? { mode: 'history', commit } : { mode: 'live' }, headCommit: '',
-    serverReadOnly, repoReadOnly, branchWritable, factPanelRequest: null,
+    serverReadOnly, repoReadOnly, branchWritable,
   }), [repo, branch, path, commit, serverReadOnly, repoReadOnly, branchWritable]);
   const edges = useFactEdges(reading);
   const send = (req: Omit<BrowseFactRequest, 'repo' | 'branch' | 'path'>) => {
     onBrowse?.({ repo, branch, path, ...(commit ? { commit } : {}), ...req });
   };
   const hop = (to: string, pinned: string) => onBrowse?.({ repo, branch, path: to, ...(pinned ? { commit: pinned } : {}) });
-  // Of what the view dispatches only a filter chip means anything outside Browse's
-  // state: it goes with the reader. The rest is Browse's bookkeeping for its open fact.
-  const dispatch = (a: Action) => { if (a.type === 'ADD_FILTER') send({ filter: a.chip }); };
+  // Of what the view dispatches only a filter chip and a motif pivot mean anything
+  // outside Browse's state: they go with the reader. The rest is Browse's
+  // bookkeeping for its open fact.
+  const dispatch = (a: Action) => {
+    if (a.type === 'ADD_FILTER') send({ filter: a.chip });
+    else if (a.type === 'PIVOT_MOTIF') send({ motif: a.motif });
+  };
   return (
     <FactView
       reading={reading}
@@ -83,14 +87,16 @@ function PanelFact({ repo, branch, path, commit, close, onBrowse, repos, repoNam
       // the newest version; a fact read at a commit stays at that commit.
       onScrub={newest => send({ commit: commit ?? newest })}
       onHopRef={hop}
+      // Cited by, cites and a motif open their menu here, in the panel. Picking
+      // from it is what goes to Browse: an edge hops to that fact (onHopEdge), a
+      // motif's "Open all N carriers" pivots there (PIVOT_MOTIF above).
       onHopEdge={hop}
-      onOpenPanel={panel => send({ panel })}
       repoNames={repoNames}
       incoming={edges.incoming}
       outgoing={edges.outgoing}
       edgesError={edges.error}
       refCommits={edges.refCommits}
-      bandAction={close}
+      cornerAction={close}
       hideRetract
       materializeInUrl={false}
       materializeFocus={{ hidden: !onScreen, yieldsEsc: () => runningRef.current }}
@@ -101,7 +107,8 @@ function PanelFact({ repo, branch, path, commit, close, onBrowse, repos, repoNam
 /**
  * ChatSidePanel is the 470px panel on the right of a chat: a fact, a commit or
  * a tool result, and a footer. A commit or a tool result has a 40px header
- * (breadcrumb, close). A fact has its band instead, which holds the close. It is
+ * (breadcrumb, close). A fact has its band instead, with the close in the panel's
+ * top-right corner, away from the band's action row (history, materialize). It is
  * mounted only while open, so it costs nothing before a step is clicked; the chat
  * column beside it narrows to make room.
  *

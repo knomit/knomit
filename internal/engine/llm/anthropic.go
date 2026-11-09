@@ -353,6 +353,9 @@ func (a *AnthropicChat) Stream(ctx context.Context, s Snapshot, o StreamOptions,
 	if o.MaxOutput > 0 {
 		params.MaxTokens = int64(o.MaxOutput)
 	}
+	if o.NoThinking {
+		params.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &anthropic.ThinkingConfigDisabledParam{}}
+	}
 	if sink == nil {
 		sink = func(Event) {}
 	}

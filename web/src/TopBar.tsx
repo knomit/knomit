@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { AppState } from './state';
 import { isLensContext } from './state';
@@ -8,6 +8,7 @@ import { noMouseFocus } from './utils';
 import { useMatFocus } from './matFocus';
 import { CHAT_ACCENT, FLEET_ACCENT, otherRepoFailing } from './facets';
 import { ChatPill } from './ChatPill';
+import { ChatTitleEdit } from './ChatTitleEdit';
 import type { Facet, ServerPage, TargetLabel } from './facets';
 
 interface Props {
@@ -45,6 +46,9 @@ interface Props {
   /** Whether the server has any page behind the gear (serverPagesFor). A
    *  read-only server has none, and then there is no gear. */
   gear?: boolean;
+  /** Rename the chat on screen: a double-click on its name in the crumb edits it
+   *  in place. Absent, the name is not editable. */
+  onRenameChat?: (id: string, title: string) => void;
 }
 
 /** What the bar shows over the server pages. */
@@ -66,7 +70,7 @@ export interface ServerBar {
 // the dropdown that used to hang off the name is gone; the branch picker and
 // the filter moved to the Browse toolbar, because they act on the data being
 // read and must not stay on screen over a page that reads none.
-export const TopBar = memo(function TopBar({ state, repos, label: given, railOpen, onToggleRail, facets = [], facet = 'browse', onFacet, settingsDot = false, locked = false, onGear, server = null, gear = true }: Props) {
+export const TopBar = memo(function TopBar({ state, repos, label: given, railOpen, onToggleRail, facets = [], facet = 'browse', onFacet, settingsDot = false, locked = false, onGear, server = null, gear = true, onRenameChat }: Props) {
   const lensCtx = isLensContext(state);
   const serverOpen = server !== null;
   // Over the materialize view's Focus mode the rail is hidden, so its toggle stays
@@ -150,6 +154,13 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
   const target: TargetLabel = given ?? (lensCtx
     ? { kind: 'lens', name: state.context.kind === 'lens' ? state.context.name : '' }
     : { kind: 'repo', name: state.repo });
+  // The crumb of an open chat (not a draft) renames it on a double-click.
+  // `renaming` is the id of the chat whose name is being edited. Another chat
+  // on screen (a rail click does not blur the input: rows take no focus) ends
+  // the edit, CANCELLED: the text was typed for the other chat.
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const canRename = !!onRenameChat && target.kind === 'chat' && !!target.id && !target.draft && !locked;
+  if (renaming !== null && (!canRename || renaming !== target.id)) setRenaming(null);
   const label = {
     name: target.name,
     // A chat draft is amber; an open chat's title is cream, with the provider mark in amber.
@@ -243,10 +254,20 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
               color: label.color,
             }}>
               {label.icon}
-              <span className="k-bar-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label.name}</span>
-              {/* The grey model name gives way first: it shrinks before the title does,
-                  and is dropped below the narrow breakpoint (App.css). */}
-              {target.sub && <span className="k-bar-sub" data-testid="target-label-sub" style={{ color: '#7a7a7a', fontWeight: 400, flexShrink: 100, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{target.sub}</span>}
+              {/* The name is the one part that gives way: it shrinks and ends in an
+                  ellipsis, with the whole name in its tooltip. */}
+              {renaming !== null && renaming === target.id ? (
+                <ChatTitleEdit key={renaming} initial={label.name} testId="target-label-rename" style={{ fontWeight: 500, ...noDrag }} onDone={t => {
+                  setRenaming(null);
+                  if (t !== null) onRenameChat?.(renaming, t);
+                }} />
+              ) : (
+                <span className="k-bar-name" data-testid="target-label-name" title={label.name || undefined} style={barName}
+                  onDoubleClick={canRename && target.id ? () => setRenaming(target.id ?? null) : undefined}>{label.name}</span>
+              )}
+              {/* The grey model name stays whole beside it; only below the narrow
+                  breakpoint (App.css) is it dropped. */}
+              {target.sub && <span className="k-bar-sub" data-testid="target-label-sub" style={barSub}>{target.sub}</span>}
               {/* A target with only Settings says why: archived, its store
                   missing, or still being created. */}
               {target.chip && (
@@ -292,7 +313,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
           </div>
         )}
         {!serverOpen && facets.length > 0 && (
-          <div role="tablist" aria-label="Facets" data-testid="facet-tabs" className="k-bar-tabs" style={facetTabs}>
+          <div role="tablist" aria-label="Facets" data-testid="facet-tabs" className="k-bar-tabs" style={target.kind === 'chat' ? chatFacetTabs : facetTabs}>
             {facets.map(f => {
               const on = f === facet;
               return (
@@ -324,7 +345,7 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
 
         <div style={{ flex: 1 }} />
         {!serverOpen && target.kind === 'chat' && target.id && !target.draft && (
-          <span className="k-bar-pill" style={{ display: 'flex' }}><ChatPill chatId={target.id} /></span>
+          <span className="k-bar-pill" data-testid="bar-pill" style={{ display: 'flex', flexShrink: 0 }}><ChatPill chatId={target.id} /></span>
         )}
 
         {/* One control, one anchor: the gear opens the server pages, and the
@@ -403,6 +424,15 @@ const CHIP_TONE: Record<NonNullable<TargetLabel['chip']>['tone'], CSSProperties>
 const facetTabs: CSSProperties = {
   display: 'flex', alignItems: 'stretch', minWidth: 0, flexShrink: 1, overflowX: 'auto', scrollbarWidth: 'none',
 };
+
+// A chat's tabs are only Chat and Settings: they never give way. The title
+// does instead, so the tabs and the stats beside the gear stay whole.
+const chatFacetTabs: CSSProperties = { ...facetTabs, flexShrink: 0 };
+
+// The crumb's name: the part of the bar that shrinks, ending in an ellipsis.
+const barName: CSSProperties = { flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+// The model name after a chat's title: never shrinks.
+const barSub: CSSProperties = { color: '#7a7a7a', fontWeight: 400, flexShrink: 0, whiteSpace: 'nowrap' };
 
 // PanelIcon is the rail toggle's glyph: a window with its left column ruled off.
 const PanelIcon = () => (

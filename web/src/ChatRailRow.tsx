@@ -5,6 +5,7 @@ import { ProviderIcon } from './icons';
 import { noMouseFocus } from './utils';
 import { btn, confirmBox } from './manageStyles';
 import { formatCost } from './chatState';
+import { ChatTitleEdit } from './ChatTitleEdit';
 import { MARK_STYLE, STATE_WORDS } from './chatRail';
 import type { RailState } from './chatRail';
 import {
@@ -24,7 +25,7 @@ function startedAt(iso: string | undefined): string {
  * chat's state) and the title with an ellipsis. Hovering shows a tooltip and an
  * x that ends the chat; a chat with a turn running asks first, inline.
  */
-export function ChatRailRow({ chat, index, providerKind, state, selected, locked, rowStyle, onPin, onEnd }: {
+export function ChatRailRow({ chat, index, providerKind, state, selected, locked, rowStyle, onPin, onEnd, onRename }: {
   chat: ChatInfo;
   /** The row's place in the list. Rows re-sort live; a moved row's tooltip is
    *  closed (the pointer is no longer over it and no mouseleave fires). */
@@ -37,11 +38,14 @@ export function ChatRailRow({ chat, index, providerKind, state, selected, locked
   rowStyle: CSSProperties;
   onPin: () => void;
   onEnd: (id: string) => void;
+  /** Rename the chat: a double-click on its name edits it in place. */
+  onRename?: (id: string, title: string) => void;
 }) {
   const wrap = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState(false);
   const [tipAt, setTipAt] = useState<{ left: number; top: number } | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [at, setAt] = useState(index);
   if (at !== index) { setAt(index); setHover(false); setTipAt(null); }
   const title = chat.title || chat.name || chat.model;
@@ -59,21 +63,36 @@ export function ChatRailRow({ chat, index, providerKind, state, selected, locked
   return (
     <div ref={wrap} data-testid={`rail-chat-wrap-${chat.id}`} style={{ position: 'relative' }}
       onMouseEnter={enter} onMouseLeave={leave} onMouseMove={() => { if (!hover) enter(); }}>
-      <button
-        type="button"
-        data-testid={`rail-chat-${chat.id}`}
-        data-chat-state={state}
-        aria-current={selected || undefined}
-        disabled={locked}
-        onMouseDown={noMouseFocus}
-        onClick={locked ? undefined : onPin}
-        style={{ ...rowStyle, paddingRight: 30 }}
-      >
-        <span data-testid={`rail-chat-mark-${chat.id}`} data-state={state} style={{ ...markBox, ...MARK_STYLE[state] }}>
-          <ProviderIcon kind={providerKind} name={chat.provider} color="currentColor" size={13} />
-        </span>
-        <span data-testid={`rail-chat-title-${chat.id}`} style={titleStyle}>{title}</span>
-      </button>
+      {editing ? (
+        // The row while its name is edited: the same geometry, an input in place
+        // of the name (an input inside the row's button would be invalid).
+        <div data-testid={`rail-chat-${chat.id}`} data-chat-state={state} aria-current={selected || undefined} style={{ ...rowStyle, paddingRight: 30 }}>
+          <span data-testid={`rail-chat-mark-${chat.id}`} data-state={state} style={{ ...markBox, ...MARK_STYLE[state] }}>
+            <ProviderIcon kind={providerKind} name={chat.provider} color="currentColor" size={13} />
+          </span>
+          <ChatTitleEdit initial={title} testId={`rail-chat-rename-${chat.id}`} onDone={t => {
+            setEditing(false);
+            if (t !== null) onRename?.(chat.id, t);
+          }} />
+        </div>
+      ) : (
+        <button
+          type="button"
+          data-testid={`rail-chat-${chat.id}`}
+          data-chat-state={state}
+          aria-current={selected || undefined}
+          disabled={locked}
+          onMouseDown={noMouseFocus}
+          onClick={locked ? undefined : onPin}
+          style={{ ...rowStyle, paddingRight: 30 }}
+        >
+          <span data-testid={`rail-chat-mark-${chat.id}`} data-state={state} style={{ ...markBox, ...MARK_STYLE[state] }}>
+            <ProviderIcon kind={providerKind} name={chat.provider} color="currentColor" size={13} />
+          </span>
+          <span data-testid={`rail-chat-title-${chat.id}`} style={titleStyle}
+            onDoubleClick={onRename && !locked ? () => { setHover(false); setTipAt(null); setEditing(true); } : undefined}>{title}</span>
+        </button>
+      )}
       <button
         type="button"
         data-testid={`rail-chat-end-${chat.id}`}
@@ -99,7 +118,7 @@ export function ChatRailRow({ chat, index, providerKind, state, selected, locked
           </div>
         </div>
       )}
-      {hover && tipAt && (
+      {hover && tipAt && !editing && (
         <div role="tooltip" data-testid={`rail-chat-tip-${chat.id}`} style={{ ...tip, left: tipAt.left, top: tipAt.top }}>
           <b style={tipTitle}>{chat.title || chat.name || chat.model}</b>
           {/* The state in words, in the normal text colour: amber is for

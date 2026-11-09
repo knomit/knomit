@@ -18,7 +18,7 @@ import materializeCss from './materialize.css?raw';
 // the same fact in both, through what each really mounts, and compare what is on
 // screen: the only differences allowed are the × and the retract button.
 // SABOTAGE: render anything else for a fact in the panel; drop hideRetract; drop
-// bandAction; send onOpenPanel from Browse.
+// cornerAction; hand a band menu to Browse instead of opening it in place.
 
 vi.mock('./FactView', async importOriginal => {
   const actual = await importOriginal<typeof import('./FactView')>();
@@ -47,6 +47,14 @@ function routes(base: string, fact: object) {
     [`GET ${base}/facts/${PATH}/outgoing`]: { body: EDGES.outgoing },
   };
 }
+// The fact's motif, read as a cluster of two, so its menu offers the pivot.
+const MOTIF_ROUTE = {
+  [`GET ${BRANCH}/motifs/a-shape`]: { body: {
+    cluster_key: 'a-shape', canonical: 'a-shape', members: ['a-shape'], df: 2, carrier_count: 2,
+    carriers: [{ path: PATH, title: 'One decision', type: 'observation' }, { path: 'kb/b.md', title: 'B', type: 'observation' }],
+    aliases: [{ motif: 'a-shape', method: 'canonical' }],
+  } },
+};
 const common = {
   [`GET ${BRANCH}/facts/${PATH}/commits`]: { body: { _embedded: { commits: [{ commit: NEWEST }, { commit: AT }, { commit: OLDER }] } } },
   [`GET ${BRANCH}`]: { body: { head: NEWEST, branch: 'main', writable: true, ontology_root: 'kb', index_state: 'ready' } },
@@ -141,10 +149,19 @@ describe('a fact in Browse and in the chat panel', () => {
     cleanup();
     const p = await settled(inPanel());
     expect(within(p).queryByTestId('retract-btn')).toBeNull();
-    const close = within(p).getByTestId('chat-panel-close');
-    // In the band's action group, beside materialize.
-    expect(within(p).getByTestId('fact-band')).toContainElement(close);
-    expect(close.parentElement).toContainElement(within(p).getByTestId('materialize-btn'));
+    // In the panel's top-right corner, OUT of the band and its action row, where it
+    // read as a neighbour of retract (chat review, 2026-11-08).
+    // SABOTAGE: pass the × back into renderFact's action group -> red.
+    const corner = within(p.parentElement!).getByTestId('fact-corner-action');
+    const close = within(corner).getByTestId('chat-panel-close');
+    expect(within(p).getByTestId('fact-band')).not.toContainElement(close);
+    expect(within(within(p).getByTestId('fact-band')).queryByTestId('chat-panel-close')).toBeNull();
+    expect(within(p.parentElement!).getAllByTestId('chat-panel-close')).toHaveLength(1);
+    expect(corner.style.position).toBe('absolute');
+    expect(corner.style.top).toBe('4px');
+    expect(corner.style.right).toBe('2px');
+    expect((corner.parentElement as HTMLElement).style.position).toBe('relative');
+    expect(corner.parentElement).toContainElement(p);
   });
 
   it('every control is there in the panel: version, cited by, cites, motif, materialize, tags, refs', async () => {
@@ -155,25 +172,47 @@ describe('a fact in Browse and in the chat panel', () => {
     }
   });
 
-  it('what navigates goes to Browse on that fact: version, cited by, cites, motif, a tag, a ref', async () => {
+  it('what navigates goes to Browse on that fact: version, a pick from cited by, cites or a motif, a tag, a ref', async () => {
     stubFleetFetch({ ...common, ...routes(BRANCH, {
       ...FACT, as_of: { commit: NEWEST, date: '2026-11-01T10:00:00Z' },
-    }) });
+    }), ...MOTIF_ROUTE });
     const onBrowse = vi.fn();
     const p = within(await settled(inPanel({}, onBrowse)));
     const base = { repo: 'r1', branch: 'main', path: PATH };
     fireEvent.click(p.getByTestId('version-walker'));
     expect(onBrowse).toHaveBeenLastCalledWith({ ...base, commit: NEWEST }); // live: the newest version, as Browse's walker does
     fireEvent.click(p.getByTestId('connections-in'));
-    expect(onBrowse).toHaveBeenLastCalledWith({ ...base, panel: { connections: 'in' } });
+    fireEvent.click(within(p.getByTestId('connections-panel')).getByText('A'));
+    expect(onBrowse).toHaveBeenLastCalledWith({ ...base, path: 'a.md', commit: 'c1' });
     fireEvent.click(p.getByTestId('connections-out'));
-    expect(onBrowse).toHaveBeenLastCalledWith({ ...base, panel: { connections: 'out' } });
+    fireEvent.click(within(p.getByTestId('connections-panel')).getByText('Two'));
+    expect(onBrowse).toHaveBeenLastCalledWith({ ...base, path: 'kb/decisions/two.md', commit: 'c3' });
     fireEvent.click(p.getByTestId('motif-cell'));
-    expect(onBrowse).toHaveBeenLastCalledWith({ ...base, panel: { motif: 'a-shape' } });
+    fireEvent.click(await within(p.getByTestId('motif-panel')).findByTestId('motif-pivot'));
+    expect(onBrowse).toHaveBeenLastCalledWith({ ...base, motif: 'a-shape' });
     fireEvent.click(p.getByText('web'));
     expect(onBrowse).toHaveBeenLastCalledWith({ ...base, filter: { category: 'domain', value: 'web' } });
     fireEvent.click(p.getByText(/kb\/decisions\/two\.md/));
     expect(onBrowse).toHaveBeenLastCalledWith({ ...base, path: 'kb/decisions/two.md', commit: 'c3' });
+  });
+
+  // Chat review, 2026-11-08: "cites N" or a motif in the chat's panel switched the
+  // app to Browse just to show its menu. The menu opens where it is clicked, in
+  // both. SABOTAGE: hand the toggle to onBrowse, or drop the in-place panel -> red.
+  it('cited by, cites and a motif open their menu in place in the panel, and clicking them goes nowhere', async () => {
+    stubFleetFetch({ ...common, ...routes(BRANCH, { ...FACT, as_of: { commit: NEWEST, date: '2026-11-01T10:00:00Z' } }), ...MOTIF_ROUTE });
+    const onBrowse = vi.fn();
+    const p = within(await settled(inPanel({}, onBrowse)));
+    fireEvent.click(p.getByTestId('connections-out'));
+    expect(p.getByTestId('connections-out').getAttribute('aria-expanded')).toBe('true');
+    expect(within(p.getByTestId('connections-panel')).getByText('Two')).toBeInTheDocument();
+    fireEvent.click(p.getByTestId('connections-in'));
+    expect(p.getByTestId('connections-in').getAttribute('aria-expanded')).toBe('true');
+    expect(within(p.getByTestId('connections-panel')).getByText('A')).toBeInTheDocument();
+    fireEvent.click(p.getByTestId('motif-cell'));
+    const motif = p.getByTestId('motif-panel');
+    expect(await within(motif).findByTestId('motif-pivot')).toHaveTextContent('Open all 2 carriers');
+    expect(onBrowse).not.toHaveBeenCalled();
   });
 
   it('Browse keeps its panels in place: the same cells open under the band there', async () => {

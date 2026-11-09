@@ -460,6 +460,10 @@ func (c *OllamaChat) Stream(ctx context.Context, s Snapshot, o StreamOptions, si
 	if err != nil {
 		return nil, err
 	}
+	if o.NoThinking && c.thinks {
+		off := false
+		req.Think = &off
+	}
 	if sink == nil {
 		sink = func(Event) {}
 	}

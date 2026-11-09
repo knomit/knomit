@@ -143,7 +143,10 @@ export type ChatEvent =
   | { kind: 'tool_call'; id: string; name: string; state: 'running' | 'done'; is_error?: boolean; arguments?: unknown; title?: string; key_arg?: string; in_base?: boolean; target?: string; duration_ms?: number; summary?: ChatCallSummary; loaded?: string[]; started_ms?: number; ended_ms?: number; turn: number }
   | { kind: 'approval'; approval: ChatApproval }
   | { kind: 'approval_answered'; callId: string }
-  | { kind: 'usage'; usage: UsagePayload; cost_usd?: number; cost_rows?: UsagePayload; seq?: number; turn: number }
+  /** `side`: the chat's own side request (the auto-title). Its tokens and cost
+   *  count toward the turn it followed, but its prompt is not the conversation's,
+   *  so the context meter does not read it. */
+  | { kind: 'usage'; usage: UsagePayload; cost_usd?: number; cost_rows?: UsagePayload; seq?: number; side?: boolean; turn: number }
   | { kind: 'warning'; message: string; notice?: ChatNotice; turn: number }
   | { kind: 'turn_done'; turn: number }
   /** The person pressed Stop: the turn is over here whatever the stream says. */
@@ -324,7 +327,8 @@ export function chatReducer(s: ChatState, e: ChatEvent): ChatState {
     }
     case 'usage': {
       if (e.seq !== undefined && e.seq <= s.lastUsageSeq) return s;
-      return onTurn({ ...s, lastUsageSeq: e.seq ?? s.lastUsageSeq, ctxTokens: e.usage.input + e.usage.cache_read + e.usage.cache_write }, e.turn, t => {
+      const ctxTokens = e.side ? s.ctxTokens : e.usage.input + e.usage.cache_read + e.usage.cache_write;
+      return onTurn({ ...s, lastUsageSeq: e.seq ?? s.lastUsageSeq, ctxTokens }, e.turn, t => {
         const u = t.usage ?? { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
         return {
           ...t,

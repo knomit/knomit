@@ -147,6 +147,10 @@ func (l *sessionLog) Tools(turn int, ch llm.ToolsChange) {
 // Preload writes a turn's `preload` record (see chat.logPreload).
 func (l *sessionLog) Preload(fields map[string]any) { l.write("preload", fields) }
 
+// Title writes a "title" record: the chat's new title and its source, "auto"
+// (with the turn it followed and the request's usage) or "user" (a rename).
+func (l *sessionLog) Title(fields map[string]any) { l.write("title", fields) }
+
 func nonNilStrings(s []string) []string {
 	if s == nil {
 		return []string{}

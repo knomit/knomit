@@ -251,6 +251,13 @@ func newHarnessProvider(t *testing.T, provider http.HandlerFunc) *harness {
 		}
 		return h.nextModel(model), nil
 	}
+	// Auto-title (title.go) would send each chat's model one more request after
+	// its third completed turn, taking a step a test scripted for its next turn.
+	// Off here, as a failing call (the path that keeps the first-message name);
+	// title_test.go turns it on with defaultTitleStream or its own.
+	h.mgr.titleStream = func(context.Context, *chat, llm.Snapshot, llm.StreamOptions) (*llm.Response, error) {
+		return nil, errors.New("auto-title is off in this test")
+	}
 	t.Cleanup(func() {
 		endLife()
 		released.Wait()

@@ -29,6 +29,7 @@ function patchOf(data: Record<string, unknown>): Partial<ChatInfo> {
  */
 export function useChats(enabled = true): {
   chats: ChatInfo[]; loaded: boolean; add: (c: ChatInfo) => void; remove: (id: string) => void;
+  retitle: (id: string, title: string) => void;
 } {
   const [chats, setChats] = useState<ChatInfo[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -124,7 +125,11 @@ export function useChats(enabled = true): {
     added.current.delete(id);
     setChats(prev => (prev.some(p => p.id === id) ? prev.filter(p => p.id !== id) : prev));
   }, []);
-  return { chats, loaded, add, remove };
+  // A rename shows at once; the chat_state the server sends for it confirms it.
+  const retitle = useCallback((id: string, title: string) => {
+    setChats(prev => prev.map(c => (c.id === id ? { ...c, title } : c)));
+  }, []);
+  return { chats, loaded, add, remove, retitle };
 }
 
 /**

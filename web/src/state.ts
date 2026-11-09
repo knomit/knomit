@@ -1,4 +1,3 @@
-import type { EdgeDir } from './utils';
 import type { ExperimentInfo, Lens, LensSource } from './api';
 import { displayLensPath } from './utils';
 
@@ -37,9 +36,6 @@ export type AsOf =
   | { mode: 'live' }
   | { mode: 'history'; commit: string }
   | { mode: 'diff'; from: string; to: string };
-
-/** A panel of the open fact a landing asks to open: cited by or cites, or a motif. */
-export interface FactPanel { connections?: EdgeDir; motif?: string }
 
 interface NavEntry {
   // Set when this departure was to Browse from a chat: going back to this entry
@@ -93,9 +89,6 @@ export interface AppState {
   // context still exists and switches to it (entered), then, once its branch is
   // known, reads the entry's branch and restores the entry on it (NAV_RETURN_LAND).
   navReturn: { entry: NavEntry; entered: boolean } | null;
-  // A landing's request to open a panel of the fact at `path`. FactView serves it
-  // once and clears it.
-  factPanelRequest: (FactPanel & { path: string }) | null;
   repo: string;
   // context is the browse surface (repo | lens). In a repo context, repo/branch
   // are authoritative for both reads and writes. In a lens context, reads come
@@ -223,9 +216,8 @@ export type Action =
   | { type: 'BRANCH_GONE' }
   // departed: the context switch before this landing already pushed what the
   // reader left (SET_CONTEXT push), so this one does not push again.
-  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; sinceFork?: boolean; hop?: boolean; fromChat?: string; factPanel?: FactPanel; departed?: boolean }
+  | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; sinceFork?: boolean; hop?: boolean; fromChat?: string; departed?: boolean }
   | { type: 'CHAT_RETURN_SERVED' }
-  | { type: 'FACT_PANEL_SERVED' }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
   // A reload puts back the list the URL carried (listUrl.ts), once its context
@@ -258,7 +250,6 @@ export const init: AppState = {
   chatReturn: null,
   branchRecheck: false,
   navReturn: null,
-  factPanelRequest: null,
   factSource: null,
   view: 'library',
   factPath: null,
@@ -792,7 +783,6 @@ function applyAction(s: AppState, a: Action): AppState {
         librarySort: a.sort ?? s.librarySort,
         sinceFork: a.sinceFork ?? s.sinceFork,
         navStack: a.departed ? s.navStack : pushNav(s, a.fromChat),
-        factPanelRequest: a.factPanel && a.factPath ? { ...a.factPanel, path: a.factPath } : null,
         rightPanelFocused: false,
       };
     }
@@ -855,8 +845,6 @@ function applyAction(s: AppState, a: Action): AppState {
     }
     case 'NAV_RETURN_DROP':
       return s.navReturn ? { ...s, navReturn: null } : s;
-    case 'FACT_PANEL_SERVED':
-      return s.factPanelRequest ? { ...s, factPanelRequest: null } : s;
     case 'AMEND_NAV': {
       // In-place update — no navStack push. Used by auto-select behaviors so that
       // a single user action (e.g. view-button click) creates exactly one navStack entry.
@@ -912,7 +900,7 @@ function reduce(s: AppState, a: Action): AppState {
 // this rather than AppState, so both go through the same rules.
 export type FactReading = Pick<AppState,
   'context' | 'lens' | 'lensWriteId' | 'repo' | 'branch' | 'factPath' | 'factSource' | 'asOf' | 'headCommit'
-  | 'serverReadOnly' | 'repoReadOnly' | 'branchWritable' | 'factPanelRequest'>;
+  | 'serverReadOnly' | 'repoReadOnly' | 'branchWritable'>;
 
 // openFactSourceResolved says whether factSource is the mount of the fact
 // state.factPath names — i.e. whether pairing the two addresses a real fact.

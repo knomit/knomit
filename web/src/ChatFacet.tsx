@@ -128,6 +128,7 @@ function useChatSession(chatId: string, onGone: (id: string) => void) {
       kind: 'usage', usage: d.usage as UsagePayload,
       ...(typeof d.cost_usd === 'number' ? { cost_usd: d.cost_usd } : {}),
       ...(typeof d.seq === 'number' ? { seq: d.seq } : {}),
+      ...(d.side === true ? { side: true } : {}),
       turn: turnOf(d),
     }));
     on('warning', d => dispatch({

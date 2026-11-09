@@ -3,7 +3,7 @@ import type { CSSProperties, Dispatch, ReactNode } from 'react';
 import { PANEL_BOUNDS_ATTR, useAsync } from './hooks';
 import { api, isCommitNotInRepo } from './api';
 import type { Fact, RefGroup } from './api';
-import type { Action, FactPanel, FactReading } from './state';
+import type { Action, FactReading } from './state';
 import { selectAnchorCommit, isReadOnly, isLive, READ_ONLY_TITLE, readOnlyTitle as readOnlyTitleFor, isLensContext, factHistoryAnchor, factTitleKey, openFactSourceResolved } from './state';
 import { MaterializeView } from './MaterializeView';
 import type { MatFocusScope } from './useMatFocus';
@@ -245,8 +245,9 @@ const EMPTY_REF_COMMITS: Map<string, string> = new Map();
 // Stable identities, so a default does not defeat the memo with a fresh array.
 const EMPTY_EDGES: RefGroup[] = [];
 const CONNECTIONS_PANEL_ID = 'connections-panel';
-// Only while there is no band to hold bandAction.
-const bandActionBar: CSSProperties = { display: 'flex', justifyContent: 'flex-end', padding: '7px 8px', flexShrink: 0 };
+// The caller's corner control (the chat panel's ×): pinned to the view's top-right
+// corner, inside the band's 28px right padding, so it overlaps nothing.
+const cornerBox: CSSProperties = { position: 'absolute', top: 4, right: 2, zIndex: 2 };
 
 export interface FactViewProps {
   /** The fact on screen and where it is read from. Browse hands its app reading. */
@@ -264,12 +265,12 @@ export interface FactViewProps {
   outgoing?: RefGroup[];
   edgesError?: string | null;
   refCommits?: Map<string, string>;
-  /** The band's cited by, cites and motif cells open their panel under the band;
-   *  given this, they hand the panel to it instead: the reader goes where it opens. */
-  onOpenPanel?: (panel: FactPanel) => void;
-  /** Sits last in the band's action group (the chat panel's ×), and in a bar of
-   *  its own while there is no band to hold it. */
-  bandAction?: ReactNode;
+  /** The caller's own control in the view's top-right corner (the chat panel's
+   *  ×), in every state: the fact, loading, an error, no version at the commit.
+   *  NOT in the band's action row, where it sat beside retract and history until
+   *  the chat review of 2026-11-08. The materialize view, which has a toolbar of
+   *  its own, carries it at the end of that toolbar instead. */
+  cornerAction?: ReactNode;
   /** No retract button. Nothing else changes. */
   hideRetract?: boolean;
   /** The materialize view keeps its options in the page's query string, as Browse
@@ -283,7 +284,7 @@ export interface FactViewProps {
   noFact?: ReactNode;
 }
 
-export function FactView({ reading, dispatch, onScrub, onHopRef, onHopEdge, repoNames, refCommits = EMPTY_REF_COMMITS, incoming = EMPTY_EDGES, outgoing = EMPTY_EDGES, edgesError = null, onOpenPanel, bandAction, hideRetract = false, materializeInUrl = true, materializeFocus, replacedBy, noFact }: FactViewProps) {
+export function FactView({ reading, dispatch, onScrub, onHopRef, onHopEdge, repoNames, refCommits = EMPTY_REF_COMMITS, incoming = EMPTY_EDGES, outgoing = EMPTY_EDGES, edgesError = null, cornerAction, hideRetract = false, materializeInUrl = true, materializeFocus, replacedBy, noFact }: FactViewProps) {
   const [fact, setFact] = useState<Fact | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The commit an anchored read found this fact's repo does not hold (404
@@ -317,11 +318,15 @@ export function FactView({ reading, dispatch, onScrub, onHopRef, onHopEdge, repo
   // `connectionsOpen`: the two panels show different things and only one may be
   // open at a time, which the toggles below enforce by closing the other.
   const [motifOpen, setMotifOpen] = useState<string | null>(null);
+  // The band's cited by, cites and motif cells open their menu IN PLACE, under
+  // the band, wherever the view is mounted: Browse and the chat's side panel
+  // alike. Only picking from the menu leaves (onHopEdge, the PIVOT_MOTIF
+  // dispatch), and where that goes is the mount's business (chat review,
+  // 2026-11-08; the panel used to hand the menu itself over to Browse).
   const toggleMotif = useCallback((motif: string) => {
-    if (onOpenPanel) { onOpenPanel({ motif }); return; }
     setConnectionsOpen(null);
     setMotifOpen(cur => (cur === motif ? null : motif));
-  }, [onOpenPanel]);
+  }, []);
 
   // The open fact's motifs, resolved to their clusters. The NAMES came with the
   // fact and cost nothing; each count is a request, so the row draws the names
@@ -352,10 +357,9 @@ export function FactView({ reading, dispatch, onScrub, onHopRef, onHopEdge, repo
   const closeConnections = useCallback(() => setConnectionsOpen(null), []);
   const toggleConnections = useCallback(
     (dir: EdgeDir) => {
-      if (onOpenPanel) { onOpenPanel({ connections: dir }); return; }
       setMotifOpen(null);
       setConnectionsOpen(cur => (cur === dir ? null : dir));
-    }, [onOpenPanel]);
+    }, []);
 
   const cancelConnectionsClose = useCallback(() => {
     window.clearTimeout(connectionsTimer.current);
@@ -398,18 +402,6 @@ export function FactView({ reading, dispatch, onScrub, onHopRef, onHopEdge, repo
     if (mat.open) setMat(m => ({ ...m, open: false }));
   }
 
-  // Sent here from a chat's band: open the panel its cell names, on landing. It
-  // is one-shot, or a later return to this fact would open it again.
-  const panelRequest = reading.factPanelRequest;
-  const [servedRequest, setServedRequest] = useState<FactReading['factPanelRequest']>(null);
-  if (panelRequest && panelRequest !== servedRequest && panelRequest.path === factPath) {
-    setServedRequest(panelRequest);
-    setConnectionsOpen(panelRequest.connections ?? null);
-    setMotifOpen(panelRequest.motif ?? null);
-  }
-  useEffect(() => {
-    if (panelRequest && panelRequest.path === factPath) dispatch({ type: 'FACT_PANEL_SERVED' });
-  }, [panelRequest, factPath, dispatch]);
   const anchorCommit = selectAnchorCommit(reading);
   const inDiff = reading.asOf.mode === 'diff';
 
@@ -605,24 +597,24 @@ export function FactView({ reading, dispatch, onScrub, onHopRef, onHopEdge, repo
       .catch(e => { setRetracting(false); setError(String(e)); });
   }, [fact, retracting, factReadOnly, writeTarget.repo, writeTarget.branch, dispatch]);
 
-  const withBandAction = (content: ReactNode) => bandAction
-    ? <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}><div style={bandActionBar}>{bandAction}</div><div style={{ flex: 1, minHeight: 0 }}>{content}</div></div>
+  const withCorner = (content: ReactNode) => cornerAction
+    ? <div style={{ position: 'relative', height: '100%', minHeight: 0 }}>{content}<div data-testid="fact-corner-action" style={cornerBox}>{cornerAction}</div></div>
     : content;
 
   if (replacedBy) return <>{replacedBy}</>;
 
-  if (noVersionAt && factPath) return withBandAction(<NoVersionAtCommit commit={noVersionAt} />);
+  if (noVersionAt && factPath) return withCorner(<NoVersionAtCommit commit={noVersionAt} />);
   if (error && factPath) {
-    return withBandAction(<div style={{ padding: 24, color: '#f44' }}>{error}</div>);
+    return withCorner(<div style={{ padding: 24, color: '#f44' }}>{error}</div>);
   }
   if (error) return <div style={{ padding: 24, color: '#f44' }}>{error}</div>;
 
   if (!factPath) return <>{noFact}</>;
 
   // Fact view (normal or time-travel)
-  if (!fact) return withBandAction(<div style={{ padding: 24, color: '#666' }}>Loading...</div>);
+  if (!fact) return withCorner(<div style={{ padding: 24, color: '#666' }}>Loading...</div>);
 
-  if (fact.parse_error) return withBandAction(<FactEditor fact={fact} repo={writeTarget.repo} branch={writeTarget.branch} readOnly={factReadOnly} readOnlyTitle={factReadOnlyTitle} onSaved={setFact} />);
+  if (fact.parse_error) return withCorner(<FactEditor fact={fact} repo={writeTarget.repo} branch={writeTarget.branch} readOnly={factReadOnly} readOnlyTitle={factReadOnlyTitle} onSaved={setFact} />);
 
   const readOnly = factReadOnly;
 
@@ -637,13 +629,13 @@ export function FactView({ reading, dispatch, onScrub, onHopRef, onHopEdge, repo
           onOptionsChange={options => setMat(m => ({ ...m, options }))}
           onBack={() => setMat(m => ({ ...m, open: false }))}
           focusScope={materializeFocus}
-          barAction={bandAction}
+          barAction={cornerAction}
         />
       </div>
     );
   }
 
-  return (
+  return withCorner(
     <div data-testid="fact-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {confirmRetract && (
         <ConfirmModal
@@ -693,7 +685,6 @@ export function FactView({ reading, dispatch, onScrub, onHopRef, onHopEdge, repo
           { open: motifOpen, onToggle: toggleMotif, onClose: closeMotif, onPivot: pivotMotif, panelId: motifPanelId },
           isLive(reading),
           () => setMat(m => ({ ...m, open: true })),
-          bandAction,
         )}
       </div>
     </div>

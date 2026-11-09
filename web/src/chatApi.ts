@@ -188,6 +188,12 @@ export function deleteChat(id: string): Promise<void> {
   return noContent(chatUrl(id), { method: 'DELETE' });
 }
 
+/** Rename a chat (PATCH /chats/{id}). The chat is then the person's to name:
+ *  the server's auto-title never replaces it. The answer is the chat's row. */
+export function renameChat(id: string, title: string): Promise<ChatInfo> {
+  return fetchJSON<ChatInfo>(chatUrl(id), { method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify({ title }) });
+}
+
 export async function listChatGrants(id: string): Promise<ChatGrant[]> {
   const data = await fetchJSON<{ _embedded?: { grants?: ChatGrant[] } }>(`${chatUrl(id)}/grants`);
   return data._embedded?.grants ?? [];

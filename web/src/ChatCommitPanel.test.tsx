@@ -111,7 +111,7 @@ describe('a commit chip opens the commit in the side panel', () => {
     expect(fact).not.toHaveTextContent('THE NEW TEXT');
     expect(fx.calls.some(c => c.route === `GET ${REPO}/facts/${CHANGED}`)).toBe(false);
     // The band's history button is there, and counts nothing (no vN).
-    expect((await within(fact).findByTestId('version-walker')).textContent).toBe('↺');
+    expect((await within(fact).findByTestId('version-walker')).textContent).toBe('');
     // The edge counts are this commit's too.
     await waitFor(() => expect(within(fact).getByTestId('connections-in')).toHaveTextContent('2'));
     expect(within(fact).getByTestId('connections-out')).toHaveTextContent('1');
@@ -123,7 +123,7 @@ describe('a commit chip opens the commit in the side panel', () => {
     expect(screen.queryByTestId('fact-view')).toBeNull();
   });
 
-  it('from a fact read at a commit, the version, cited by and cites all land at that commit, on its branch', async () => {
+  it('from a fact read at a commit, the version lands at that commit; a pick from cited by or cites lands at its edge\'s pin, on its branch', async () => {
     const { onBrowseFact } = mount({
       [`GET ${REPO}/commits/${FULL}/facts/${CHANGED}`]: { body: factAt(CHANGED, 'The changed fact', 'x', FULL) },
       [`GET ${REPO}/commits/${FULL}/facts/${CHANGED}/incoming`]: { body: { _embedded: { refs: [{ path: 'a.md', title: 'A', commit: 'c1' }] } } },
@@ -138,10 +138,15 @@ describe('a commit chip opens the commit in the side panel', () => {
     fireEvent.click(await screen.findByTestId('version-walker'));
     expect(onBrowseFact).toHaveBeenLastCalledWith('chat-a', base); // that commit, not the newest
     await waitFor(() => expect(screen.getByTestId('connections-in')).toHaveTextContent('1'));
+    // The menus open in the panel; only a pick goes to Browse.
+    const calls = onBrowseFact.mock.calls.length;
     fireEvent.click(screen.getByTestId('connections-in'));
-    expect(onBrowseFact).toHaveBeenLastCalledWith('chat-a', { ...base, panel: { connections: 'in' } });
+    expect(onBrowseFact).toHaveBeenCalledTimes(calls);
+    fireEvent.click(within(screen.getByTestId('connections-panel')).getByText('A'));
+    expect(onBrowseFact).toHaveBeenLastCalledWith('chat-a', { ...base, path: 'a.md', commit: 'c1' });
     fireEvent.click(screen.getByTestId('connections-out'));
-    expect(onBrowseFact).toHaveBeenLastCalledWith('chat-a', { ...base, panel: { connections: 'out' } });
+    fireEvent.click(within(screen.getByTestId('connections-panel')).getByText('C'));
+    expect(onBrowseFact).toHaveBeenLastCalledWith('chat-a', { ...base, path: 'c.md', commit: 'c3' });
   });
 
   it('a fact the commit retracted opens its last version with ?fallback=before and says it was retracted, not a dead panel', async () => {
@@ -163,8 +168,8 @@ describe('a commit chip opens the commit in the side panel', () => {
     expect(urls().filter(u => u.includes(`/commits/${FULL}/facts/${GONE}/`) && /incoming|outgoing/.test(u)).every(u => u.endsWith('?fallback=before'))).toBe(true);
     // Browse's own badge names the commit that retracted it.
     expect(within(fact).getByTestId('retracted-version-badge')).toHaveTextContent('retracted at abc1234');
-    // The history button is there, a bare ↺ (no vN).
-    expect((await within(fact).findByTestId('version-walker')).textContent).toBe('↺');
+    // The history button is there, a bare history icon (no vN).
+    expect((await within(fact).findByTestId('version-walker')).textContent).toBe('');
   });
 
   it('a commit with no facts shows the commit and an empty list, whatever else the server listed, and no error', async () => {

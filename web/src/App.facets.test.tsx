@@ -40,7 +40,7 @@ vi.mock('./api', async (importOriginal) => {
       repos: vi.fn(), listLenses: vi.fn(), listArchived: vi.fn(), getAgentBranch: vi.fn(),
       status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),
       search: vi.fn(), stats: vi.fn(), activity: vi.fn(), explain: vi.fn(), completions: vi.fn(),
-      fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(), getRepo: vi.fn(), listBranchNames: vi.fn(),
+      fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(), getRepo: vi.fn(), listBranchNames: vi.fn(), motifCluster: vi.fn(),
       listRepoCreates: vi.fn(), listExperiments: vi.fn(), listPushedBranches: vi.fn(),
       // The drafts and the pinned targets.
       createRepo: vi.fn(), createLens: vi.fn(), updateLens: vi.fn(), renameLens: vi.fn(), renameRepo: vi.fn(), archiveRepo: vi.fn(), restoreRepo: vi.fn(), purgeRepo: vi.fn(),
@@ -81,6 +81,12 @@ async function primeApi({ readOnly = false, lenses = [] as unknown[] } = {}) {
   m.validateOntology.mockResolvedValue({ ok: true, id: 'general', name: 'General', topics: ['people'], rule_count: 0 });
   m.ontologySchema.mockResolvedValue([]);
   m.listTemplates.mockResolvedValue([]);
+  // A motif is a cluster of two carriers, so its menu offers the pivot.
+  m.motifCluster.mockImplementation(async (_r: string, _b: string, key: string) => ({
+    cluster_key: key, canonical: key, members: [key], df: 2, carrier_count: 2,
+    carriers: [{ path: 'kb/decisions/one.md', title: 'One', type: 'observation' }, { path: 'kb/b.md', title: 'B', type: 'observation' }],
+    aliases: [{ motif: key, method: 'canonical' }],
+  }));
   return { m, mod };
 }
 
@@ -1301,6 +1307,162 @@ describe('a chat target', () => {
     expect(post[0].body).toEqual({ provider: 'anthropic', model: 'a1', message: 'first words' });
   });
 
+  // Chat titles (chat review, 2026-11-08): the server's auto-title or a rename
+  // arrives as chat_state, and the rail row and the top bar both follow it live.
+  // SABOTAGE: stop applying chat_state's title in useChats -> red.
+  it('a title that arrives as chat_state shows at once in the rail row and the top bar', async () => {
+    await primeApi();
+    chatRoutes([{ ...CHAT_A, title: 'bind to alpha then list the latest facts', state: 'idle', turns: 1 }]);
+    await mountApp();
+    fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+    await waitFor(() => expect(screen.getByTestId('target-label-name')).toHaveTextContent('bind to alpha then list the latest facts'));
+    const es = await waitFor(() => { const e = chatStream('chat-a'); expect(e).toBeTruthy(); return e!; });
+    act(() => { es.emit('chat_state', { title: 'Latest facts in alpha', state: 'idle', turns: 1, last_activity: 'x', started_at: 'y' }); });
+    expect(screen.getByTestId('rail-chat-title-chat-a')).toHaveTextContent('Latest facts in alpha');
+    expect(screen.getByTestId('target-label-name')).toHaveTextContent('Latest facts in alpha');
+    expect(screen.getByTestId('target-label-name')).toHaveAttribute('title', 'Latest facts in alpha');
+  });
+
+  // Rename by double-click, in the rail row and in the top bar: Enter or blur
+  // saves through PATCH /chats/{id}, Esc cancels, and an empty name reverts.
+  // SABOTAGE: drop the onDoubleClick, save on Esc, or PATCH an empty name -> red.
+  describe('rename', () => {
+    const mountWithChat = async () => {
+      await primeApi();
+      const { fx } = chatRoutes([{ ...CHAT_A, title: 'first words', state: 'idle', turns: 1 }]);
+      fx.set('PATCH /api/v1/chats/chat-a', (body: unknown) => ({ body: { ...CHAT_A, title: (body as { title: string }).title, state: 'idle', turns: 1 } }));
+      await mountApp();
+      fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+      await waitFor(() => expect(screen.getByTestId('target-label-name')).toHaveTextContent('first words'));
+      return fx;
+    };
+    const patches = (fx: { calls: { route: string; body: unknown }[] }) => fx.calls.filter(c => c.route === 'PATCH /api/v1/chats/chat-a').map(c => c.body);
+
+    // Review of #808, confirmed in a browser: rail rows take no focus, so a click
+    // on chat B while A's name was being edited left the input open, and Enter
+    // then renamed B with the text typed for A. Opening another chat now CANCELS
+    // the edit. SABOTAGE: drop the target-id reset in TopBar -> red.
+    it('opening another chat while the top bar edits a name cancels the edit: nothing is saved, to either chat', async () => {
+      await primeApi();
+      const CHAT_B = { id: 'chat-b', provider: 'anthropic', model: 'a1' };
+      const { fx } = chatRoutes([{ ...CHAT_A, title: 'alpha words', state: 'idle', turns: 1 }, { ...CHAT_B, title: 'beta words', state: 'idle', turns: 1 }]);
+      fx.set('GET /api/v1/chats/chat-b', { body: { ...CHAT_B, running: false, items: [], pending_approvals: [], grants: [] } });
+      const sent = (id: string) => fx.calls.filter(c => c.route === `PATCH /api/v1/chats/${id}`);
+      await mountApp();
+      fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+      await waitFor(() => expect(screen.getByTestId('target-label-name')).toHaveTextContent('alpha words'));
+      fireEvent.doubleClick(screen.getByTestId('target-label-name'));
+      const input = screen.getByTestId('target-label-rename') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'typed for alpha' } });
+      // As a browser does it: the row's mousedown takes no focus, so no blur.
+      expect(fireEvent.mouseDown(screen.getByTestId('rail-chat-chat-b'))).toBe(false);
+      fireEvent.click(screen.getByTestId('rail-chat-chat-b'));
+      await waitFor(() => expect(screen.getByTestId('target-label-name')).toHaveTextContent('beta words'));
+      expect(screen.queryByTestId('target-label-rename')).toBeNull();
+      // Whatever arrives late (a blur, an Enter on the detached input) saves nothing.
+      fireEvent.keyDown(input, { key: 'Enter' });
+      fireEvent.blur(input);
+      expect(sent('chat-a')).toEqual([]);
+      expect(sent('chat-b')).toEqual([]);
+      expect(screen.getByTestId('rail-chat-title-chat-a')).toHaveTextContent('alpha words');
+      expect(screen.getByTestId('rail-chat-title-chat-b')).toHaveTextContent('beta words');
+      // Back on A, the edit is not waiting there either: it ended.
+      fireEvent.click(screen.getByTestId('rail-chat-chat-a'));
+      await waitFor(() => expect(screen.getByTestId('target-label-name')).toHaveTextContent('alpha words'));
+      expect(screen.queryByTestId('target-label-rename')).toBeNull();
+    });
+
+    // The editor's own guard is pinned in ChatTitleEdit.test.tsx; here the whole
+    // path: one PATCH.
+    it('Enter then the blur that follows it saves exactly once', async () => {
+      const fx = await mountWithChat();
+      fireEvent.doubleClick(screen.getByTestId('rail-chat-title-chat-a'));
+      const input = screen.getByTestId('rail-chat-rename-chat-a');
+      fireEvent.change(input, { target: { value: 'Once only' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      fireEvent.blur(input);
+      expect(patches(fx)).toEqual([{ title: 'Once only' }]);
+    });
+
+    // An Enter that confirms an IME composition (Japanese, Chinese input) is
+    // the composition's. SABOTAGE: drop the isComposing check -> red.
+    it('an Enter that ends an IME composition does not save; the next Enter does', async () => {
+      const fx = await mountWithChat();
+      fireEvent.doubleClick(screen.getByTestId('target-label-name'));
+      const input = screen.getByTestId('target-label-rename');
+      fireEvent.change(input, { target: { value: '名前' } });
+      fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+      expect(screen.getByTestId('target-label-rename')).toBe(input);
+      expect(patches(fx)).toEqual([]);
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(patches(fx)).toEqual([{ title: '名前' }]);
+    });
+
+    it('the rail row: double-click, type, Enter saves; both the row and the top bar show it', async () => {
+      const fx = await mountWithChat();
+      fireEvent.doubleClick(screen.getByTestId('rail-chat-title-chat-a'));
+      const input = screen.getByTestId('rail-chat-rename-chat-a') as HTMLInputElement;
+      expect(input.value).toBe('first words');
+      expect(document.activeElement).toBe(input);
+      fireEvent.change(input, { target: { value: '  Alpha   review  ' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(screen.queryByTestId('rail-chat-rename-chat-a')).toBeNull();
+      expect(patches(fx)).toEqual([{ title: 'Alpha review' }]);
+      expect(screen.getByTestId('rail-chat-title-chat-a')).toHaveTextContent('Alpha review');
+      expect(screen.getByTestId('target-label-name')).toHaveTextContent('Alpha review');
+    });
+
+    it('the top bar: double-click, type, blur saves', async () => {
+      const fx = await mountWithChat();
+      fireEvent.doubleClick(screen.getByTestId('target-label-name'));
+      const input = screen.getByTestId('target-label-rename') as HTMLInputElement;
+      expect(input.value).toBe('first words');
+      fireEvent.change(input, { target: { value: 'From the bar' } });
+      fireEvent.blur(input);
+      expect(patches(fx)).toEqual([{ title: 'From the bar' }]);
+      expect(screen.getByTestId('target-label-name')).toHaveTextContent('From the bar');
+      expect(screen.getByTestId('rail-chat-title-chat-a')).toHaveTextContent('From the bar');
+    });
+
+    it('Esc cancels, in the top bar and in the rail: nothing is sent and the name stays', async () => {
+      const fx = await mountWithChat();
+      fireEvent.doubleClick(screen.getByTestId('target-label-name'));
+      fireEvent.change(screen.getByTestId('target-label-rename'), { target: { value: 'never' } });
+      fireEvent.keyDown(screen.getByTestId('target-label-rename'), { key: 'Escape' });
+      expect(screen.queryByTestId('target-label-rename')).toBeNull();
+      fireEvent.doubleClick(screen.getByTestId('rail-chat-title-chat-a'));
+      fireEvent.change(screen.getByTestId('rail-chat-rename-chat-a'), { target: { value: 'never either' } });
+      fireEvent.keyDown(screen.getByTestId('rail-chat-rename-chat-a'), { key: 'Escape' });
+      expect(screen.queryByTestId('rail-chat-rename-chat-a')).toBeNull();
+      expect(patches(fx)).toEqual([]);
+      expect(screen.getByTestId('target-label-name')).toHaveTextContent('first words');
+      expect(screen.getByTestId('rail-chat-title-chat-a')).toHaveTextContent('first words');
+    });
+
+    it('an empty name reverts: nothing is sent and the old name is back', async () => {
+      const fx = await mountWithChat();
+      fireEvent.doubleClick(screen.getByTestId('rail-chat-title-chat-a'));
+      fireEvent.change(screen.getByTestId('rail-chat-rename-chat-a'), { target: { value: '   ' } });
+      fireEvent.keyDown(screen.getByTestId('rail-chat-rename-chat-a'), { key: 'Enter' });
+      fireEvent.doubleClick(screen.getByTestId('target-label-name'));
+      fireEvent.change(screen.getByTestId('target-label-rename'), { target: { value: '' } });
+      fireEvent.blur(screen.getByTestId('target-label-rename'));
+      expect(patches(fx)).toEqual([]);
+      expect(screen.getByTestId('rail-chat-title-chat-a')).toHaveTextContent('first words');
+      expect(screen.getByTestId('target-label-name')).toHaveTextContent('first words');
+    });
+
+    it('a rename the server refuses puts the old name back', async () => {
+      const fx = await mountWithChat();
+      fx.set('PATCH /api/v1/chats/chat-a', { status: 400, body: { detail: 'title must not be empty' } });
+      fireEvent.doubleClick(screen.getByTestId('target-label-name'));
+      fireEvent.change(screen.getByTestId('target-label-rename'), { target: { value: 'Refused' } });
+      fireEvent.keyDown(screen.getByTestId('target-label-rename'), { key: 'Enter' });
+      expect(patches(fx)).toEqual([{ title: 'Refused' }]);
+      await waitFor(() => expect(screen.getByTestId('target-label-name')).toHaveTextContent('first words'));
+    });
+  });
+
   it('a chat pinned in the same render it is added is not auto-unpinned', async () => {
     await primeApi();
     const { fx } = chatRoutes();
@@ -1440,26 +1602,40 @@ describe('a chat target', () => {
       await waitFor(() => expect(screen.getByTestId('connections-in')).toHaveTextContent('1'));
       return m;
     }
+    // The version lands at once. Cited by and cites open their menu IN PLACE in the
+    // chat's panel (chat review, 2026-11-08): the app stays on the chat until the
+    // reader picks from it, and the pick is what lands in Browse.
+    const PICK: Record<'in' | 'out', string> = { in: 'In', out: 'Out' };
     const click = async (m: Record<string, ReturnType<typeof vi.fn>>, control: Control, ms: number) => {
       m.fact.mockClear();
       fireEvent.click(screen.getByTestId(TEST_ID[control]));
+      if (control !== 'version') {
+        const chatView = within(screen.getByTestId('fact-view'));
+        expect(chatView.getByTestId(TEST_ID[control]).getAttribute('aria-expanded')).toBe('true');
+        await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+        expect(tabNames()).toEqual(['Chat', 'Settings']);
+        fireEvent.click(within(chatView.getByTestId('connections-panel')).getByText(PICK[control]));
+      }
       await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
       await act(async () => { await new Promise(r => setTimeout(r, ms + 150)); });
       return within(screen.getByTestId('browse-facet'));
     };
     // Everything Browse read for a fact, and what is on screen.
     const reads = (m: Record<string, ReturnType<typeof vi.fn>>) => m.fact.mock.calls.map(c => `${c[2]}@${String(c[3]).slice(0, 7)}`);
+    // The version lands on this fact at the commit; a pick from cited by or cites
+    // lands on the fact picked, at the commit its edge pins.
+    const LANDS: Record<Control, string> = { version: `${PATH}@abc1234`, in: 'kb/in.md@c1', out: 'kb/out.md@c2' };
     const expectLandedOnTheFact = (m: Record<string, ReturnType<typeof vi.fn>>, control: Control, browse: ReturnType<typeof within>) => {
-      expect(reads(m).at(-1)).toBe(`${PATH}@abc1234`);
+      expect(reads(m).at(-1)).toBe(LANDS[control]);
       // Row 0 at the commit is the trap. Row 0 live is only the back-crumb's title, when it was the fact open before.
       expect(reads(m)).not.toContain(`${ROW0}@abc1234`);
       const body = screen.getByTestId('browse-facet').textContent;
-      expect(body).toContain('BODY OF ' + PATH);
+      expect(body).toContain('BODY OF ' + LANDS[control].split('@')[0]);
       expect(body).not.toContain('BODY OF ' + ROW0);
       expect(browse.getByTestId('timeline-nav')).toBeInTheDocument();
-      // Each control lands on its own view of the fact.
+      // No menu is handed over: Browse lands with its cells closed.
       for (const dir of ['in', 'out'] as const) {
-        expect(browse.getByTestId(TEST_ID[dir]).getAttribute('aria-expanded')).toBe(control === dir ? 'true' : 'false');
+        expect(browse.getByTestId(TEST_ID[dir]).getAttribute('aria-expanded')).toBe('false');
       }
     };
 
@@ -1490,28 +1666,27 @@ describe('a chat target', () => {
     }
 
     for (const start of ['core-kb', 'ops-kb']) for (const mode of ['recent', 'search'] as const) {
-      it(`a motif in the band lands on that fact, at that commit, with its panel: from ${start}, in ${mode}`, async () => {
+      it(`a motif opens its menu in the chat, and its pivot lands on that fact, at that commit, with the motif as the query: from ${start}, in ${mode}`, async () => {
         const m = await toTheChatsFact({ start, mode, ms: 30, motifs: ['a-shape'] });
         m.fact.mockClear();
-        fireEvent.click(await within(screen.getByTestId('fact-view')).findByTestId('motif-cell'));
+        // The pivot's list holds the fact (it carries the motif), as Browse's own would.
+        m.recent.mockImplementation(() => Promise.resolve({ facts: [{ path: PATH, title: 'One' }], total: 1 }));
+        m.search.mockImplementation(() => Promise.resolve({ results: [{ path: PATH, title: 'One', score: 1 }], total: 1 }));
+        const chatView = within(screen.getByTestId('fact-view'));
+        fireEvent.click(await chatView.findByTestId('motif-cell'));
+        const pivot = await within(chatView.getByTestId('motif-panel')).findByTestId('motif-pivot');
+        expect(tabNames()).toEqual(['Chat', 'Settings']);
+        fireEvent.click(pivot);
         await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
         await act(async () => { await new Promise(r => setTimeout(r, 180)); });
         expect(reads(m).at(-1)).toBe(`${PATH}@abc1234`);
-        expect(within(screen.getByTestId('browse-facet')).getByTestId('motif-panel')).toBeInTheDocument();
+        // The list Browse reads is the motif's (the chip row is not drawn while anchored,
+        // so the query is checked where it goes): the motif, and no path scope.
+        const lastList = JSON.stringify(m.recent.mock.calls.at(-1));
+        expect(lastList).toContain('a-shape');
+        expect(lastList).not.toContain('kb/decisions');
       });
     }
-
-    it('a panel opens once: leaving Browse and coming back to the same fact does not open it again', async () => {
-      const m = await toTheChatsFact({ start: 'core-kb', mode: 'path', ms: 0 });
-      const browse = await click(m, 'in', 0);
-      expect(browse.getByTestId('connections-in').getAttribute('aria-expanded')).toBe('true');
-      fireEvent.click(screen.getByTestId('rail-chat-chat-a')); // not back: the fact stays open in Browse
-      await waitFor(() => expect(tabNames()).toEqual(['Chat', 'Settings']));
-      fireEvent.click(screen.getByTestId('rail-repo-core-kb'));
-      await waitFor(() => expect(tabNames()).toEqual(['Browse', 'Activity', 'Settings']));
-      const again = within(screen.getByTestId('browse-facet'));
-      expect((await again.findByTestId('connections-in')).getAttribute('aria-expanded')).toBe('false');
-    });
 
     // Browse on another branch of the same repo: the commit was read from the
     // resolver's branch, and that is the history the timeline has to show.
@@ -1558,7 +1733,8 @@ describe('a chat target', () => {
     });
     it('back from a hop inside Browse stays in Browse; the next one returns to the chat', async () => {
       const m = await toTheChatsFact({ start: 'core-kb', mode: 'path', ms: 0 });
-      const browse = await click(m, 'in', 0);
+      const browse = await click(m, 'version', 0);
+      fireEvent.click(browse.getByTestId('connections-in'));
       fireEvent.click(within(browse.getByTestId('connections-panel')).getByText('In'));
       await waitFor(() => expect(reads(m).at(-1)).toBe('kb/in.md@c1'));
       fireEvent.keyDown(window, { key: '[', metaKey: true });
@@ -1641,11 +1817,18 @@ describe('a chat target', () => {
         const view = await openChip();
         m.fact.mockClear();
         fireEvent.click(view.getByTestId(TEST_ID[control]));
+        // Cited by and cites open their menu in the chat; the pick is what lands.
+        const to = control === 'version' ? `${PATH}@newest1` : control === 'in' ? 'kb/in.md@c1' : 'kb/out.md@c2';
+        if (control !== 'version') {
+          expect(view.getByTestId(TEST_ID[control]).getAttribute('aria-expanded')).toBe('true');
+          expect(tabNames()).toEqual(['Chat', 'Settings']);
+          fireEvent.click(within(view.getByTestId('connections-panel')).getByText(control === 'in' ? 'In' : 'Out'));
+        }
         const browse = await landed(30);
-        expect(reads(m).at(-1)).toBe(control === 'version' ? `${PATH}@newest1` : `${PATH}@undefin`);
-        expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + PATH);
+        expect(reads(m).at(-1)).toBe(to);
+        expect(screen.getByTestId('browse-facet').textContent).toContain('BODY OF ' + to.split('@')[0]);
         expect(reads(m)).not.toContain(`${ROW0}@newest1`);
-        if (control !== 'version') expect(browse.getByTestId(TEST_ID[control]).getAttribute('aria-expanded')).toBe('true');
+        expect(browse.getByTestId('connections-in').getAttribute('aria-expanded')).toBe('false');
         await backToTheChat();
       });
     }
