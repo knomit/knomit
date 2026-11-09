@@ -174,8 +174,6 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   const setFollowing = useCallback((on: boolean) => {
     following.current = on;
     if (!on) smoothing.current = false;
-    // At once, not at the next render: the next reflow may come first.
-    if (scroller.current) scroller.current.style.overflowAnchor = on ? 'none' : 'auto';
     setFollow(on);
   }, []);
   const toBottom = useCallback((el: HTMLElement, smooth: boolean) => {

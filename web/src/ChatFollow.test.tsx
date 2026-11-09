@@ -293,9 +293,12 @@ describe.each([['plain', false], ['StrictMode', true]] as const)('follow or read
       const el = await mountStreaming();
       scrollTo(el, BOTTOM());
       rerenderWith(false);
-      geom.height = 1500;
+      // Hidden (display:none), the box measures 0 and a pin writes 0.
+      geom.height = 0; geom.client = 0;
       delta('streamed while away');
       await frame();
+      expect(el.scrollTop).toBe(0);
+      geom.height = 1500; geom.client = 200;
       rerenderWith(true);
       expect(el.scrollTop).toBe(1300);
       expect(pill()).toBeNull();
