@@ -9,7 +9,7 @@ import type { ChatSnapshot, ChatViewItem } from './chatApi';
 import { CHAT_JUMP_LATEST } from './chatCopy';
 
 // Follow or read: at the bottom the transcript follows the stream; scrolled up,
-// nothing moves it, and "Jump to latest ↓" (or End) brings it back. jsdom has no
+// nothing moves it, and "Jump to latest ↓" brings it back. jsdom has no
 // layout, so the transcript's geometry is stubbed: scrollHeight and
 // clientHeight are read from `geom`, and scrollTop is a plain stored number.
 // jsdom has no ResizeObserver either: a fake one records its callbacks, and
@@ -33,16 +33,11 @@ class FakeResizeObserver {
 }
 const resized = () => act(() => { for (const o of observers) if (o.live) o.cb(); });
 
-let rerenderWith: (onScreen: boolean) => void = () => {};
-
 /** Let the follow's one-per-frame write run. */
 const frame = () => act(async () => { await new Promise(r => requestAnimationFrame(() => r(null))); });
 const scrollTo = (el: HTMLElement, top: number) => { el.scrollTop = top; fireEvent.scroll(el); };
 const delta = (text: string) => act(() => { chatStream('chat-a')!.emit('text_delta', { text, turn: 0 }); });
 const pill = () => screen.queryByRole('button', { name: CHAT_JUMP_LATEST });
-/** Longer than ChatPanel's UP_KEY_WAIT_MS (300): an up key that saw no transcript scroll lapses. */
-const UP_WAIT = 350;
-const wait = (ms: number) => act(async () => { await new Promise(r => setTimeout(r, ms)); });
 const reducedMotion = (on: boolean) => vi.stubGlobal('matchMedia', vi.fn((q: string) => ({ matches: on && q.includes('reduce'), media: q, addEventListener() {}, removeEventListener() {} })));
 
 beforeEach(() => {
@@ -63,9 +58,7 @@ describe.each([['plain', false], ['StrictMode', true]] as const)('follow or read
       [`GET ${BASE}/context`]: { body: { window: 1_000_000, spill: false } },
       [`POST ${BASE}/turns`]: { status: 202, body: { turn: 1 } },
     });
-    const onGone = vi.fn();
-    const { rerender } = render(wrap(<ChatFacet chat={CHAT} facet="chat" onGone={onGone} />));
-    rerenderWith = (onScreen: boolean) => rerender(wrap(<ChatFacet chat={CHAT} facet="chat" onGone={onGone} onScreen={onScreen} />));
+    render(wrap(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} />));
     await screen.findByTestId('chat-turn-0');
     await frame();
     const el = screen.getByTestId('chat-transcript') as HTMLDivElement;
@@ -74,354 +67,195 @@ describe.each([['plain', false], ['StrictMode', true]] as const)('follow or read
     return el;
   }
 
-  describe('following and reading', () => {
-    it('not at the bottom shows the pill, labelled exactly "Jump to latest ↓"', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      expect(pill()).toBeNull();
-      scrollTo(el, 300);
-      expect(pill()).not.toBeNull();
-      expect(pill()!.textContent).toBe('Jump to latest ↓');
-    });
-
-    it('a streamed delta while scrolled up leaves scrollTop where the reader put it', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      scrollTo(el, 300);
-      geom.height = 1400;
-      delta('more text below');
-      await frame();
-      expect(screen.getByTestId('chat-text').textContent).toBe('more text below');
-      expect(el.scrollTop).toBe(300);
-      expect(pill()).not.toBeNull();
-    });
-
-    it('a scroll up between a delta and its frame wins: the queued follow does not pull the reader back', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      geom.height = 1400;
-      delta('queued');
-      scrollTo(el, 300);
-      await frame();
-      expect(el.scrollTop).toBe(300);
-      expect(pill()).not.toBeNull();
-    });
-
-    it('at the bottom a delta keeps it at the bottom (StrictMode included: the frame handle survives remount)', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      geom.height = 1400;
-      delta('more');
-      await frame();
-      expect(el.scrollTop).toBe(1200);
-      expect(pill()).toBeNull();
-      geom.height = 1700;
-      delta(' and more');
-      await frame();
-      expect(el.scrollTop).toBe(1500);
-    });
-
-    it('clicking the pill goes to the bottom and hides it; with motion allowed it scrolls smoothly', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      scrollTo(el, 300);
-      fireEvent.click(pill()!);
-      expect(el.scrollTop).toBe(800);
-      expect(pill()).toBeNull();
-      // Following again: the next delta is followed.
-      geom.height = 1300;
-      delta('next');
-      await frame();
-      expect(el.scrollTop).toBe(1100);
-
-      reducedMotion(false);
-      const smooth = vi.fn();
-      el.scrollTo = smooth as unknown as typeof el.scrollTo;
-      scrollTo(el, 200);
-      fireEvent.click(pill()!);
-      expect(smooth).toHaveBeenCalledWith({ top: 1100, behavior: 'smooth' });
-      expect(pill()).toBeNull();
-    });
-
-    it('a follow-scroll that lands after the page grew again is not taken for the reader scrolling up', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      // The delta grows the page; the scroll event from our earlier write arrives
-      // before this frame's write, with the bottom now 400px away.
-      geom.height = 1400;
-      delta('a');
-      fireEvent.scroll(el);
-      expect(pill()).toBeNull();
-      await frame();
-      expect(el.scrollTop).toBe(1200);
-      // A smooth scroll's intermediate steps only move down: still following.
-      geom.height = 2000;
-      scrollTo(el, 1250);
-      scrollTo(el, 1500);
-      expect(pill()).toBeNull();
-      delta('b');
-      await frame();
-      expect(el.scrollTop).toBe(1800);
-    });
-
-    it('scrolling back down to within the slack resumes following; a small scroll UP inside the slack does not', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      fireEvent.wheel(el, { deltaY: -10 });
-      scrollTo(el, 790);
-      expect(pill()).not.toBeNull();
-      scrollTo(el, 785);
-      expect(pill()).not.toBeNull(); // still going up, though 15px from the bottom
-      scrollTo(el, 790);
-      expect(pill()).toBeNull(); // coming down inside the slack re-arms
-    });
+  it('at the bottom a delta keeps it at the bottom (StrictMode included: the frame handle survives remount)', async () => {
+    const el = await mountStreaming();
+    scrollTo(el, BOTTOM());
+    geom.height = 1400;
+    delta('more');
+    await frame();
+    expect(el.scrollTop).toBe(1200);
+    expect(pill()).toBeNull();
+    geom.height = 1700;
+    delta(' and more');
+    await frame();
+    expect(el.scrollTop).toBe(1500);
   });
 
-  describe('the reader leaving: intent first, then a scrollbar drag', () => {
-    it('a small wheel step up stops following at once, inside the 24px slack, and the next delta does not re-pin', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      fireEvent.wheel(el, { deltaY: -10 });
-      expect(pill()).not.toBeNull();
-      scrollTo(el, 790); // the browser's own 10px scroll for that step
-      geom.height = 1400;
-      delta('more');
-      await frame();
-      expect(el.scrollTop).toBe(790);
-      expect(pill()).not.toBeNull();
-    });
-
-    it('a wheel step up with nothing above to scroll to (scrollTop 0) does not leave', async () => {
-      const el = await mountStreaming();
-      geom.height = 200; // the transcript fits: nothing scrolls
-      scrollTo(el, 0);
-      fireEvent.wheel(el, { deltaY: -10 });
-      expect(pill()).toBeNull();
-    });
-
-    it('a wheel step down, or one taken by a box inside that scrolls up itself, does not leave', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      fireEvent.wheel(el, { deltaY: 10 });
-      expect(pill()).toBeNull();
-      const inner = el.firstElementChild as HTMLElement;
-      inner.style.overflowY = 'auto';
-      Object.defineProperty(inner, 'scrollHeight', { configurable: true, value: 500 });
-      Object.defineProperty(inner, 'clientHeight', { configurable: true, value: 100 });
-      inner.scrollTop = 40;
-      fireEvent.wheel(inner, { deltaY: -10 });
-      expect(pill()).toBeNull();
-      inner.scrollTop = 0; // that box is at its top: the wheel now moves the transcript
-      fireEvent.wheel(inner, { deltaY: -10 });
-      expect(pill()).not.toBeNull();
-    });
-
-    it('a mostly sideways swipe (a wide table) with a little upward deltaY does not leave', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      fireEvent.wheel(el, { deltaY: -3, deltaX: -40 });
-      expect(pill()).toBeNull();
-      fireEvent.wheel(el, { deltaY: -40, deltaX: -3 });
-      expect(pill()).not.toBeNull();
-    });
-
-    it('a pinch-zoom (ctrl+wheel) does not leave', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      fireEvent.wheel(el, { deltaY: -10, ctrlKey: true });
-      expect(pill()).toBeNull();
-      fireEvent.wheel(el, { deltaY: -10 });
-      expect(pill()).not.toBeNull();
-    });
-
-    it('a finger dragging the content down (scrolling up) leaves; dragging it up does not', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      fireEvent.touchStart(el, { touches: [{ clientY: 300 }] });
-      fireEvent.touchMove(el, { touches: [{ clientY: 250 }] });
-      expect(pill()).toBeNull();
-      fireEvent.touchMove(el, { touches: [{ clientY: 260 }] });
-      expect(pill()).not.toBeNull();
-    });
-
-    it.each(['ArrowUp', 'PageUp', 'Home'])('%s outside a text field leaves once the transcript scrolls up, even under 24px; in the composer it does nothing', async (key) => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      const box = screen.getByTestId('chat-input');
-      box.focus();
-      fireEvent.keyDown(box, { key });
-      scrollTo(el, 790); // something else moved it; the composer's key armed nothing
-      expect(pill()).toBeNull();
-      box.blur();
-      const notPrevented = fireEvent.keyDown(document.body, { key });
-      expect(notPrevented).toBe(true); // the browser still scrolls
-      expect(pill()).toBeNull(); // the key alone decides nothing
-      scrollTo(el, 789); // the browser's scroll for that key: 1px up, 11px from the bottom
-      expect(pill()).not.toBeNull();
-    });
-
-    it('Shift+Space arms a leave; Space alone does not', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      fireEvent.keyDown(document.body, { key: ' ' });
-      scrollTo(el, 790);
-      expect(pill()).toBeNull();
-      fireEvent.keyDown(document.body, { key: ' ', shiftKey: true });
-      scrollTo(el, 780);
-      expect(pill()).not.toBeNull();
-    });
-
-    it('an up key that scrolls something else (body focus after a click in the side panel) keeps following', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      (document.activeElement as HTMLElement | null)?.blur();
-      expect(document.activeElement).toBe(document.body);
-      fireEvent.keyDown(document.body, { key: 'PageUp' });
-      fireEvent.keyDown(document.body, { key: 'ArrowUp' });
-      fireEvent.keyDown(document.body, { key: 'Home' });
-      await wait(UP_WAIT);
-      expect(pill()).toBeNull();
-      geom.height = 1400;
-      delta('still followed');
-      await frame();
-      expect(el.scrollTop).toBe(1200);
-    });
-
-    it('while an up key waits, pins are held and a scroll that did not go up does not confirm it', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      fireEvent.keyDown(document.body, { key: 'PageUp' });
-      geom.height = 1400;
-      delta('arrives while the key waits');
-      await frame();
-      expect(el.scrollTop).toBe(800); // held: our write would cancel the browser's scroll
-      scrollTo(el, 800); // a scroll event that did not go up
-      expect(pill()).toBeNull();
-      scrollTo(el, 795);
-      expect(pill()).not.toBeNull();
-      expect(el.scrollTop).toBe(795);
-    });
-
-    it('End after an up key clears it: the next delta is followed at once, not held', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      fireEvent.keyDown(document.body, { key: 'PageUp' });
-      fireEvent.keyDown(document.body, { key: 'End' });
-      geom.height = 1400;
-      delta('followed');
-      await frame();
-      expect(el.scrollTop).toBe(1200);
-    });
-
-    it('an up key lapses: a later small scroll up inside the slack is not taken for it, and the held pin runs', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      fireEvent.keyDown(document.body, { key: 'ArrowUp' });
-      geom.height = 1300;
-      delta('held');
-      await frame();
-      expect(el.scrollTop).toBe(800);
-      await wait(UP_WAIT);
-      await frame();
-      expect(el.scrollTop).toBe(1100); // the lapse ran the held pin
-      scrollTo(el, 1090);
-      expect(pill()).toBeNull();
-    });
-
-    it('scroll anchoring is off while following and back on while reading', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      expect(el.style.overflowAnchor).toBe('none');
-      fireEvent.wheel(el, { deltaY: -10 });
-      expect(el.style.overflowAnchor).toBe('auto');
-      fireEvent.click(pill()!);
-      expect(el.style.overflowAnchor).toBe('none');
-    });
+  it('not at the bottom shows the pill, labelled exactly "Jump to latest ↓"', async () => {
+    const el = await mountStreaming();
+    scrollTo(el, BOTTOM());
+    expect(pill()).toBeNull();
+    scrollTo(el, 300);
+    expect(pill()).not.toBeNull();
+    expect(pill()!.textContent).toBe('Jump to latest ↓');
   });
 
-  describe('keys, resizes, screens and sends', () => {
-    it('End in the composer does nothing; End with focus elsewhere jumps to the latest', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      scrollTo(el, 300);
-      const box = screen.getByTestId('chat-input');
-      box.focus();
-      const inBox = fireEvent.keyDown(box, { key: 'End' });
-      expect(inBox).toBe(true); // not prevented: the composer keeps its own End
-      expect(el.scrollTop).toBe(300);
-      expect(pill()).not.toBeNull();
+  it('a streamed delta while scrolled up leaves scrollTop where the reader put it', async () => {
+    const el = await mountStreaming();
+    scrollTo(el, BOTTOM());
+    scrollTo(el, 300);
+    geom.height = 1400;
+    delta('more text below');
+    await frame();
+    expect(screen.getByTestId('chat-text').textContent).toBe('more text below');
+    expect(el.scrollTop).toBe(300);
+    expect(pill()).not.toBeNull();
+  });
 
-      box.blur();
-      const elsewhere = fireEvent.keyDown(document.body, { key: 'End' });
-      expect(elsewhere).toBe(false);
-      expect(el.scrollTop).toBe(800);
-      expect(pill()).toBeNull();
-    });
+  it('a scroll up between a delta and its frame wins: the queued follow does not pull the reader back', async () => {
+    const el = await mountStreaming();
+    scrollTo(el, BOTTOM());
+    geom.height = 1400;
+    delta('queued');
+    scrollTo(el, 300);
+    await frame();
+    expect(el.scrollTop).toBe(300);
+    expect(pill()).not.toBeNull();
+  });
 
-    it('growth no render announced (ResizeObserver) re-pins while following and moves nothing while reading', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      geom.height = 1250; // a fact chip resolved, say: no new delta
-      resized();
-      await frame();
-      expect(el.scrollTop).toBe(1050);
-      scrollTo(el, 400);
-      geom.height = 1600;
-      resized();
-      await frame();
-      expect(el.scrollTop).toBe(400);
-    });
+  it('a follow-scroll that lands after the page grew again is not taken for the reader scrolling up', async () => {
+    const el = await mountStreaming();
+    scrollTo(el, BOTTOM());
+    // The delta grows the page; the scroll event from our earlier write arrives
+    // before this frame's write, with the bottom now 400px away.
+    geom.height = 1400;
+    delta('a');
+    fireEvent.scroll(el);
+    expect(pill()).toBeNull();
+    await frame();
+    expect(el.scrollTop).toBe(1200);
+    // A smooth scroll's intermediate steps only move down: still following.
+    geom.height = 2000;
+    scrollTo(el, 1250);
+    scrollTo(el, 1500);
+    expect(pill()).toBeNull();
+    delta('b');
+    await frame();
+    expect(el.scrollTop).toBe(1800);
+  });
 
-    it('a chat that was following comes back on screen at the new bottom, still following', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      rerenderWith(false);
-      // Hidden (display:none), the box measures 0 and a pin writes 0.
-      geom.height = 0; geom.client = 0;
-      delta('streamed while away');
-      await frame();
-      expect(el.scrollTop).toBe(0);
-      geom.height = 1500; geom.client = 200;
-      rerenderWith(true);
-      expect(el.scrollTop).toBe(1300);
-      expect(pill()).toBeNull();
-    });
+  it('a small wheel step up stops following at once, inside the 24px slack, and the next delta does not re-pin', async () => {
+    const el = await mountStreaming();
+    scrollTo(el, BOTTOM());
+    fireEvent.wheel(el, { deltaY: -10 });
+    expect(pill()).not.toBeNull();
+    scrollTo(el, 790); // the browser's own 10px scroll for that step
+    expect(pill()).not.toBeNull();
+    geom.height = 1400;
+    delta('more');
+    await frame();
+    expect(el.scrollTop).toBe(790);
+  });
 
-    it('a scroll event while hidden (everything reads 0) does not stop following', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      rerenderWith(false);
-      geom.client = 0;
-      scrollTo(el, 0);
-      geom.client = 200;
-      rerenderWith(true);
-      expect(el.scrollTop).toBe(800);
-      expect(pill()).toBeNull();
-    });
+  it('a wheel step down does not leave, and a wheel step up with nothing above (scrollTop 0) does not either', async () => {
+    const el = await mountStreaming();
+    scrollTo(el, BOTTOM());
+    fireEvent.wheel(el, { deltaY: 10 });
+    expect(pill()).toBeNull();
+    geom.height = 200; // the transcript fits: nothing scrolls
+    scrollTo(el, 0);
+    fireEvent.wheel(el, { deltaY: -10 });
+    expect(pill()).toBeNull();
+  });
 
-    it('a chat the reader had scrolled up in comes back at the same place, pill showing', async () => {
-      const el = await mountStreaming();
-      scrollTo(el, BOTTOM());
-      scrollTo(el, 300);
-      rerenderWith(false);
-      el.scrollTop = 0; // hidden, it reads 0
-      geom.height = 1500;
-      delta('streamed while away');
-      await frame();
-      rerenderWith(true);
-      expect(el.scrollTop).toBe(300);
-      expect(pill()).not.toBeNull();
-    });
+  it('scrolling back down to within the slack resumes following; a small scroll UP inside the slack does not', async () => {
+    const el = await mountStreaming();
+    scrollTo(el, BOTTOM());
+    fireEvent.wheel(el, { deltaY: -10 });
+    scrollTo(el, 790);
+    scrollTo(el, 785);
+    expect(pill()).not.toBeNull(); // still going up, though 15px from the bottom
+    scrollTo(el, 790);
+    expect(pill()).toBeNull(); // coming down inside the slack re-arms
+    geom.height = 1400;
+    delta('followed again');
+    await frame();
+    expect(el.scrollTop).toBe(1200);
+  });
 
-    it('sending a message jumps to the bottom and follows again', async () => {
-      const el = await mountStreaming(false);
-      scrollTo(el, BOTTOM());
-      scrollTo(el, 300);
-      expect(pill()).not.toBeNull();
-      fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'again' } });
-      fireEvent.click(screen.getByTestId('chat-send'));
-      expect(el.scrollTop).toBe(800);
-      expect(pill()).toBeNull();
-    });
+  it('clicking the pill goes to the bottom and hides it; with motion allowed it scrolls smoothly', async () => {
+    const el = await mountStreaming();
+    scrollTo(el, BOTTOM());
+    scrollTo(el, 300);
+    fireEvent.click(pill()!);
+    expect(el.scrollTop).toBe(800);
+    expect(pill()).toBeNull();
+    // Following again: the next delta is followed.
+    geom.height = 1300;
+    delta('next');
+    await frame();
+    expect(el.scrollTop).toBe(1100);
+
+    reducedMotion(false);
+    const smooth = vi.fn();
+    el.scrollTo = smooth as unknown as typeof el.scrollTo;
+    scrollTo(el, 200);
+    fireEvent.click(pill()!);
+    expect(smooth).toHaveBeenCalledWith({ top: 1100, behavior: 'smooth' });
+    expect(pill()).toBeNull();
+  });
+
+  it('scroll anchoring is off while following and back on while reading', async () => {
+    const el = await mountStreaming();
+    scrollTo(el, BOTTOM());
+    expect(el.style.overflowAnchor).toBe('none');
+    scrollTo(el, 300);
+    expect(el.style.overflowAnchor).toBe('auto');
+    fireEvent.click(pill()!);
+    expect(el.style.overflowAnchor).toBe('none');
+  });
+
+  it('growth no render announced (ResizeObserver) re-pins while following and moves nothing while reading', async () => {
+    const el = await mountStreaming();
+    scrollTo(el, BOTTOM());
+    geom.height = 1250; // a fact chip resolved, say: no new delta
+    resized();
+    await frame();
+    expect(el.scrollTop).toBe(1050);
+    scrollTo(el, 400);
+    geom.height = 1600;
+    resized();
+    await frame();
+    expect(el.scrollTop).toBe(400);
+  });
+
+  it('hidden (display:none measures 0), a scroll event changes nothing: a reader stays reading where they were', async () => {
+    const el = await mountStreaming();
+    scrollTo(el, BOTTOM());
+    scrollTo(el, 300);
+    geom.height = 0; geom.client = 0;
+    scrollTo(el, 0);
+    // Shown again: the browser restores the place, and the box resizes.
+    geom.height = 1000; geom.client = 200;
+    el.scrollTop = 300;
+    resized();
+    await frame();
+    expect(el.scrollTop).toBe(300);
+    expect(pill()).not.toBeNull();
+  });
+
+  it('a following chat shown again lands at the bottom through the resize, with what streamed while hidden', async () => {
+    const el = await mountStreaming();
+    scrollTo(el, BOTTOM());
+    geom.height = 0; geom.client = 0;
+    delta('streamed while hidden');
+    await frame();
+    expect(el.scrollTop).toBe(800); // no write while hidden
+    geom.height = 1500; geom.client = 200;
+    resized();
+    await frame();
+    expect(el.scrollTop).toBe(1300);
+    expect(pill()).toBeNull();
+  });
+
+  it('sending a message jumps to the bottom and follows again', async () => {
+    const el = await mountStreaming(false);
+    scrollTo(el, BOTTOM());
+    scrollTo(el, 300);
+    expect(pill()).not.toBeNull();
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'again' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+    expect(el.scrollTop).toBe(800);
+    expect(pill()).toBeNull();
   });
 });
