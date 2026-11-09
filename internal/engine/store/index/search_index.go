@@ -531,13 +531,15 @@ func (si *Index) Sync(ctx context.Context, branch string) error {
 	}
 
 	// Final planner-statistics refresh for the pass (see statsCheckpoint for
-	// the in-pass ones). Cheap and self-limiting: optimize only re-analyzes on
-	// missing stats or large size drift, so steady-state syncs pay nothing, and
-	// it bumps the schema cookie only when sqlite_stat1 changed so every pooled
-	// connection reloads. The 0x10000 bit is required — without it optimize
-	// considers only tables touched on this pooled connection, which under
-	// database/sql is arbitrary.
-	if len(indexed) > 0 {
+	// the in-pass ones), skipped when a checkpoint just ran at this very count:
+	// a one-fact write would otherwise run two optimizes. It is not free: each
+	// optimize re-ANALYZEs the always-empty indexed tables
+	// (restatement_throttle_state, fact_titles_vec_*) and takes the write lock
+	// briefly. It bumps the schema cookie only when sqlite_stat1 changed, so
+	// every pooled connection reloads. The 0x10000 bit is required: without it
+	// optimize considers only tables touched on this pooled connection, which
+	// under database/sql is arbitrary.
+	if len(indexed) > 0 && !isPow2(len(indexed)) {
 		si.refreshPlannerStats(ctx, OptimizeStatsSQL)
 	}
 
@@ -688,9 +690,14 @@ func (si *Index) Rebuild(ctx context.Context, branch string, progress model.Rebu
 	// Runs outside any transaction — under _txlock=immediate an open tx is a
 	// process-wide write lock, and ANALYZE needs only its own brief one.
 	// Best-effort: degraded query plans must never fail a rebuild.
-	// refreshPlannerStats also makes every pooled connection reload the new
-	// statistics (ANALYZE reloads only the connection that ran it).
-	si.refreshPlannerStats(ctx, `PRAGMA analysis_limit=1000; ANALYZE`)
+	// RefreshPlannerStats also makes every pooled connection reload the new
+	// statistics (ANALYZE reloads only the connection that ran it; Rebuild's own
+	// DDL already invalidates them in practice, so this is belt and braces). Phases 1-3
+	// themselves get no in-pass checkpoints: they run with whatever statistics
+	// the connections hold when Rebuild starts.
+	if err := RefreshPlannerStats(ctx, si.rh.DB(), `PRAGMA analysis_limit=1000; ANALYZE`); err != nil {
+		log.Warn().Err(err).Msg("rebuild: analyze failed (query plans may be degraded)")
+	}
 
 	// Bump THIS branch's version only. A branch whose rebuild failed keeps its
 	// old (or absent) row and is retried on the next startup on its own, without

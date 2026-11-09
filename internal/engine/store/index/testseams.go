@@ -573,8 +573,11 @@ type GraphWriteStatementForTest struct {
 }
 
 // GraphWriteStatementsForTest lists graphMergeEdge's statement and
-// graphNodeIDByProps's statement for a Fact node (path + blob_hash identity),
-// whose plans depend on edges / node_labels statistics (#731).
+// graphNodeIDByProps's statement for a Fact node (path + blob_hash identity).
+// Their plans depend on edges / node_labels statistics (#731): under the
+// natural one-fact stale state graphMergeEdge falls back to `SCAN edges`;
+// graphNodeIDByProps walks node_labels only when node_labels' statistics alone
+// are stale (planted by a test).
 func GraphWriteStatementsForTest() []GraphWriteStatementForTest {
 	mustBeTest("GraphWriteStatementsForTest")
 	q, args := graphNodeIDByPropsSQL("Fact", map[string]string{"path": "kb/x.md", "blob_hash": "abc"})

@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	storegit "knomit/internal/engine/store/git"
 	"knomit/internal/engine/store/index"
 	"knomit/internal/engine/store/internal/sqlite"
 	"knomit/internal/engine/store/vocab"
@@ -80,10 +82,16 @@ func plannerPlanProblems(ctx context.Context, conns []*sql.Conn) ([]string, erro
 					}
 				}
 			case "graphNodeIDByProps":
-				// Fresh statistics start from the property lookup; the stale
-				// ones drive every Fact node through idx_node_labels_label.
-				if strings.Contains(plan, "idx_node_labels_label (label=?)") {
-					problems = append(problems, fmt.Sprintf("conn %d: %s drives off the label alone (plan: %s)", ci, g.Name, plan))
+				// Fresh statistics start from the property lookup. With node_labels
+				// statistics describing a much smaller table (alone: other tables'
+				// statistics fresh) the lookup walks node_labels instead: either
+				// a full `SCAN nl` or every node of the label through
+				// idx_node_labels_label (label=?). That state is planted by
+				// TestGraphNodeIDByProps_NodeLabelsOnlyStale; the natural
+				// one-fact state does not produce it (there the stale graph cost
+				// is graphMergeEdge's SCAN edges).
+				if strings.HasPrefix(loops[0], "SCAN ") || strings.Contains(plan, "idx_node_labels_label (label=?)") {
+					problems = append(problems, fmt.Sprintf("conn %d: %s walks node_labels (plan: %s)", ci, g.Name, plan))
 				}
 			}
 		}
@@ -150,7 +158,7 @@ func TestVecKNN_StalePlannerStatsRefreshed(t *testing.T) {
 	writeTestFact(t, svc, "kb/a/one.md", "One", "first body")
 
 	// The premise: the natural state after one write is the stale one.
-	require.NotEmpty(t, plannerProblemsOnPool(t, db), "premise: SQLite must plan a store holding 40 facts with SCANs under "+
+	require.NotEmpty(t, plannerProblemsOnPool(t, db), "premise: SQLite must plan a store holding one fact with SCANs under "+
 		"the one-row statistics a first write leaves; if it no longer does, this guard proves nothing and needs rethinking")
 
 	var midPass []string
@@ -164,8 +172,16 @@ func TestVecKNN_StalePlannerStatsRefreshed(t *testing.T) {
 		if n < 16 {
 			return
 		}
-		conns := holdPool(t, db)
+		// Holding the whole pool would block forever if Sync ever kept a pooled
+		// connection across a checkpoint: give up with a failure instead.
+		holdCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		conns, err := holdPoolContext(holdCtx, db)
 		defer releasePool(conns)
+		if err != nil {
+			midPass = append(midPass, "cannot hold the pool inside the hook: "+err.Error())
+			return
+		}
 		problems, err := plannerPlanProblems(ctx, conns)
 		if err != nil {
 			midPass = append(midPass, err.Error())
@@ -216,6 +232,127 @@ func TestOpen_RepairsStaleOnDiskStatistics(t *testing.T) {
 	svc2 := openAbstractionTestServiceAt(t, path, &stub768Embedder{})
 	require.Empty(t, plannerProblemsOnPool(t, svc2.si.RepoForTest().DB()),
 		"after Open, every pooled connection must plan with SEARCH")
+}
+
+// holdPoolContext is holdPool for code that cannot use require (a hook inside
+// Sync): it returns what it got and the error.
+func holdPoolContext(ctx context.Context, db *sql.DB) ([]*sql.Conn, error) {
+	var conns []*sql.Conn
+	for i := 0; i < db.Stats().MaxOpenConnections; i++ {
+		c, err := db.Conn(ctx)
+		if err != nil {
+			return conns, err
+		}
+		conns = append(conns, c)
+	}
+	return conns, nil
+}
+
+// plantNodeLabelsStatistics makes sqlite_stat1 describe node_labels as a
+// one-row table (every other table keeps its statistics) and reloads them on
+// every held connection.
+func plantNodeLabelsStatistics(t *testing.T, conns []*sql.Conn) {
+	t.Helper()
+	for _, st := range [][2]string{
+		{"idx_node_labels_label", "1 1 1"},
+		{"sqlite_autoindex_node_labels_1", "1 1 1"},
+	} {
+		res, err := conns[0].ExecContext(context.Background(),
+			`UPDATE sqlite_stat1 SET stat = ? WHERE tbl = 'node_labels' AND idx = ?`, st[1], st[0])
+		require.NoError(t, err)
+		n, err := res.RowsAffected()
+		require.NoError(t, err)
+		require.EqualValues(t, 1, n, "sqlite_stat1 must hold a row for node_labels/%s", st[0])
+	}
+	reloadStatistics(t, conns)
+}
+
+// graphNodeIDByProps must not walk node_labels. Statistics that describe
+// node_labels as a one-row table while every other table's are fresh (the
+// state the #731 RCA found slowest: "mixed" staleness is not safer than all
+// stale) make it do so, on every connection; one refresh must repair every
+// pooled connection, not only the one that ran it.
+//
+// Sabotage (run and seen to fail): drop the schema bump from
+// RefreshPlannerStats, and only the connection that ran the optimize is
+// repaired.
+func TestGraphNodeIDByProps_NodeLabelsOnlyStale(t *testing.T) {
+	ctx := context.Background()
+	svc := openAbstractionTestService(t)
+	db := svc.si.RepoForTest().DB()
+	writeTestFact(t, svc, "kb/a/one.md", "One", "first body")
+	_, _, err := svc.Facts().BatchWriteFacts(ctx, "agent/test", plannerStatsBatch(300), nil, "batch", "test")
+	require.NoError(t, err)
+
+	conns := holdPool(t, db)
+	plantNodeLabelsStatistics(t, conns)
+	problems, err := plannerPlanProblems(ctx, conns)
+	require.NoError(t, err)
+	walks := 0
+	for _, p := range problems {
+		if strings.Contains(p, "graphNodeIDByProps walks node_labels") {
+			walks++
+		}
+	}
+	require.Equal(t, len(conns), walks,
+		"premise: node_labels-only stale statistics must make graphNodeIDByProps walk node_labels on every connection; problems: %v", problems)
+	releasePool(conns)
+
+	require.NoError(t, index.RefreshPlannerStats(ctx, db, index.OptimizeStatsSQL))
+	require.Empty(t, plannerProblemsOnPool(t, db), "after the refresh, every pooled connection must plan with SEARCH")
+}
+
+// Rebuild ends with an ANALYZE after which every pooled connection must plan
+// with the fresh statistics. (Rebuild's phases 1-3 themselves get no in-pass
+// checkpoints: they plan with the statistics held when Rebuild starts.)
+//
+// Sabotage run: dropping the closing ANALYZE makes this fail. Reverting it to
+// a bare ANALYZE with no schema bump does NOT: Rebuild's own DDL moves the
+// schema version (by 14 here) so every connection reloads from disk at its next
+// statement anyway, and the bump through RefreshPlannerStats is belt and braces
+// there. This test therefore guards the ANALYZE, not the propagation.
+func TestRebuild_AnalyzeReachesEveryPooledConnection(t *testing.T) {
+	ctx := context.Background()
+	svc := openAbstractionTestService(t)
+	db := svc.si.RepoForTest().DB()
+	writeTestFact(t, svc, "kb/a/one.md", "One", "first body")
+	_, _, err := svc.Facts().BatchWriteFacts(ctx, "agent/test", plannerStatsBatch(40), nil, "batch", "test")
+	require.NoError(t, err)
+
+	conns := holdPool(t, db)
+	plantOneFactStatistics(t, conns)
+	problems, err := plannerPlanProblems(ctx, conns)
+	require.NoError(t, err)
+	require.NotEmpty(t, problems, "premise: planted one-row statistics must make SQLite plan scans")
+	releasePool(conns)
+
+	require.NoError(t, svc.si.Rebuild(ctx, "agent/test", nil))
+	require.Empty(t, plannerProblemsOnPool(t, db), "after Rebuild, every pooled connection must plan with SEARCH")
+}
+
+// RefreshPlannerStats must do nothing when ctx carries a transaction: its
+// statements run on other pooled connections, which would wait on the write
+// lock the caller's own tx holds (measured: 10.6 s, then "database is
+// locked"). The statement here would block that way if it ran.
+func TestRefreshPlannerStats_RefusesAContextWithATransaction(t *testing.T) {
+	svc := openAbstractionTestService(t)
+	db := svc.si.RepoForTest().DB()
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback() })
+	ctx, cancel := context.WithTimeout(storegit.WithTx(context.Background(), tx), 3*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	err = index.RefreshPlannerStats(ctx, db, `INSERT INTO meta(key, value) VALUES ('zz_planner_stats_probe', '1')`)
+	require.NoError(t, err)
+	require.Less(t, time.Since(start), time.Second, "it must return at once, not wait on the tx's write lock")
+	require.NoError(t, tx.Rollback())
+
+	var n int
+	require.NoError(t, db.QueryRow(`SELECT count(*) FROM meta WHERE key = 'zz_planner_stats_probe'`).Scan(&n))
+	require.Zero(t, n, "the statement must not have run")
 }
 
 // BenchmarkBatchWriteOntoOneFactStore times #725's shape: 1 existing fact and

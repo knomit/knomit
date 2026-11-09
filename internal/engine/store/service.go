@@ -138,9 +138,10 @@ func Open(path string) (*Service, error) {
 	// the migrations so the tables exist, and with 0x10000 so every table is
 	// considered: a plain `PRAGMA optimize` at open has used no table yet on
 	// this connection and only analyzes never-analyzed indexes, never size
-	// drift. analysis_limit bounds the scan. Best-effort; later Opens'
-	// connections load the repaired statistics from disk, so no schema bump.
-	if _, err := db.Exec(index.OptimizeStatsSQL); err != nil {
+	// drift. analysis_limit bounds the scan. Best-effort. It goes through the
+	// digest-plus-schema-bump helper so that every pooled connection reloads
+	// the repaired statistics even if more than one is already open.
+	if err := index.RefreshPlannerStats(context.Background(), db, index.OptimizeStatsSQL); err != nil {
 		log.Debug().Err(err).Msg("store.Open: optimize failed (query plans may drift)")
 	}
 
