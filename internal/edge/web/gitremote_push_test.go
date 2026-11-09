@@ -147,7 +147,7 @@ func TestGitPush_OnlyInstanceCertificatesPush(t *testing.T) {
 	for _, p := range []auth.Principal{
 		{Kind: auth.KindAnonymous, Via: auth.ViaNone}, // holds push:own via loopback_default, has no branch
 		{Kind: auth.KindBridge, ID: "uid:501", Via: auth.ViaSocket},
-		auth.OperatorPrincipal(pushTestFP),
+		{Kind: auth.KindHost, ID: "sub-123", Via: auth.ViaToken},
 	} {
 		t.Run(p.String(), func(t *testing.T) {
 			srv := gitMount(t, m, p)

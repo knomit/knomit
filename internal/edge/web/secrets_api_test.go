@@ -258,10 +258,10 @@ func TestSecretsAPI_Gate(t *testing.T) {
 	breq.Header.Set("Authorization", "Bearer "+tok)
 	require.Equal(t, http.StatusForbidden, serve(f.s.Handler(), breq).Code)
 
-	// An operator certificate holding admin.
+	// An instance certificate holding admin by row.
 	pk := pkitest.New(t)
-	op := pk.Enroll(t, "op@example.com")
-	opP := auth.OperatorPrincipal(op.Fingerprint())
+	op := pk.Enroll(t, "op@agents.knomit.io")
+	opP := auth.InstancePrincipal(op.Fingerprint())
 	for _, perm := range []auth.Permission{auth.Read, auth.Write, auth.Admin} {
 		require.NoError(t, f.grants.Grant(context.Background(), opP, perm, "test"))
 	}

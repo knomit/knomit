@@ -30,7 +30,6 @@ func TestParsePrincipal_IsTheInverseOfString(t *testing.T) {
 	fp := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	for _, p := range []Principal{
 		InstancePrincipal(fp),
-		OperatorPrincipal(fp),
 		{Kind: KindBridge, ID: "uid:501", Via: ViaSocket},
 		{Kind: KindAnonymous, Via: ViaNone},
 		{Kind: KindHost, ID: "sub-123", Via: ViaToken},
@@ -46,6 +45,7 @@ func TestParsePrincipal_RefusesWhatNamesNobody(t *testing.T) {
 	for _, s := range []string{
 		"", "instance", "instance:abc", // no via
 		"agent:abc@cert",    // unknown kind
+		"operator:abc@cert", // the operator-certificate kind was removed
 		"instance:abc@ssh",  // unknown via
 		"instance@cert",     // an instance needs an id
 		"INSTANCE:abc@cert", // kinds are lowercase constants

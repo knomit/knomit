@@ -74,7 +74,7 @@ func NewKey(t testing.TB) (string, ed25519.PublicKey) {
 
 // Enroll issues a certificate for a fresh key (or for keyPath's key when
 // given) whose one email SAN is email: <id>@agents.knomit.io for an instance
-// certificate, any other address (or "") for an operator certificate.
+// certificate, any other address (or "") for a non-instance certificate.
 func (f *Fleet) Enroll(t testing.TB, email string, keyPath ...string) Member {
 	t.Helper()
 	var path string

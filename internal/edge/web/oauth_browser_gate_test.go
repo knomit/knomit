@@ -259,8 +259,8 @@ func TestBrowserGate_OnlyAnonymousLoopback(t *testing.T) {
 	f := newKBFixture(t)
 	id := f.park(t)
 	pk := pkitest.New(t)
-	op := pk.Enroll(t, "op@example.com")
-	opP := auth.OperatorPrincipal(op.Fingerprint())
+	op := pk.Enroll(t, "op@agents.knomit.io")
+	opP := auth.InstancePrincipal(op.Fingerprint())
 	for _, perm := range []auth.Permission{auth.Read, auth.Write, auth.Admin} {
 		if err := f.grants.Grant(context.Background(), opP, perm, "test"); err != nil {
 			t.Fatal(err)
@@ -268,7 +268,7 @@ func TestBrowserGate_OnlyAnonymousLoopback(t *testing.T) {
 	}
 	r := browserReq(http.MethodPost, "/api/v1/oauth/pending/"+id+"/deny", "", "127.0.0.1")
 	if rec := serve(asTLSPeer(f.s.Handler(), op.Cert), r); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), opP.String()) {
-		t.Fatalf("operator certificate with admin and every browser proof: %d %s; want 403 naming it", rec.Code, rec.Body.String())
+		t.Fatalf("instance certificate with admin and every browser proof: %d %s; want 403 naming it", rec.Code, rec.Body.String())
 	}
 
 	// The gate itself, handed a bearer principal whose grants include admin.

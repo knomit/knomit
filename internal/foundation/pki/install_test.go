@@ -356,7 +356,7 @@ func TestStatus_KeyUnreadableIsAnError(t *testing.T) {
 }
 
 func TestPrincipalKind(t *testing.T) {
-	if (pki.Identity{}).PrincipalKind() != "operator" || (pki.Identity{AgentID: "a"}).PrincipalKind() != "instance" {
+	if (pki.Identity{}).PrincipalKind() != "other" || (pki.Identity{AgentID: "a"}).PrincipalKind() != "instance" {
 		t.Fatal("principal kinds")
 	}
 }

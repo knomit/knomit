@@ -146,11 +146,11 @@ func TestPendingAPI_OnlyLocalPrincipals(t *testing.T) {
 			t.Errorf("%s: %d %s; want 403 naming the local listener", name, rec.Code, rec.Body.String())
 		}
 	}
-	// An operator CERTIFICATE holding admin by row: a verified principal
+	// An instance CERTIFICATE holding admin by row: a verified principal
 	// with an id, and still not a local one.
 	pk := pkitest.New(t)
-	op := pk.Enroll(t, "op@example.com")
-	opP := auth.OperatorPrincipal(op.Fingerprint())
+	op := pk.Enroll(t, "op@agents.knomit.io")
+	opP := auth.InstancePrincipal(op.Fingerprint())
 	for _, perm := range []auth.Permission{auth.Read, auth.Write, auth.Admin} {
 		if err := f.grants.Grant(context.Background(), opP, perm, "test"); err != nil {
 			t.Fatal(err)
@@ -158,7 +158,7 @@ func TestPendingAPI_OnlyLocalPrincipals(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/oauth/pending/"+id+"/deny", nil)
 	if rec := serve(asTLSPeer(h, op.Cert), req); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), opP.String()) {
-		t.Errorf("operator certificate with admin: %d %s; want 403 naming it", rec.Code, rec.Body.String())
+		t.Errorf("instance certificate with admin: %d %s; want 403 naming it", rec.Code, rec.Body.String())
 	}
 	if list, _ := f.s.OAuthIssuer.Pending(context.Background()); len(list) != 1 {
 		t.Fatal("a refused call decided the request")

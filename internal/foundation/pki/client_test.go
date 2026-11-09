@@ -96,10 +96,10 @@ func TestHTTPClient_PicksUpANewCRLWithoutRebuild(t *testing.T) {
 	}
 }
 
-// R3: a server certificate with no email SAN chains and is admitted; it is an
-// OPERATOR certificate, and Dial reports it as one (the kind comes from the
+// R3: a server certificate with no email SAN chains and is admitted; it is not
+// an instance certificate, and Dial reports it as one (the kind comes from the
 // address alone, never from a role field).
-func TestDial_ServerCertificateWithoutEmailIsAnOperator(t *testing.T) {
+func TestDial_ServerCertificateWithoutEmailIsNotAnInstance(t *testing.T) {
 	f := newFleet(t)
 	srvM := f.enroll(t, "server")
 	bare := f.crafted(t, srvM.pub, nil) // chains to the root, wraps the server key, NO SAN
@@ -108,8 +108,8 @@ func TestDial_ServerCertificateWithoutEmailIsAnOperator(t *testing.T) {
 	addr := startServer(t, sdir, srvM.keyPath, &recorder{})
 	peer, dir := f.clientSide(t, "peer")
 	id, err := dial(t, addr, dir, peer.keyPath)
-	if err != nil || id.IsInstance() || id.PrincipalKind() != "operator" || id.Fingerprint != Fingerprint(srvM.pub) {
-		t.Fatalf("identity %+v err=%v, want the server key as an operator", id, err)
+	if err != nil || id.IsInstance() || id.PrincipalKind() != "other" || id.Fingerprint != Fingerprint(srvM.pub) {
+		t.Fatalf("identity %+v err=%v, want the server key as a non-instance certificate", id, err)
 	}
 }
 

@@ -87,15 +87,15 @@ func (f fleet) verify(c *x509.Certificate, usage Usage) (Identity, error) {
 }
 
 // Positive control, and the issue-then-parse round trip for an instance and
-// an operator certificate, in both directions.
-func TestVerifyInstanceChain_RoundTripsInstanceAndOperator(t *testing.T) {
+// a non-instance certificate, in both directions.
+func TestVerifyInstanceChain_RoundTripsInstanceAndNonInstance(t *testing.T) {
 	f := newFleet(t)
 	for _, c := range []struct {
 		email, agentID, kind string
 	}{
 		{"laptop-ab12cd34@agents.knomit.io", "laptop-ab12cd34", "instance"},
-		{"ops@example.com", "", "operator"},
-		{"", "", "operator"},
+		{"ops@example.com", "", "other"},
+		{"", "", "other"},
 	} {
 		leaf, pub := f.issue(t, c.email)
 		for _, usage := range []Usage{UsageClient, UsageServer} {

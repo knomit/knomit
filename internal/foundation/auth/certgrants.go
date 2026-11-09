@@ -14,8 +14,8 @@ import "context"
 // pushed commit to its pusher is signer = pusher under verify_signatures.
 // `write`, `merge:main`, `operator` and `admin` stay grants rows.
 //
-// Only KindInstance via a certificate gets the implicit read. An operator
-// certificate is a different principal and holds exactly its grants rows.
+// Only KindInstance via a certificate gets the implicit read. Any other
+// principal holds exactly its grants rows.
 //
 // There is nothing to revoke on this side: a revoked certificate never
 // reaches a Grants lookup, because the TLS handshake refused it. To remove an

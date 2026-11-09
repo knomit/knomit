@@ -21,7 +21,6 @@ const (
 	KindInstance  Kind = "instance"
 	KindBridge    Kind = "bridge"
 	KindHost      Kind = "host"
-	KindOperator  Kind = "operator"
 	KindAnonymous Kind = "anonymous"
 )
 
@@ -90,7 +89,7 @@ func ParsePrincipal(s string) (Principal, error) {
 	kind, id, _ := strings.Cut(head, ":")
 	p := Principal{Kind: Kind(kind), ID: id, Via: via}
 	switch p.Kind {
-	case KindInstance, KindBridge, KindHost, KindOperator, KindAnonymous:
+	case KindInstance, KindBridge, KindHost, KindAnonymous:
 	default:
 		return Principal{}, fmt.Errorf("principal %q: unknown kind %q", s, kind)
 	}

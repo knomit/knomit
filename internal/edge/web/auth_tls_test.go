@@ -30,23 +30,28 @@ func tlsRequest(remote string, peers ...*x509.Certificate) *http.Request {
 func TestAuthMiddleware_TLSListenerMapsTheCertificateToItsPrincipal(t *testing.T) {
 	f := pkitest.New(t)
 	inst := f.Enroll(t, "peer@agents.knomit.io")
-	op := f.Enroll(t, "alice@example.com")
 	h := AuthMiddleware(config.AuthConfig{Require: false}, false)(principalEcho())
-	for _, tc := range []struct {
-		m    pkitest.Member
-		want string
-	}{
-		{inst, "instance:" + inst.Fingerprint() + "@cert"},
-		{op, "operator:" + op.Fingerprint() + "@cert"},
-	} {
-		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, tlsRequest("10.0.0.7:5555", tc.m.Cert))
-		if rr.Code != 200 || rr.Body.String() != tc.want {
-			t.Fatalf("code=%d body=%q, want %q", rr.Code, rr.Body.String(), tc.want)
-		}
-		if len(tc.m.Fingerprint()) != 64 {
-			t.Fatal("principal must carry the full fingerprint")
-		}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, tlsRequest("10.0.0.7:5555", inst.Cert))
+	if want := "instance:" + inst.Fingerprint() + "@cert"; rr.Code != 200 || rr.Body.String() != want {
+		t.Fatalf("code=%d body=%q, want %q", rr.Code, rr.Body.String(), want)
+	}
+	if len(inst.Fingerprint()) != 64 {
+		t.Fatal("principal must carry the full fingerprint")
+	}
+}
+
+// TLS certificates authenticate enrolled instances only: a certificate that
+// chains to the fleet root but whose email SAN is not <id>@agents.knomit.io
+// is refused, not given a principal of its own.
+func TestTLSListener_RefusesNonInstanceCertificate(t *testing.T) {
+	f := pkitest.New(t)
+	other := f.Enroll(t, "alice@example.com")
+	h := AuthMiddleware(config.AuthConfig{Require: false}, false)(principalEcho())
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, tlsRequest("10.0.0.7:5555", other.Cert))
+	if rr.Code != http.StatusForbidden || !strings.Contains(rr.Body.String(), "only enrolled instance certificates") {
+		t.Fatalf("code=%d body=%q, want 403 naming enrolled instance certificates", rr.Code, rr.Body.String())
 	}
 }
 

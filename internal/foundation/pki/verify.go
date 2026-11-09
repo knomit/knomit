@@ -29,7 +29,7 @@ var (
 // non-empty exactly when that address is an agent address
 // (<id>@agents.knomit.io), which is what makes the certificate an INSTANCE
 // certificate (R3). Any other certificate — another address, several, or
-// none — is an OPERATOR certificate. There is no role field.
+// none — is not an instance certificate, and nothing authenticates with it. There is no role field.
 type Identity struct {
 	Fingerprint string
 	Email       string
@@ -43,12 +43,13 @@ type Identity struct {
 func (id Identity) IsInstance() bool { return id.AgentID != "" }
 
 // PrincipalKind is the principal kind the certificate authenticates as:
-// "instance" for an instance certificate, "operator" for every other one.
+// "instance" for an instance certificate. Any other certificate
+// authenticates as nothing (the TLS listener refuses it), so it is "other".
 func (id Identity) PrincipalKind() string {
 	if id.IsInstance() {
 		return "instance"
 	}
-	return "operator"
+	return "other"
 }
 
 // Usage says which side of a connection the certificate is on.

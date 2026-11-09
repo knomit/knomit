@@ -218,7 +218,7 @@ var ErrIssuanceInvalid = errors.New("pki: issuance record invalid")
 // agent domain makes it an INSTANCE certificate, which must carry that one
 // address only, exactly <id>@agents.knomit.io for a ValidAgentID id (no +op,
 // no upper case); the agent domain spelled in another case is refused; any
-// other address, or none, is an OPERATOR certificate. It returns the leaf's
+// other address, or none, is not an instance certificate. It returns the leaf's
 // identity.
 func CheckIssuance(raw []byte, rootCert *x509.Certificate) (Identity, error) {
 	bad := func(format string, a ...any) (Identity, error) {

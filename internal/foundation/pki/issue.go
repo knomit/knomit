@@ -103,7 +103,7 @@ func AgentEmail(id string) (string, error) {
 // agentDomainSpelling refuses a domain that is the agent domain in another
 // case spelling (AGENTS.knomit.io). Such an address is no agent address
 // (AgentIDOfEmail is exact), so a certificate carrying it would silently be
-// an OPERATOR certificate for what was meant as an instance: refusing it is
+// a non-instance certificate for what was meant as an instance: refusing it is
 // louder. It folds case only to refuse; it never makes two spellings equal.
 func agentDomainSpelling(domain string) error {
 	if domain != AgentEmailDomain && strings.EqualFold(domain, AgentEmailDomain) {
@@ -116,7 +116,7 @@ func agentDomainSpelling(domain string) error {
 // serial, so an issuance that could not be logged is not returned.
 type Issued struct {
 	Serial      string    `json:"serial"`          // lowercase hex, as big.Int.Text(16)
-	Email       string    `json:"email,omitempty"` // the email SAN; "" for an operator certificate with none
+	Email       string    `json:"email,omitempty"` // the email SAN; "" for a certificate with none
 	Fingerprint string    `json:"fingerprint"`     // full 64 hex
 	NotAfter    time.Time `json:"not_after"`
 	IssuedAt    time.Time `json:"issued_at"`
@@ -156,7 +156,7 @@ var newSerial = randomSerial
 //
 // The certificate's identity is its one email SAN (R1). For an INSTANCE it is
 // AgentEmail(id), the address the instance commits as; any other address, or
-// email "" (no email SAN at all), makes an OPERATOR certificate. There is no
+// email "" (no email SAN at all), makes a non-instance certificate. There is no
 // role field and no knomit:// URI: IdentityOf reads the kind from the
 // address, and the principal is always the KEY's fingerprint.
 func IssueLeaf(root Root, pub ed25519.PublicKey, email string, validity time.Duration, now time.Time) (Issuance, error) {

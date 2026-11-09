@@ -702,7 +702,7 @@ func (j Judge) leafFor(id string, s CommitSigner) (*x509.Certificate, error) {
 }
 
 // errLeafOtherID: the leaf artifact at an id's path was issued to another
-// agent id (or is an operator certificate).
+// agent id (or is a non-instance certificate).
 var errLeafOtherID = errors.New("the certificate is not issued to this agent id")
 
 // recordOwner is the record-owner rule, the fleet repository's only. It is
