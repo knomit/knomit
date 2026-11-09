@@ -17,6 +17,8 @@ a { color: inherit; }
 /* Materialize (the newspaper glyph) takes the results header's accent on
    hover, in BOTH places it appears: the results-list header (LibraryHeader)
    and the single-fact header (RightPanel). One rule, so the two cannot drift.
+   The fact header's history button (VersionWalker) sits beside it and wears
+   the same rule, so it too rests muted and lights only on hover.
    Each button sets its own resting colour through --k-materialize-rest; an
    inline `color` would outrank this :hover. #7c9 is LibraryHeader's ACCENT
    (the lit mode); LibraryHeader.flyout.test.tsx pins the two equal. */

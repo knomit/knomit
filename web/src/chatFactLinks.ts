@@ -180,16 +180,23 @@ const cacheKey = (prefer: string, handle: string): string => `${prefer}\u0001${h
 export function resetFactCache(): void { cache.clear(); inFlight.clear(); }
 
 /**
- * useTurnFacts resolves the FINISHED turns' cited handles. Each effect run
- * sends ONE POST /facts/resolve per distinct preference list (one in the usual
- * chat, which stays bound to one target) with every candidate of every
- * finished turn not yet answered or being asked; a turn that finishes later
- * gets one call for its new handles. A turn still streaming (null) is not
- * asked about: its text is still growing. A failed call is not retried: its
- * handles are remembered as not facts and stay code. An answer that arrives
- * after the chat unmounted is kept in the cache and changes no state.
+ * useTurnFacts resolves the turns' cited handles, the turn still streaming
+ * included. Each effect run sends ONE POST /facts/resolve per distinct
+ * preference list (one in the usual chat, which stays bound to one target)
+ * with every candidate of every turn not yet answered or being asked. The run
+ * depends on the candidates, not the text, so a streamed delta that completes
+ * no new code span asks nothing, and one that does asks for that handle only.
+ * Only a CLOSED code span is a candidate (factCandidates; remark agrees), so a
+ * path still streaming is never asked about and never drawn as a link.
+ * A failed call is not retried: its handles are remembered as not facts and
+ * stay code. An answer that arrives after the chat unmounted is kept in the
+ * cache and changes no state. A null answer is not asked about.
  *
- * prefers[i] is turn i's preference list (turnPrefer).
+ * prefers[i] is turn i's preference list (turnPrefer). A streaming turn's list
+ * changes only when it makes another call, and that call moves the text before
+ * it into the call's group as its lead (ChatPanel's blocksOf), out of the
+ * answer: so the answer text a chip is drawn in is always read under the turn's
+ * final list, and a finished turn renders exactly as when it was streaming.
  */
 export function useTurnFacts(answers: (string | null)[], prefers: string[][]): ReadonlyMap<string, ResolvedFact>[] {
   const [, setVersion] = useState(0);

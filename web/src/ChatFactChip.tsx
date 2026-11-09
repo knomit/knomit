@@ -57,9 +57,12 @@ export function FactLink({ handle }: { handle: string }) {
     <>
       {/* data-open says the panel shows this fact; it is NOT drawn: a clicked chip
           looks like any other (no selected border). A mouse press takes no focus
-          (noMouseFocus), so only the keyboard's :focus-visible draws a ring. */}
+          (noMouseFocus), so only the keyboard's :focus-visible draws a ring.
+          NO `title`: the hover card is the tooltip, and a native one drew a
+          second, text-only box over it. The accessible name is the visible
+          title text below (the glyph's SVG carries no text). */}
       <button ref={chip} type="button" data-testid="fact-link" data-type={f.type} data-open={open ? 'true' : undefined}
-        className="k-fact-link" title={f.title}
+        className="k-fact-link"
         onMouseDown={noMouseFocus} onClick={onClick} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}>
         <span data-testid="fact-link-glyph" className="k-fact-link-glyph" style={{ background: ts.bg }}>
           <TypeIcon type={f.type} color={ts.color} size={11} />

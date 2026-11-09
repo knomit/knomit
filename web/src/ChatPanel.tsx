@@ -83,10 +83,12 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
   };
 }) {
   const [draft, setDraft] = useState('');
-  // The finished turns' cited facts: one call for all not yet answered, each
-  // looked for first in the repos its turn worked in.
+  // The turns' cited facts, the streaming turn's too: one call for all not yet
+  // answered, each looked for first in the repos its turn worked in. A streaming
+  // turn used to be left out until it finished, so its citations read as plain
+  // code paths for the whole stream and became chips only at the end.
   const turnFacts = useTurnFacts(
-    state.turns.map((t, ti) => (state.running && ti === state.turns.length - 1 ? null : answerOf(blocksOf(t)))),
+    state.turns.map(t => answerOf(blocksOf(t))),
     state.turns.map((_, ti) => turnPrefer(state.turns, ti)),
   );
   const repos = factLinks?.repos ?? NO_REPOS;
