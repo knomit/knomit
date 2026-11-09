@@ -120,6 +120,16 @@ describe('WailsEventSource', () => {
     expect(socks).toHaveLength(1);
   });
 
+  it('a refused source holds no timer, before and after close()', async () => {
+    vi.useFakeTimers();
+    const { sock, es } = await make();
+    expect(vi.getTimerCount()).toBe(1); // the stale-stream watchdog
+    sock().push({ t: 'error', closed: true, status: 403 });
+    expect(vi.getTimerCount()).toBe(0);
+    es.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('reopens the Wails stream with backoff when it ends, resuming with the last event id', async () => {
     vi.useFakeTimers();
     const { es, socks, sock } = await make();
