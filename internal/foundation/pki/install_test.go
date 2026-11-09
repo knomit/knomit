@@ -355,12 +355,6 @@ func TestStatus_KeyUnreadableIsAnError(t *testing.T) {
 	}
 }
 
-func TestPrincipalKind(t *testing.T) {
-	if (pki.Identity{}).PrincipalKind() != "operator" || (pki.Identity{AgentID: "a"}).PrincipalKind() != "instance" {
-		t.Fatal("principal kinds")
-	}
-}
-
 // An installed root.crt that exists but does not load is NOT "no root
 // installed": treating it so would let any fleet's bundle in over material
 // nobody has seen. It fails closed, names the file, and nothing is written;
@@ -560,5 +554,26 @@ func TestInstallBundle_UnwritableParentNamesTheLock(t *testing.T) {
 	_, err := pki.InstallBundle(dir, m.KeyPath, bundleFor(t, f, m))
 	if err == nil || !strings.Contains(err.Error(), "install lock "+pki.LockPath(dir)) {
 		t.Fatalf("err %v, want it to name the install lock", err)
+	}
+}
+
+// A bundle whose leaf is not an instance certificate (its email SAN is not an
+// agent address, or there is none) is refused: TLS peers would refuse the
+// certificate, so installing it would enrol nothing. Nothing is written.
+func TestInstallBundle_RefusesANonInstanceCertificate(t *testing.T) {
+	f := pkitest.New(t)
+	for _, email := range []string{"alice@example.com", ""} {
+		m := f.Enroll(t, email)
+		dir := filepath.Join(t.TempDir(), "pki")
+		_, err := pki.InstallBundle(dir, m.KeyPath, bundleFor(t, f, m))
+		if !errors.Is(err, pki.ErrNotInstanceCertificate) || !strings.Contains(err.Error(), "not an instance certificate") {
+			t.Fatalf("email %q: InstallBundle error = %v, want ErrNotInstanceCertificate", email, err)
+		}
+		if _, statErr := os.Stat(filepath.Join(dir, pki.RootCertFile)); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("email %q: a refused bundle wrote root.crt (%v)", email, statErr)
+		}
+		if _, err := pki.PreviewBundle(m.KeyPath, bundleFor(t, f, m)); !errors.Is(err, pki.ErrNotInstanceCertificate) {
+			t.Fatalf("email %q: PreviewBundle error = %v", email, err)
+		}
 	}
 }

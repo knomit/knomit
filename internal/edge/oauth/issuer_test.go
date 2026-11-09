@@ -778,7 +778,7 @@ func TestWait_DecisionBetweenReadAndRegisterIsSeen(t *testing.T) {
 // subject's FIRST approval. Before, a second approval re-granted every
 // ceiling permission, and SQLGrants.Grant's upsert cleared revoked_at, so a
 // narrowing the operator made with `knomit grants revoke` was undone by the
-// next approval — and with consent path 3 that approval is self-service.
+// next approval.
 // Sabotage: always writing grants in Approve turns this red on the write
 // check and on GrantsUnchanged.
 func TestApprove_ReapprovalNeverRevivesARevokedGrant(t *testing.T) {
@@ -839,5 +839,42 @@ func TestApprove_FullyRevokedSubjectStaysRevoked(t *testing.T) {
 	set, _ := f.grants.For(ctx, principal)
 	if len(set) != 0 || !p.GrantsUnchanged {
 		t.Fatalf("grants = %v, unchanged = %v; want none revived", set, p.GrantsUnchanged)
+	}
+}
+
+// Consent path 3 is gone: its routes answer 404 and /oauth/authorize sets no
+// cookie and offers no provider sign-in.
+func TestRoutes_NoIDPEndpoints(t *testing.T) {
+	f := newIssuerFixture(t)
+	for _, p := range []string{"/oauth/idp/start/x", "/oauth/idp/callback"} {
+		resp := f.get(t, p, nil)
+		_ = body(t, resp)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s: status %d, want 404", p, resp.StatusCode)
+		}
+	}
+	resp, err := f.browser.Post(f.srv.URL+"/oauth/idp/decide", "application/x-www-form-urlencoded", strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = body(t, resp)
+	if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("POST /oauth/idp/decide: status %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestAuthorize_SetsNoCookie(t *testing.T) {
+	f := newIssuerFixture(t)
+	_, ch := pkce()
+	resp := f.get(t, "/oauth/authorize", f.authorizeQuery(ch))
+	page := body(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, page)
+	}
+	if c := resp.Cookies(); len(c) != 0 {
+		t.Errorf("authorize set cookies %v", c)
+	}
+	if strings.Contains(page, "/oauth/idp/") {
+		t.Error("waiting page links to the removed provider sign-in")
 	}
 }

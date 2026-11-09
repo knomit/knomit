@@ -76,8 +76,13 @@ func showIdentity(out io.Writer, cfg config.Config) error {
 		fmt.Fprintf(out, "certificate: unreadable identity: %v\n", st.IdentityErr)
 	case st.Cert != nil:
 		id := st.Cert
-		fmt.Fprintf(out, "principal: %s:%s@cert\nemail: %q\nserial: %s\nnot_after: %s\n",
-			id.PrincipalKind(), id.Fingerprint, id.Email, id.Serial.Text(16), id.NotAfter.Format(time.RFC3339))
+		if id.IsInstance() {
+			fmt.Fprintf(out, "principal: instance:%s@cert\n", id.Fingerprint)
+		} else {
+			fmt.Fprintf(out, "principal: none (not an instance certificate; TLS peers refuse it)\n")
+		}
+		fmt.Fprintf(out, "email: %q\nserial: %s\nnot_after: %s\n",
+			id.Email, id.Serial.Text(16), id.NotAfter.Format(time.RFC3339))
 	}
 	if st.Root != nil {
 		fmt.Fprintf(out, "root: %s (%q)\n", st.Root.Fingerprint, st.Root.CommonName)

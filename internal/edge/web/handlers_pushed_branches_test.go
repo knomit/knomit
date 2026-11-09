@@ -145,13 +145,13 @@ func TestPushedBranches_ListAndMerge(t *testing.T) {
 }
 
 // Test 6 (N6): two gates, each pinned by the case only it refuses. An
-// instance certificate lacks `write` (writeGate); an operator certificate
+// instance certificate lacks `write` (writeGate); an instance certificate
 // granted `write` but not `operator` is refused by Require(operator).
 func TestPushedMerge_PermissionGates(t *testing.T) {
 	f := pkitest.New(t)
 	inst := f.Enroll(t, "peer@agents.knomit.io")
-	op := f.Enroll(t, "ops@example.com")
-	opPrincipal := auth.OperatorPrincipal(op.Fingerprint()).String()
+	op := f.Enroll(t, "ops@agents.knomit.io")
+	opPrincipal := auth.InstancePrincipal(op.Fingerprint()).String()
 	grants := auth.StaticGrants{opPrincipal: {auth.Read: {}, auth.Write: {}}}
 	s := &Server{Auth: config.AuthConfig{LoopbackDefault: config.Defaults().Auth.LoopbackDefault}, Grants: grants}
 	h, m := pushedServer(t, s)

@@ -35,9 +35,9 @@ func TestCertGrants_NoImplicitReadForAnyoneElse(t *testing.T) {
 	fp := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	g := CertGrants{Store: StaticGrants{}}
 	for _, p := range []Principal{
-		OperatorPrincipal(fp),
-		{Kind: KindInstance, ID: fp, Via: ViaToken}, // an instance kind NOT vouched for by a cert
-		{Kind: KindInstance, Via: ViaCert},          // no id
+		{Kind: Kind("operator"), ID: fp, Via: ViaCert}, // the removed operator-certificate kind gets nothing
+		{Kind: KindInstance, ID: fp, Via: ViaToken},    // an instance kind NOT vouched for by a cert
+		{Kind: KindInstance, Via: ViaCert},             // no id
 		{Kind: KindBridge, ID: "uid:501", Via: ViaSocket},
 		{Kind: KindAnonymous, Via: ViaNone},
 		{},

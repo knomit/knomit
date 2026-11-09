@@ -33,8 +33,8 @@ func WithEndpoint(ctx context.Context, path string) context.Context {
 //
 // The principal is the IDENTITY, not the transport: the local OS user a
 // socket or pipe peer resolves to (uid:<n>, sid:<SID>), or an OAuth token's
-// subject (host:<subject>@token, the subject the approver named or the
-// identity provider's account id — never the client app's id). Two bridges of
+// subject (host:<subject>@token, the subject the approver named —
+// never the client app's id). Two bridges of
 // one user on one endpoint are therefore one owner; two users, or one user on
 // two endpoints, are two.
 //

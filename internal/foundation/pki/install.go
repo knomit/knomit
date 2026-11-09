@@ -32,6 +32,10 @@ var (
 	ErrKeyMismatch     = errors.New("pki: bundle certificate is for another key")
 	ErrRootDiffers     = errors.New("pki: bundle is from a different fleet root")
 	ErrCRLRollback     = errors.New("pki: bundle CRL is older than the one held")
+	// ErrNotInstanceCertificate: the bundle's leaf chains to the root but its
+	// email SAN is not an agent address (<id>@agents.knomit.io). TLS peers
+	// refuse such a certificate, so installing it would enrol nothing.
+	ErrNotInstanceCertificate = errors.New("pki: bundle certificate is not an instance certificate")
 	// ErrAlreadyInstalled: InstallBundle found this bundle's own root
 	// installed. A bundle installs only where nothing is (a first install);
 	// a renewed leaf installs alone (InstallLeaf).
@@ -533,6 +537,9 @@ func checkBundle(keyPath string, raw []byte) (Bundle, Identity, error) {
 	if err != nil {
 		return Bundle{}, Identity{}, err
 	}
+	if !id.IsInstance() {
+		return Bundle{}, Identity{}, &classified{class: ErrNotInstanceCertificate, msg: "the bundle's certificate is not an instance certificate (its email address is not <agent id>@" + AgentEmailDomain + "), so TLS peers would refuse it"}
+	}
 	return b, id, nil
 }
 
@@ -563,7 +570,7 @@ func InstalledRoot(dir string) (RootInfo, error) {
 // names. Only Root.CommonName is free text a display must quote.
 type BundlePreview struct {
 	Root      RootInfo
-	Principal string // <kind>:<fingerprint>@cert
+	Principal string // instance:<fingerprint>@cert (a bundle for any other certificate is refused)
 }
 
 // PreviewBundle runs InstallBundle's checks that read only the bundle and
@@ -575,7 +582,7 @@ func PreviewBundle(keyPath string, raw []byte) (BundlePreview, error) {
 	if err != nil {
 		return BundlePreview{}, err
 	}
-	return BundlePreview{Root: rootInfo(b.Root), Principal: id.PrincipalKind() + ":" + id.Fingerprint + "@cert"}, nil
+	return BundlePreview{Root: rootInfo(b.Root), Principal: "instance:" + id.Fingerprint + "@cert"}, nil
 }
 
 func fingerprintOf(c *x509.Certificate) string {

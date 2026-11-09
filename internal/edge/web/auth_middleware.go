@@ -21,10 +21,10 @@ import (
 //     principal keyed by uid or SID, with the OS-reported pid carried
 //     alongside for the client_sessions row. Which of the two a platform
 //     uses is auth.LocalVia; this function never asks.
-//  2. A request on the TLS listener (F19 phase 2) — the instance (or
-//     operator) principal of its verified client certificate. That listener
-//     is never anonymous, whatever [auth].require says: a request with no
-//     certificate, or one naming no knomit identity, is refused here.
+//  2. A request on the TLS listener (F19 phase 2) — the instance
+//     principal of its verified client certificate. That listener is never
+//     anonymous, whatever [auth].require says: a request with no
+//     certificate, or one that is not an instance certificate, is refused here.
 //  3. Nothing, from loopback, with [auth].require = false — the ANONYMOUS
 //     principal, so an upgrade changes nobody's day — provided the Host
 //     header names this machine (localhost, an IP literal, the bind host or
@@ -119,14 +119,17 @@ func authMiddleware(cfg config.AuthConfig, disabled bool, trustedOrigins []strin
 						"the TLS listener accepts only enrolled instances; the client certificate's key is not ed25519", r.URL.Path)
 					return
 				}
-				p := auth.InstancePrincipal(id.Fingerprint)
-				// R3: the email SAN alone says which: an agent address
-				// (<id>@agents.knomit.io) is an instance, anything else an
-				// operator. The principal is always the key.
+				// R3: the email SAN alone says what a certificate is: an agent
+				// address (<id>@agents.knomit.io) is an instance. A TLS
+				// certificate authenticates enrolled instances only, so
+				// anything else is refused rather than given a principal.
+				// The principal is always the key.
 				if !id.IsInstance() {
-					p = auth.OperatorPrincipal(id.Fingerprint)
+					hal.WriteProblem(w, http.StatusForbidden, "Authentication required",
+						"the TLS listener accepts only enrolled instance certificates; this certificate's email address is not an instance address", r.URL.Path)
+					return
 				}
-				next.ServeHTTP(w, r.WithContext(auth.WithPrincipal(ctx, p)))
+				next.ServeHTTP(w, r.WithContext(auth.WithPrincipal(ctx, auth.InstancePrincipal(id.Fingerprint))))
 				return
 			}
 			if !cfg.Require && isLoopback(r.RemoteAddr) {

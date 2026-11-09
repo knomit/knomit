@@ -136,7 +136,9 @@ func (n *NativeService) GetIdentity() (FleetIdentity, error) {
 	case st.Cert != nil:
 		id := st.Cert
 		out.Certificate = "ok"
-		out.Principal = id.PrincipalKind() + ":" + id.Fingerprint + "@cert"
+		if id.IsInstance() {
+			out.Principal = "instance:" + id.Fingerprint + "@cert"
+		}
 		out.SAN = displayEmail(id.Email)
 		out.Serial = id.Serial.Text(16)
 		out.NotAfter = id.NotAfter.UTC().Format(time.RFC3339)

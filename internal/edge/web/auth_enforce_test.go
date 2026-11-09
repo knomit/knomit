@@ -375,7 +375,4 @@ func TestServerGrants_WrapTheStoreInCertGrants(t *testing.T) {
 	if auth.Allowed(ctx, g, auth.InstancePrincipal(fp), auth.Write) {
 		t.Fatal("a chained instance holds write with no row")
 	}
-	if auth.Allowed(ctx, g, auth.OperatorPrincipal(fp), auth.Read) {
-		t.Fatal("an operator certificate got the instance's implicit read")
-	}
 }

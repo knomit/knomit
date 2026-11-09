@@ -110,13 +110,14 @@ func TestGrants_AddListRevokeAndTheRefusals(t *testing.T) {
 		t.Fatalf("revoke read on an instance: %v", err)
 	}
 	// Positive control: read on a non-instance principal is revocable.
-	if _, err := run(t, "", "grants", "revoke", "operator:"+fp+"@cert", "read"); err != nil {
-		t.Fatalf("revoke read on an operator: %v", err)
+	if _, err := run(t, "", "grants", "revoke", "bridge:uid:501@socket", "read"); err != nil {
+		t.Fatalf("revoke read on a bridge: %v", err)
 	}
 
 	for _, bad := range [][]string{
 		{"grants", "add", "anonymous@none", "write"},                            // anonymous comes from config
 		{"grants", "add", "agent:x@cert", "write"},                              // unknown kind
+		{"grants", "add", "operator:" + fp + "@cert", "write"},                  // the operator-certificate kind was removed
 		{"grants", "add", inst, "wirte"},                                        // unknown permission
 		{"grants", "add", "instance@cert", "write"},                             // no id
 		{"grants", "add", "instance:" + fp[:8] + "@cert", "write"},              // the 8-hex short form

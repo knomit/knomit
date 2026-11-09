@@ -146,7 +146,7 @@ func TestGrantsAPI_BrowserProofAdmits(t *testing.T) {
 }
 
 // The same gate as the pending requests: anonymous loopback WITHOUT the
-// browser proof, a bearer, and an operator certificate holding admin are each
+// browser proof, a bearer, and an instance certificate holding admin are each
 // refused, and a refused revoke leaves the login working.
 func TestGrantsAPI_OnlyLocalOrSameOriginAdmin(t *testing.T) {
 	f := newKBFixture(t)
@@ -175,15 +175,15 @@ func TestGrantsAPI_OnlyLocalOrSameOriginAdmin(t *testing.T) {
 		t.Errorf("browser without %s: %d %s", KnomitClientHeader, rec.Code, rec.Body.String())
 	}
 	pk := pkitest.New(t)
-	op := pk.Enroll(t, "op@example.com")
-	opP := auth.OperatorPrincipal(op.Fingerprint())
+	op := pk.Enroll(t, "op@agents.knomit.io")
+	opP := auth.InstancePrincipal(op.Fingerprint())
 	for _, perm := range []auth.Permission{auth.Read, auth.Write, auth.Admin} {
 		if err := f.grants.Grant(context.Background(), opP, perm, "test"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if rec := serve(asTLSPeer(h, op.Cert), httptest.NewRequest(http.MethodPost, "/api/v1/oauth/grants/"+id+"/revoke", nil)); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), opP.String()) {
-		t.Errorf("operator certificate with admin: %d %s; want 403 naming it", rec.Code, rec.Body.String())
+		t.Errorf("instance certificate with admin: %d %s; want 403 naming it", rec.Code, rec.Body.String())
 	}
 	if _, err := f.store.LookupAccess(context.Background(), tok); err != nil {
 		t.Fatalf("a refused revoke ended the login: %v", err)

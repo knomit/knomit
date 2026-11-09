@@ -21,7 +21,6 @@ import (
 	"knomit/internal/corpus/repos"
 	"knomit/internal/edge/mcp"
 	"knomit/internal/edge/oauth"
-	"knomit/internal/edge/oauth/idp"
 	"knomit/internal/edge/web"
 	"knomit/internal/engine/embeddings"
 	"knomit/internal/engine/llm"
@@ -309,17 +308,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			log.Warn().Err(err).Msg("oauth: cannot read the instance key; master-key approvals will be refused")
 		}
 		rootPath := filepath.Join(cfg.TLS.Dir, pki.RootCertFile)
-		// Consent path 3 (phase 3c): an allow-listed human approves with an
-		// identity proven at the configured provider. Config validation has
-		// already refused anything but "github".
-		var idpOpts *oauth.IDPOptions
-		if c := cfg.OAuth.IDP; c != nil {
-			idpOpts = &oauth.IDPOptions{Provider: idp.NewGitHub(c.ClientID, c.Secret), Allowed: c.Allowed()}
-			log.Info().Str("provider", c.Provider).Int("allowed", len(c.AllowedSubjects)).
-				Msg("oauth: consent through an external identity provider is on")
-		}
 		a.server.OAuthIssuer = oauth.NewIssuer(oauth.Options{
-			IDP:                 idpOpts,
 			Issuer:              cfg.OAuth.Issuer,
 			Store:               store,
 			Clients:             oauth.NewResolver(cfg.OAuth.EffectiveClients()),

@@ -718,7 +718,13 @@ func Load() (Config, error) {
 		if err != nil {
 			return Config{}, err
 		}
+		if err := checkRemovedTOML(md); err != nil {
+			return Config{}, err
+		}
 		warnUndecoded(path, md.Undecoded())
+	}
+	if err := checkRemovedEnv(); err != nil {
+		return Config{}, err
 	}
 	cfg.LLM.applyProviderDefaults()
 	// Restore Home — TOML cannot override it since it's the config search root.
@@ -861,11 +867,6 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("config: %w", err)
 		}
 		cfg.OAuth.Issuer = norm
-	}
-	if cfg.OAuth.IDP != nil {
-		if err := cfg.OAuth.IDP.loadIDPSecret(); err != nil {
-			return Config{}, err
-		}
 	}
 
 	if err := cfg.Validate(); err != nil {

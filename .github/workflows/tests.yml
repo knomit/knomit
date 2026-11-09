@@ -320,9 +320,7 @@ jobs:
       #
       # internal/edge/oauth (F19 phase 3a) needs sqlite (control.db via
       # internal/engine/store/migrate) but no native runtime libs, and its CIMD tests
-      # run their own in-process HTTPS server with a generated CA. The `...`
-      # takes in internal/edge/oauth/idp (F19 phase 3c), whose tests drive the
-      # in-process fake provider in internal/edge/oauth/idp/idptest.
+      # run their own in-process HTTPS server with a generated CA.
       - name: Unit tests (no model download)
         run: CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh unit ./internal/engine/embeddings/ ./internal/foundation/config/ ./internal/domain/fact/ ./internal/foundation/auth/ ./internal/foundation/serveraddr/ ./internal/foundation/pki/... ./internal/edge/oauth/...
 

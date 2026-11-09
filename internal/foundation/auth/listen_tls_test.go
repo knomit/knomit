@@ -32,7 +32,4 @@ func TestCertPrincipals_UseTheFullFingerprintAndViaCert(t *testing.T) {
 	if got := InstancePrincipal(fp).String(); got != "instance:"+fp+"@cert" {
 		t.Fatalf("InstancePrincipal = %s", got)
 	}
-	if got := OperatorPrincipal(fp).String(); got != "operator:"+fp+"@cert" {
-		t.Fatalf("OperatorPrincipal = %s", got)
-	}
 }

@@ -107,7 +107,7 @@ func oauthCmd() *cobra.Command {
 		},
 	}
 	signFlags(deny, &denySign)
-	c.AddCommand(pending, approve, deny, oauthIDPCmd())
+	c.AddCommand(pending, approve, deny)
 	return c
 }
 

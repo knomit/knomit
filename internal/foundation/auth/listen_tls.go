@@ -62,10 +62,3 @@ func IsTLSListener(ctx context.Context) bool {
 func InstancePrincipal(fp string) Principal {
 	return Principal{Kind: KindInstance, ID: fp, Via: ViaCert}
 }
-
-// OperatorPrincipal is the principal of a verified operator-role
-// certificate. It is NOT an instance: it gets no implicit read (CertGrants)
-// and holds only what grants rows give it.
-func OperatorPrincipal(fp string) Principal {
-	return Principal{Kind: KindOperator, ID: fp, Via: ViaCert}
-}
