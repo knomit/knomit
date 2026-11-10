@@ -32,21 +32,32 @@ import (
 //     writes asAnonymous(fromLoopback(r)) so the address stays explicit.
 func init() {
 	injectedPolicy = func(r *http.Request) (authz.Policy, bool) {
-		return authz.PolicyFrom(r.Context())
+		pol, ok := r.Context().Value(testPolicyKey{}).(authz.Policy)
+		return pol, ok
 	}
 }
+
+// testPolicyKey is the context key the helpers attach policies under, private
+// to the tests. It is deliberately NOT authz.WithPolicy's key: that one is
+// written by the production authenticator (P4), and a test that attached under
+// it would skip the authenticate step it is supposed to exercise. The seam
+// (injectedPolicy) is the only reader of this key; the authenticator asks the
+// seam, and then follows the same path as for a real credential.
+type testPolicyKey struct{}
 
 // attachPolicy puts p on r's context in place (like fromLoopback mutates r),
 // so a test that keeps using the request it built still sees one request.
 func attachPolicy(r *http.Request, p authz.Policy) *http.Request {
-	*r = *r.WithContext(authz.WithPolicy(r.Context(), p))
+	*r = *r.WithContext(context.WithValue(r.Context(), testPolicyKey{}, p))
 	return r
 }
 
 var testOwnerPolicy = func() authz.Policy {
 	p, err := authz.Owner()
 	if err != nil {
-		p = authz.Principal{Kind: authz.KindOS, ID: "uid:1"}
+		// No fallback identity: a test run that cannot resolve the owner must
+		// not quietly act as some other uid.
+		panic("web test policy: cannot resolve the owner principal: " + err.Error())
 	}
 	return authz.Policy{Principal: p, Via: authz.ViaNone, Owner: true}
 }()
@@ -128,6 +139,9 @@ func TestTestPolicy_Helpers(t *testing.T) {
 	get := func() *http.Request { return newTestReq(http.MethodGet, "/x") }
 
 	o := asOwner(get())
+	if _, ok := authz.PolicyFrom(o.Context()); ok {
+		t.Fatal("the seam must not use the production policy context key")
+	}
 	pol, ok := injectedPolicy(o)
 	if !ok || !pol.Owner || !pol.Has(authz.KBWrite) {
 		t.Fatalf("asOwner: %+v %v", pol, ok)

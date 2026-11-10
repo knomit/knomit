@@ -49,7 +49,7 @@ func TestLinkAPI_NonAdminRefused(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
 
 	// Anonymous loopback (the web UI's listener) without the browser proof.
-	req := asOwner(httptest.NewRequest(http.MethodPut, "/api/v1/repos/x/origin/credential", strings.NewReader(body)))
+	req := asAnonymousOnLoopback(httptest.NewRequest(http.MethodPut, "/api/v1/repos/x/origin/credential", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	rec = serve(f.s.Handler(), req)
 	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())

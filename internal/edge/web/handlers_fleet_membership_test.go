@@ -138,7 +138,7 @@ func TestFleetREST_HostAndFollowOnAMember(t *testing.T) {
 		if local {
 			req = localPeer(req)
 		} else {
-			req = asOwner(req)
+			req = asAnonymousOnLoopback(req)
 		}
 		r.ServeHTTP(rec, req)
 		return rec

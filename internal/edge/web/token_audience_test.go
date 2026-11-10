@@ -119,8 +119,13 @@ func TestOAuthLensPatch_LensTokenCannotAddARepoItDoesNotReach(t *testing.T) {
 	f, m := newAudienceLensFixture(t)
 	tok := f.mint(t, "lens-writer", testIssuer+"/api/v1/lenses/eng", []string{"read", "write"}, auth.Read, auth.Write)
 	h := withAuthorization(f.s.OAuthHandler(), "Bearer "+tok)
+	patchAs := func(as func(*http.Request) *http.Request, h http.Handler, path, body string) *httptest.ResponseRecorder {
+		return serve(h, as(newJSONRequest(http.MethodPatch, path, bytes.NewBufferString(body))))
+	}
+	// The token callers: the bearer listener, where the loopback address is
+	// the point (a loopback caller holding a token is the token, not anonymous).
 	patch := func(h http.Handler, path, body string) *httptest.ResponseRecorder {
-		return serve(h, fromLoopback(newJSONRequest(http.MethodPatch, path, bytes.NewBufferString(body))))
+		return patchAs(fromLoopback, h, path, body)
 	}
 	uid := func(name string) string { return m.Get(name).UID() }
 	readsOf := func() []string {
@@ -179,7 +184,7 @@ func TestOAuthLensPatch_LensTokenCannotAddARepoItDoesNotReach(t *testing.T) {
 	require.Equal(t, []string{"alpha"}, readsOf(), "gamma dropped, alpha is the write repo")
 
 	// A local caller reaches every repo and may add beta.
-	local := patch(f.s.NewAPIRouter(), "/lenses/eng", fmt.Sprintf(`{"reads":[{"uid":%q}]}`, uid("beta")))
+	local := patchAs(asOwner, f.s.NewAPIRouter(), "/lenses/eng", fmt.Sprintf(`{"reads":[{"uid":%q}]}`, uid("beta")))
 	require.Equal(t, http.StatusOK, local.Code, local.Body.String())
 	require.Equal(t, []string{"alpha", "beta"}, readsOf())
 }

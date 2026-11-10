@@ -363,7 +363,7 @@ func TestBrowserGate_LocalPrincipalNeedsNoProof(t *testing.T) {
 func TestBrowserGate_Preflight(t *testing.T) {
 	f := newKBFixture(t)
 	pre := func(origin string) *http.Request {
-		r := fromLoopback(httptest.NewRequest(http.MethodOptions, "/api/v1/oauth/pending/x/approve", nil))
+		r := asAnonymousOnLoopback(httptest.NewRequest(http.MethodOptions, "/api/v1/oauth/pending/x/approve", nil))
 		r.Header.Set("Origin", origin)
 		r.Header.Set("Access-Control-Request-Method", "POST")
 		r.Header.Set("Access-Control-Request-Headers", "content-type,x-knomit-client")
