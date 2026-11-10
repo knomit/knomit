@@ -86,7 +86,7 @@ describe('the zero-repo shell', () => {
     // Nothing persisted said open: the rail is forced.
     expect(localStorage.getItem('knomit.rail')).not.toBe('1');
     const section = await screen.findByTestId('rail-repos');
-    const rows = within(section).getAllByRole('button').filter(b => b.dataset.testid !== 'rail-new-repo');
+    const rows = within(section).getAllByRole('button').filter(b => b.dataset.testid !== 'rail-new-repo' && b.dataset.testid !== 'rail-repos-toggle');
     expect(rows.map(r => r.dataset.testid)).toEqual(['rail-draft-repo']);
     expect(rows[0]).toHaveAttribute('aria-current', 'true');
   });

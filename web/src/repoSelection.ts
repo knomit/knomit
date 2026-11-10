@@ -146,3 +146,29 @@ export function saveRailOpen(open: boolean): void {
     /* storage disabled — the rail is simply not remembered */
   }
 }
+
+// Which of the rail's sections the reader collapsed, per viewer: a JSON list
+// of section names. Absent, garbage, unknown names or storage disabled all
+// read as "nothing collapsed", so every section starts open — the rail as it
+// was before sections could collapse. Chrome like knomit.rail, not AppState.
+export const RAIL_COLLAPSED_KEY = 'knomit.rail.collapsed';
+const RAIL_SECTIONS = ['chats', 'repos', 'lenses', 'fleet'] as const;
+export type RailSection = (typeof RAIL_SECTIONS)[number];
+
+export function loadRailCollapsed(): RailSection[] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(RAIL_COLLAPSED_KEY) ?? '[]');
+    if (!Array.isArray(raw)) return [];
+    return RAIL_SECTIONS.filter(s => raw.includes(s));
+  } catch {
+    return [];
+  }
+}
+
+export function saveRailCollapsed(sections: Iterable<RailSection>): void {
+  try {
+    localStorage.setItem(RAIL_COLLAPSED_KEY, JSON.stringify([...sections]));
+  } catch {
+    /* storage disabled — the sections are simply not remembered */
+  }
+}

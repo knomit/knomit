@@ -14,6 +14,13 @@ a { color: inherit; }
 .k-bare:focus { outline: none; }
 .k-bare:focus-visible { outline: 2px solid #4a7ab5; outline-offset: 2px; border-radius: 4px; }
 
+/* A rail section's header is its own collapse toggle (TargetRail's
+   SectionHeader). The title rests in --k-rail-title (set inline: lighter open,
+   dimmer collapsed) and lightens on hover in either state; an inline colour
+   would outrank the :hover. Keyboard focus is the app's ring (index.css). */
+.k-rail-title { color: var(--k-rail-title, #9a9a9a); }
+.k-rail-toggle:hover .k-rail-title { color: #d0d0d0; }
+
 /* Materialize (the newspaper glyph) takes the results header's accent on
    hover, in BOTH places it appears: the results-list header (LibraryHeader)
    and the single-fact header (RightPanel). One rule, so the two cannot drift.
