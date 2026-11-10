@@ -21,6 +21,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"knomit/internal/foundation/authz"
 )
 
 // Named refusals. The verifier maps every one of them to the same 401
@@ -43,15 +45,55 @@ const (
 // production opens with ONE connection — so every statement inside a
 // transaction goes through the tx, never through db, or it deadlocks.
 type Store struct {
-	db         *sql.DB
-	accessTTL  time.Duration
-	refreshTTL time.Duration
-	now        func() time.Time
+	db  *sql.DB
+	lt  Lifetimes
+	now func() time.Time
+	// bindings is the authz bindings store a PAT's role is bound in (P3).
+	// nil refuses CreatePAT.
+	bindings *authz.Store
 }
 
-func NewStore(db *sql.DB, accessTTL, refreshTTL time.Duration) *Store {
-	return &Store{db: db, accessTTL: accessTTL, refreshTTL: refreshTTL, now: time.Now}
+// Lifetimes are the store's clocks (design §7; config [auth]).
+type Lifetimes struct {
+	Access          time.Duration // an OAuth access token
+	RefreshIdle     time.Duration // an OAuth refresh token unused this long is dead
+	RefreshAbsolute time.Duration // an OAuth family ends this long after it started
+	Pending         time.Duration // a browser pairing request (the agent queue keeps pendingTTL until P4)
+	Link            time.Duration // a one-time login link
+	SessionIdle     time.Duration // a browser session unused this long is dead
+	SessionAbsolute time.Duration // a browser session ends this long after login
+	PATDefault      time.Duration // a PAT minted without an expiry (the caller applies it)
+	PATMax          time.Duration // the longest a PAT may live
 }
+
+// DefaultLifetimes are the design §7 defaults, the same as config.Defaults().Auth.
+func DefaultLifetimes() Lifetimes {
+	const day = 24 * time.Hour
+	return Lifetimes{
+		Access: 2 * time.Hour, RefreshIdle: 30 * day, RefreshAbsolute: 90 * day,
+		Pending: 10 * time.Minute, Link: 2 * time.Minute,
+		SessionIdle: 30 * day, SessionAbsolute: 90 * day,
+		PATDefault: 90 * day, PATMax: 365 * day,
+	}
+}
+
+// NewStore is the pre-P3 constructor: refreshTTL is both the idle and the
+// absolute refresh lifetime (so only the absolute one can bite, as before),
+// every other lifetime is the default, and there is no bindings store.
+func NewStore(db *sql.DB, accessTTL, refreshTTL time.Duration) *Store {
+	lt := DefaultLifetimes()
+	lt.Access, lt.RefreshIdle, lt.RefreshAbsolute = accessTTL, refreshTTL, refreshTTL
+	return NewStoreWith(db, lt, nil)
+}
+
+// NewStoreWith builds a store with explicit lifetimes and the authz bindings
+// store PATs are bound in.
+func NewStoreWith(db *sql.DB, lt Lifetimes, bindings *authz.Store) *Store {
+	return &Store{db: db, lt: lt, now: time.Now, bindings: bindings}
+}
+
+// Lifetimes reports the store's lifetimes.
+func (s *Store) Lifetimes() Lifetimes { return s.lt }
 
 // FamilySpec is what an approved, collected authorization turns into: one
 // client, one subject, one ceiling, one audience.
@@ -126,7 +168,7 @@ func (s *Store) createFamilyTx(ctx context.Context, tx *sql.Tx, spec FamilySpec)
 		return Family{}, err
 	}
 	now := s.now()
-	f := Family{FamilySpec: spec, ID: id, CreatedAt: now, RefreshExpiresAt: now.Add(s.refreshTTL)}
+	f := Family{FamilySpec: spec, ID: id, CreatedAt: now, RefreshExpiresAt: now.Add(s.lt.RefreshAbsolute)}
 	if _, err = tx.ExecContext(ctx, `
 INSERT INTO oauth_families (id, client_id, subject, scope, resource, created_at, refresh_expires_at)
 VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -181,7 +223,7 @@ func (s *Store) issuePairTx(ctx context.Context, tx *sql.Tx, f Family) (Issued, 
 	}
 	// Nothing outlives its family: an access token minted near the end of a
 	// login is cut short rather than extending it.
-	accessExp := now.Add(s.accessTTL)
+	accessExp := now.Add(s.lt.Access)
 	if accessExp.After(f.RefreshExpiresAt) {
 		accessExp = f.RefreshExpiresAt
 	}
