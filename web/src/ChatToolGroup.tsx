@@ -6,7 +6,7 @@ import type { ChatApproval, ApprovalDecision } from './chatApi';
 import type { ToolCall } from './chatState';
 import { toolCallLabel, isBind, callTarget, boundAfter, formatDuration, wallDurationMs } from './chatState';
 import {
-  APPROVAL_ALLOW, APPROVAL_DECLINE, APPROVAL_ALLOW_SESSION, APPROVAL_TARGET_UNRESOLVED, CHAT_STOP,
+  APPROVAL_ALLOW, APPROVAL_DECLINE, APPROVAL_ALLOW_SESSION, APPROVAL_TARGET_UNRESOLVED,
   activitySummary, activitySteps, resultCount,
 } from './chatCopy';
 import type { SummarySeg } from './chatCopy';
@@ -41,11 +41,12 @@ const segs = (list: SummarySeg[]) => list.map((s, i) => (s.strong ? <strong key=
  * timeline: the model's interstitial text (`lead`) and one row per call. A row
  * that has finished can be selected: the page then fetches that call's result
  * and shows it in the result panel. While the turn runs, the collapsed line
- * is drawn amber with a Stop pill. A call waiting for the person
+ * is drawn amber. It has no Stop of its own: the composer's Stop (and Esc)
+ * is the one way to stop a turn. A call waiting for the person
  * carries its approval card inside its row, and holds its group open, since a
  * card nobody can see would stall the turn.
  */
-export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', running = false, onStop, onSelect, onAnswer }: {
+export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', running = false, onSelect, onAnswer }: {
   lead: string[];
   calls: ToolCall[];
   approvals: Record<string, ChatApproval>;
@@ -54,7 +55,6 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
   bound?: string;
   /** The turn this group belongs to is still running. */
   running?: boolean;
-  onStop?: () => void;
   onSelect: (call: ToolCall) => void;
   onAnswer: (callId: string, decision: ApprovalDecision) => void;
 }) {
@@ -93,12 +93,6 @@ export function ChatToolGroup({ lead, calls, approvals, selectedId, bound = '', 
           </span>
           <span aria-hidden="true" style={{ color: '#555', fontSize: 11, transform: open ? 'rotate(90deg)' : 'none', display: 'inline-block' }}>›</span>
         </button>
-        {live && onStop && (
-          <button type="button" data-testid="chat-activity-stop" onClick={onStop} style={stopPill}>
-            <span aria-hidden="true" style={{ width: 8, height: 8, background: '#f3c0c0', borderRadius: 1, display: 'inline-block' }} />
-            {CHAT_STOP}
-          </button>
-        )}
       </div>
       {open && (
         <div data-testid="chat-timeline" style={timeline}>
@@ -172,23 +166,30 @@ export function ToolCallHead({ call, testId }: { call: ToolCall; testId?: string
 
 /** The approval inside a tool row: what is asked, of what, and the three
  *  answers. "Allow for session" is offered only for a call the server can
- *  grant (an unknown tool or an unresolved handle cannot be). */
+ *  grant (an unknown tool or an unresolved handle cannot be).
+ *  One grey card for every approval (chat review, 2026-11-09, option B1): a
+ *  destructive one is marked by its action word alone, drawn amber; the
+ *  answers are one line of text links, Allow in green, split by a muted dot. */
 function ApprovalCard({ approval, onAnswer }: { approval: ChatApproval; onAnswer: (d: ApprovalDecision) => void }) {
   const target = approval.target || APPROVAL_TARGET_UNRESOLVED;
   const args = argsText(approval.arguments);
   return (
-    <div data-testid={`chat-approval-${approval.call_id}`} data-destructive={approval.destructive || undefined} style={card(approval.destructive)}>
+    <div data-testid={`chat-approval-${approval.call_id}`} data-destructive={approval.destructive || undefined} style={card}>
       <div style={{ fontSize: 12, color: '#ccc' }}>
-        <span data-testid="chat-approval-action">{approval.action}</span>
+        <span data-testid="chat-approval-action" style={{ color: approval.destructive ? AMBER : '#ccc' }}>{approval.action}</span>
         <span style={{ color: '#777' }}>{' · '}</span>
         <span data-testid="chat-approval-target" title={approval.target_kind || undefined}>{target}</span>
       </div>
       {args && <pre data-testid="chat-approval-args" style={argsPre}>{args}</pre>}
-      <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-        <button type="button" data-testid="chat-approval-allow" onClick={() => onAnswer('allow')} style={btn}>{APPROVAL_ALLOW}</button>
-        <button type="button" data-testid="chat-approval-decline" onClick={() => onAnswer('decline')} style={btn}>{APPROVAL_DECLINE}</button>
+      <div data-testid="chat-approval-answers" style={answers}>
+        <button type="button" data-testid="chat-approval-allow" className="k-approval-answer k-approval-answer--allow" onClick={() => onAnswer('allow')}>{APPROVAL_ALLOW}</button>
+        <span aria-hidden="true" style={answerSep}>·</span>
+        <button type="button" data-testid="chat-approval-decline" className="k-approval-answer" onClick={() => onAnswer('decline')}>{APPROVAL_DECLINE}</button>
         {approval.grantable && (
-          <button type="button" data-testid="chat-approval-allow-session" onClick={() => onAnswer('allow_session')} style={btn}>{APPROVAL_ALLOW_SESSION}</button>
+          <>
+            <span aria-hidden="true" style={answerSep}>·</span>
+            <button type="button" data-testid="chat-approval-allow-session" className="k-approval-answer" onClick={() => onAnswer('allow_session')}>{APPROVAL_ALLOW_SESSION}</button>
+          </>
         )}
       </div>
     </div>
@@ -206,10 +207,6 @@ const tile: CSSProperties = {
   background: '#1a231d', flexShrink: 0,
 };
 const steps: CSSProperties = { color: '#5a5a5a', fontSize: 10.5, fontWeight: 400, fontFamily: 'var(--k-font-mono)', flexShrink: 0 };
-const stopPill: CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', gap: 6, background: '#2b1c1c', color: '#f3c0c0', border: '1px solid #5c2a2a',
-  borderRadius: 999, padding: '2px 10px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
-};
 const timeline: CSSProperties = { marginLeft: 14, paddingLeft: 14, borderLeft: '1px solid #262626', padding: '2px 0 2px 14px' };
 const interstitial: CSSProperties = { color: '#888', fontStyle: 'italic', fontSize: 12.5, lineHeight: 1.5, margin: '4px 0 6px' };
 const dot = (state: 'running' | 'done', isError: boolean, onTimeline: boolean): CSSProperties => ({
@@ -239,15 +236,15 @@ const argMono: CSSProperties = {
 const metaMono: CSSProperties = {
   marginLeft: 'auto', display: 'inline-flex', gap: 10, flexShrink: 0, fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#666',
 };
-const card = (destructive: boolean): CSSProperties => ({
-  margin: '2px 8px 6px', padding: '8px 10px', borderRadius: 4,
-  background: destructive ? '#2b1c1c' : '#1a1a1a', border: `1px solid ${destructive ? '#5c2a2a' : '#2a2a2a'}`,
-});
+// One card for every approval: a destructive one differs only by its amber action word.
+const card: CSSProperties = {
+  margin: '2px 8px 6px', padding: '8px 10px', borderRadius: 4, background: '#1a1a1a', border: '1px solid #2a2a2a',
+};
 const argsPre: CSSProperties = {
   margin: '6px 0 0', fontSize: 11, color: '#999', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
   fontFamily: 'var(--k-font-mono)', maxHeight: 120, overflow: 'auto',
 };
-const btn: CSSProperties = {
-  background: '#222', color: '#ddd', border: '1px solid #333', borderRadius: 4,
-  padding: '4px 10px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
-};
+// The answers: one line of text links (.k-approval-answer in App.css draws them,
+// with their hover and focus), split by a muted dot the screen reader skips.
+const answers: CSSProperties = { display: 'flex', alignItems: 'baseline', gap: 2, marginTop: 6, fontSize: 12 };
+const answerSep: CSSProperties = { color: '#444' };

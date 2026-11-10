@@ -9,6 +9,7 @@ import { typeStyles, repoHue } from './utils';
 import { TypeIcon } from './icons';
 import { CommitHash } from './TimelineNav';
 import { computed } from './cascade.testutil';
+import { readFileSync } from 'node:fs';
 
 const CHAT = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
 const BASE = '/api/v1/chats/chat-a';
@@ -408,7 +409,7 @@ describe('chat fact links', () => {
     fireEvent.click(chip);
     await within(await screen.findByTestId('chat-side-panel')).findByTestId('fact-title');
     expect(chip).toHaveAttribute('data-open', 'true'); // reached: the panel shows this fact
-    expect(chip.className).toBe('k-fact-link');
+    expect(chip.className).toBe('k-chat-chip k-fact-link'); // no --open class
     expect(document.activeElement).not.toBe(chip);
     // The pointer moves off it (only hover may lift a chip, and only while it is there).
     fireEvent.mouseLeave(chip);
@@ -438,6 +439,80 @@ describe('chat fact links', () => {
     const glyph = within(chip).getByTestId('fact-link-glyph');
     expect(computed(glyph, 'align-self', 1280)).toBe('center');
     expect(computed(chip.querySelector('.k-fact-link-title')!, 'line-height', 1280)).toBe('19px');
+  });
+
+  // Chat review, 2026-11-09: repo chips rode 5px below the prose and spread
+  // their lines (height 20px at vertical-align -3px, centred: the fact chip's
+  // old fault), and every chip pushed a table cell's words 1-2px below the
+  // row's other cells. Every chip kind now shares ONE alignment, .k-chat-chip.
+  // SABOTAGE: drop k-chat-chip from any kind, give a kind its own height or
+  // vertical-align back, or put the -2px margin on the plain .k-chat-chip
+  // selector (markdown.css's `.k-prose :first-child` outranks it) -> red.
+  it('every chip kind, in prose, a list item and a table cell, is aligned the one .k-chat-chip way', async () => {
+    const FULL = 'abc1234' + 'f'.repeat(33);
+    stubFleetFetch({
+      [`GET ${BASE}`]: { body: snapshot([
+        { kind: 'user', text: 'q' },
+        { kind: 'tool_call', id: 'tu_1', name: 'knomit_query', state: 'done', arguments: { text: 'x', repo: 'agentic-engineering' }, in_base: true, target: 'agentic-engineering' },
+        { kind: 'assistant', text: [
+          'See `3fc77970` in `agentic-engineering`, fixed in `abc1234`.',
+          '',
+          '- `3fc77970` in `agentic-engineering`, fixed in `abc1234`',
+          '',
+          '| fact | repo | commit |',
+          '|---|---|---|',
+          '| `3fc77970` | `agentic-engineering` | `abc1234` |',
+        ].join('\n') },
+      ]) },
+      [RESOLVE]: (body: unknown) => {
+        const b = body as { handles: string[]; prefer: string[] };
+        return { body: [
+          ...(b.handles.includes('3fc77970') ? [POLICY] : []),
+          ...(b.handles.includes('abc1234') && b.prefer[0] === 'agentic-engineering'
+            ? [{ handle: 'abc1234', id: '', title: '', type: '', repo: 'agentic-engineering', branch: 'agent/test', path: '', excerpt: '', commit: FULL }]
+            : []),
+        ] };
+      },
+    });
+    render(<ChatFacet chat={CHAT} facet="chat" onGone={vi.fn()} repos={[{ name: 'agentic-engineering' }]} />);
+    const turn = await screen.findByTestId('chat-turn-0');
+    await within(turn).findAllByTestId('commit-link');
+    const kinds = ['fact-link', 'repo-link', 'commit-link'];
+    for (const host of ['p', 'li', 'td']) {
+      for (const kind of kinds) {
+        // Reached: exactly one chip of this kind in this kind of line (the table has one per cell).
+        const chips = [...turn.querySelectorAll(`${host} [data-testid="${kind}"]`)] as HTMLElement[];
+        expect(chips, `${kind} in ${host}`).toHaveLength(1);
+        const chip = chips[0];
+        expect(chip.closest('.k-prose.k-chat-answer')).not.toBeNull();
+        expect(chip.classList.contains('k-chat-chip'), `${kind} in ${host}`).toBe(true);
+        expect(computed(chip, 'display', 1280)).toBe('inline-flex');
+        expect(computed(chip, 'align-items', 1280)).toBe('baseline');
+        expect(computed(chip, 'vertical-align', 1280)).toBe('baseline');
+        expect(computed(chip, 'height', 1280)).toBe('');
+        expect(computed(chip, 'margin-block', 1280), `${kind} in ${host}`).toBe('-2px');
+      }
+      // The marks (a fact's glyph, a repo's dot) are centred beside the words, outside the baseline.
+      const glyph = turn.querySelector(`${host} [data-testid="fact-link-glyph"]`)!;
+      const dot = turn.querySelector(`${host} [data-testid="repo-link-dot"]`)!.parentElement!;
+      for (const mark of [glyph, dot]) {
+        expect(mark.classList.contains('k-chat-chip-mark')).toBe(true);
+        expect(computed(mark, 'align-self', 1280)).toBe('center');
+      }
+    }
+    // The chip opening a paragraph is a :first-child; markdown.css zeroes
+    // .k-prose :first-child's margin-top (0,2,0), so the shared margin must sit
+    // on a selector that outranks it.
+    const css = readFileSync('src/App.css', 'utf8');
+    expect(css).toMatch(/^\.k-prose\.k-chat-answer \.k-chat-chip \{ margin-block: -2px; \}$/m);
+    expect(readFileSync('src/markdown.css', 'utf8')).toMatch(/\.k-prose :first-child/);
+    // No kind aligns itself: none of their own rules sets a height, a
+    // vertical-align, an align-items or a display.
+    for (const sel of ['.k-fact-link', '.k-repo-link', '.k-commit-link']) {
+      const own = [...css.matchAll(new RegExp(`^${sel.replace('.', '\\.')} \\{([^}]*)\\}`, 'gm'))].map(m => m[1]);
+      expect(own, sel).toHaveLength(1);
+      expect(own[0]).not.toMatch(/(^|[\s;])(height|vertical-align|align-items|display):/);
+    }
   });
 
   it('hovering about 300ms shows the card: type, repo, confidence, title, excerpt and path, and no way to Browse', async () => {

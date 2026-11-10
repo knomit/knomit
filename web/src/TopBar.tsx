@@ -4,7 +4,7 @@ import type { AppState } from './state';
 import { isLensContext } from './state';
 import type { RepoInfo } from './api';
 import { BookIcon, FleetIcon, GearIcon, LayersIcon, ProviderIcon } from './icons';
-import { noMouseFocus } from './utils';
+import { chatTitleShown, noMouseFocus } from './utils';
 import { useMatFocus } from './matFocus';
 import { CHAT_ACCENT, FLEET_ACCENT, otherRepoFailing } from './facets';
 import { ChatPill } from './ChatPill';
@@ -263,7 +263,10 @@ export const TopBar = memo(function TopBar({ state, repos, label: given, railOpe
                 }} />
               ) : (
                 <span className="k-bar-name" data-testid="target-label-name" title={label.name || undefined} style={barName}
-                  onDoubleClick={canRename && target.id ? () => setRenaming(target.id ?? null) : undefined}>{label.name}</span>
+                  onDoubleClick={canRename && target.id ? () => setRenaming(target.id ?? null) : undefined}>
+                  {/* A chat's title is shown as its rail row shows it (chatTitleShown: 20 characters, then "…"). */}
+                  {target.kind === 'chat' ? chatTitleShown(label.name) : label.name}
+                </span>
               )}
               {/* The grey model name stays whole beside it; only below the narrow
                   breakpoint (App.css) is it dropped. */}

@@ -7,6 +7,8 @@ import { stubFleetFetch } from './fleetTestFetch';
 import type { ChatApproval, ChatSnapshot } from './chatApi';
 import { APPROVAL_TARGET_UNRESOLVED } from './chatCopy';
 import type { ToolCall } from './chatState';
+import { computed } from './cascade.testutil';
+import { readFileSync } from 'node:fs';
 
 const CHAT = { id: 'chat-a', provider: 'anthropic', model: 'claude-test-x' };
 const BASE = '/api/v1/chats/chat-a';
@@ -106,6 +108,86 @@ describe('approvals in a tool row', () => {
     await waitFor(() => expect(screen.queryByTestId('chat-approval-tu_2')).toBeNull());
   });
 });
+
+// Chat review, 2026-11-09, option B1: one grey card for every approval; a
+// destructive one is marked by its action word alone, in amber; the answers
+// are one line of text links split by a muted dot, Allow in green.
+// SABOTAGE: give the card back its red ground for a destructive approval, draw
+// the action word #ccc when destructive, or put the answers back in bordered
+// buttons -> red.
+describe('the approval card (B1)', () => {
+  const cardFor = (ap: ChatApproval) => {
+    render(<ChatToolGroup lead={[]} calls={[{ id: ap.call_id, name: ap.tool, state: 'running', isError: false } as ToolCall]}
+      approvals={{ [ap.call_id]: ap }} selectedId={null} onSelect={vi.fn()} onAnswer={vi.fn()} />);
+    return screen.getByTestId(`chat-approval-${ap.call_id}`);
+  };
+
+  it('a destructive approval is the same grey card; only its action word is amber', () => {
+    const plain = cardFor(learn);
+    const destructive = cardFor({ ...learn, call_id: 'tu_9', tool: 'knomit_review', action: 'takeover', destructive: true });
+    // Reached: one card of each kind, and it says which it is.
+    expect(plain).not.toHaveAttribute('data-destructive');
+    expect(destructive).toHaveAttribute('data-destructive', 'true');
+    for (const card of [plain, destructive]) {
+      expect(card.style.background).toBe('rgb(26, 26, 26)'); // #1a1a1a
+      expect(card.style.border).toBe('1px solid rgb(42, 42, 42)'); // #2a2a2a
+    }
+    expect(within(plain).getByTestId('chat-approval-action').style.color).toBe('rgb(204, 204, 204)'); // #ccc
+    expect(within(destructive).getByTestId('chat-approval-action').style.color).toBe('rgb(232, 194, 122)'); // AMBER #e8c27a
+    expect(within(destructive).getByTestId('chat-approval-action')).toHaveTextContent(/^takeover$/);
+  });
+
+  it('the answers are one line of text links: Allow green, the rest grey, split by aria-hidden dots', () => {
+    const card = cardFor(learn);
+    const line = within(card).getByTestId('chat-approval-answers');
+    // In order, the three answers with a dot between each pair, and nothing else.
+    expect([...line.children].map(c => c.textContent)).toEqual(['Allow', '·', 'Decline', '·', 'Allow for session']);
+    const seps = [...line.children].filter(c => c.tagName === 'SPAN') as HTMLElement[];
+    expect(seps).toHaveLength(2);
+    for (const s of seps) {
+      expect(s).toHaveAttribute('aria-hidden', 'true');
+      expect(s.style.color).toBe('rgb(68, 68, 68)'); // #444
+    }
+    const [allow, decline, session] = ['chat-approval-allow', 'chat-approval-decline', 'chat-approval-allow-session'].map(id => within(card).getByTestId(id));
+    for (const b of [allow, decline, session]) {
+      expect(b.tagName).toBe('BUTTON');
+      expect(b.getAttribute('style')).toBeNull(); // drawn by App.css's .k-approval-answer, not inline
+      expect(computed(b, 'border-style', 1280)).toBe('none');
+      expect(computed(b, 'background', 1280)).toBe('none');
+      expect(computed(b, 'padding', 1280)).toBe('1px 5px');
+      expect(computed(b, 'border-radius', 1280)).toBe('3px');
+    }
+    expect(computed(allow, 'color', 1280)).toBe('rgb(159, 212, 180)'); // #9fd4b4
+    expect(computed(decline, 'color', 1280)).toBe('rgb(138, 138, 138)'); // #8a8a8a
+    expect(computed(session, 'color', 1280)).toBe('rgb(138, 138, 138)');
+  });
+
+  it('a call the server cannot grant has two answers and one dot', () => {
+    const card = cardFor({ ...learn, grantable: false });
+    expect([...within(card).getByTestId('chat-approval-answers').children].map(c => c.textContent)).toEqual(['Allow', '·', 'Decline']);
+  });
+
+  it('hover lifts an answer; keyboard focus keeps a visible ring', () => {
+    // jsdom matches no :hover or :focus-visible, so the rules themselves are read.
+    const rules = [...cssRules()].filter(r => r.selectorText?.startsWith('.k-approval-answer:'));
+    const hover = rules.find(r => r.selectorText === '.k-approval-answer:hover')!;
+    expect(hover.style.getPropertyValue('color')).toBe('rgb(226, 226, 226)'); // #e2e2e2
+    expect(hover.style.getPropertyValue('background')).toBe('rgb(35, 35, 35)'); // #232323
+    const ring = rules.find(r => r.selectorText === '.k-approval-answer:focus-visible')!;
+    expect(ring.style.getPropertyValue('outline')).toBe('2px solid #4a7ab5');
+  });
+});
+
+function cssRules(): CSSStyleRule[] {
+  const style = document.createElement('style');
+  style.textContent = readFileSync('src/App.css', 'utf8');
+  document.head.appendChild(style);
+  try {
+    return [...style.sheet!.cssRules].filter((r): r is CSSStyleRule => 'selectorText' in r);
+  } finally {
+    style.remove();
+  }
+}
 
 describe('the loader row', () => {
   const group = (calls: ToolCall[]) => render(<ChatToolGroup lead={[]} approvals={{}} selectedId={null} onSelect={vi.fn()} onAnswer={vi.fn()} calls={calls} />);

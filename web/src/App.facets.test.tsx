@@ -1315,12 +1315,32 @@ describe('a chat target', () => {
     chatRoutes([{ ...CHAT_A, title: 'bind to alpha then list the latest facts', state: 'idle', turns: 1 }]);
     await mountApp();
     fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
-    await waitFor(() => expect(screen.getByTestId('target-label-name')).toHaveTextContent('bind to alpha then list the latest facts'));
+    // Shown capped (chatTitleShown, 20 characters then "…"); the tooltip keeps it whole.
+    await waitFor(() => expect(screen.getByTestId('target-label-name').textContent).toBe('bind to alpha then…'));
+    expect(screen.getByTestId('target-label-name')).toHaveAttribute('title', 'bind to alpha then list the latest facts');
     const es = await waitFor(() => { const e = chatStream('chat-a'); expect(e).toBeTruthy(); return e!; });
     act(() => { es.emit('chat_state', { title: 'Latest facts in alpha', state: 'idle', turns: 1, last_activity: 'x', started_at: 'y' }); });
-    expect(screen.getByTestId('rail-chat-title-chat-a')).toHaveTextContent('Latest facts in alpha');
-    expect(screen.getByTestId('target-label-name')).toHaveTextContent('Latest facts in alpha');
+    // 21 characters: both show it capped the one way (chatTitleShown).
+    expect(screen.getByTestId('rail-chat-title-chat-a').textContent).toBe('Latest facts in…');
+    expect(screen.getByTestId('target-label-name').textContent).toBe('Latest facts in…');
     expect(screen.getByTestId('target-label-name')).toHaveAttribute('title', 'Latest facts in alpha');
+  });
+
+  // Chat review, 2026-11-09: the top bar showed a long title whole while the
+  // rail showed a CSS-cut piece of it. Both now show chatTitleShown's string.
+  // SABOTAGE: render label.name uncapped in TopBar, or the raw title in the
+  // rail row, or change the helper's cap -> red.
+  it('a long title is the same capped string in the rail row and the top bar, model name and tabs still there', async () => {
+    const LONG = 'I am wondering what the biggest cybersecurity risks for AI agents are';
+    await primeApi();
+    chatRoutes([{ ...CHAT_A, title: LONG, state: 'idle', turns: 1 }]);
+    await mountApp();
+    fireEvent.click(await screen.findByTestId('rail-chat-chat-a'));
+    await waitFor(() => expect(screen.getByTestId('target-label-name').textContent).toBe('I am wondering what…'));
+    expect(screen.getByTestId('rail-chat-title-chat-a').textContent).toBe('I am wondering what…');
+    // The model name stays beside it, and the stored title is untouched (its tooltip).
+    expect(screen.getByTestId('target-label-sub')).toBeInTheDocument();
+    expect(screen.getByTestId('target-label-name')).toHaveAttribute('title', LONG);
   });
 
   // Rename by double-click, in the rail row and in the top bar: Enter or blur

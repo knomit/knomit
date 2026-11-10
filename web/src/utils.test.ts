@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { relativeTime, relativeTimeEpoch, typeStyles, defaultTypeStyle, LENS, repoHue, repoHueBg, repoHueBorder, shortBranch, rowPath, clampTitle, LIST_TITLE_MAX } from './utils';
+import { relativeTime, relativeTimeEpoch, typeStyles, defaultTypeStyle, LENS, repoHue, repoHueBg, repoHueBorder, shortBranch, rowPath, clampTitle, LIST_TITLE_MAX, chatTitleShown, CHAT_TITLE_SHOWN } from './utils';
 
 describe('relativeTime', () => {
   afterEach(() => { vi.useRealTimers(); });
@@ -331,5 +331,72 @@ describe('clampTitle', () => {
 
   it('does not collapse to a bare ellipsis when only leading spaces precede the first word', () => {
     expect(clampTitle('   ' + 'a'.repeat(150))).toBe('   ' + 'a'.repeat(116) + '…');
+  });
+});
+
+// Chat review, 2026-11-09: the user chose ONE display cap for a chat's title,
+// shared by the rail's CHATS row and the top bar: 20 characters (graphemes),
+// cut at a word boundary, trailing whitespace and punctuation trimmed, then "…".
+// SABOTAGE: return the title uncapped, or cap at 19 or 21 -> red.
+describe('chatTitleShown', () => {
+  it('is 20 characters', () => {
+    expect(CHAT_TITLE_SHOWN).toBe(20);
+  });
+
+  it('passes a title of exactly 20 characters through unchanged', () => {
+    const t = 'abcdefghij klmnopqrs';
+    expect(Array.from(t)).toHaveLength(20);
+    expect(chatTitleShown(t)).toBe('abcdefghij klmnopqrs');
+  });
+
+  it('cuts a 21-character title at the last word boundary in its first 20', () => {
+    const t = 'abcdefghij klmnopqr x';
+    expect(Array.from(t)).toHaveLength(21);
+    expect(chatTitleShown(t)).toBe('abcdefghij klmnopqr…');
+  });
+
+  it('keeps all 20 when a word ends exactly there', () => {
+    expect(chatTitleShown('abcdefghij klmnopqrs x')).toBe('abcdefghij klmnopqrs…');
+  });
+
+  it('cuts a long sentence at a word boundary, never mid-word', () => {
+    expect(chatTitleShown('I am wondering what the biggest cybersecurity risks for AI agents are')).toBe('I am wondering what…');
+    expect(chatTitleShown('bind to alpha then list the latest facts')).toBe('bind to alpha then…');
+  });
+
+  it('trims the punctuation left before the cut', () => {
+    expect(chatTitleShown('Risks and threats, all of them')).toBe('Risks and threats…');
+  });
+
+  it('hard-cuts a first word longer than 20 at 20', () => {
+    expect(chatTitleShown('Supercalifragilisticexpialidocious')).toBe('Supercalifragilistic…');
+  });
+
+  it('counts an emoji as one character and never splits it', () => {
+    // 19 letters, then the emoji as the 20th character: kept whole.
+    expect(chatTitleShown(`${'a'.repeat(19)}🔒more`)).toBe(`${'a'.repeat(19)}🔒…`);
+    // 20 emoji are 40 UTF-16 units but 20 characters: unchanged.
+    expect(chatTitleShown('🔒'.repeat(20))).toBe('🔒'.repeat(20));
+  });
+
+  // Review of PR #815: counting code points split what a reader sees as one
+  // character. A character is a grapheme (Intl.Segmenter).
+  // SABOTAGE: count Array.from(title) code points again -> these three go red.
+  it('keeps a joined family emoji whole: man, woman, girl joined by ZWJs is one character', () => {
+    const family = '\u{1F468}‍\u{1F469}‍\u{1F467}'; // 5 code points
+    // The family is the 19th character; the 20th is "m".
+    expect(chatTitleShown(`${'a'.repeat(18)}${family}more`)).toBe(`${'a'.repeat(18)}${family}m…`);
+  });
+
+  it('keeps a flag whole: two regional indicators are one character', () => {
+    const flag = '\u{1F1EB}\u{1F1F7}'; // FR
+    expect(chatTitleShown(`${'a'.repeat(19)}${flag}more`)).toBe(`${'a'.repeat(19)}${flag}…`);
+  });
+
+  it('keeps a combining accent on its letter', () => {
+    const e = 'é'; // e + COMBINING ACUTE ACCENT, two code points
+    expect(chatTitleShown(`${'a'.repeat(19)}${e}more`)).toBe(`${'a'.repeat(19)}${e}…`);
+    // 20 of them are 40 code points but 20 characters: unchanged.
+    expect(chatTitleShown(e.repeat(20))).toBe(e.repeat(20));
   });
 });

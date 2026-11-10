@@ -141,17 +141,26 @@ describe('the activity line on the page', () => {
     expect(screen.getByTestId('chat-tool-group')).toHaveAttribute('data-open', 'true');
   });
 
-  it('while running, the collapsed line is the same summary drawn amber, with a Stop pill that stops', async () => {
+  // Chat review, 2026-11-09: the activity line had its own red Stop pill, a
+  // second copy of the composer's Stop. It is gone; the composer's Stop stays.
+  // SABOTAGE: put the pill back -> the queryByTestId below is not null -> red.
+  it('while running, the collapsed line is the same summary drawn amber, with no Stop of its own; the composer\'s Stop stops', async () => {
     const { fx } = mount(snap([
       { kind: 'user', text: 'q' },
       { ...call('tu_1', 'knomit_bind', { lens: 'all' }), title: 'Bind', key_arg: 'all' },
       { ...call('tu_2', 'knomit_query', { binding: 'h', text: 'OWASP Q3' }, 'running'), title: 'Query', key_arg: 'OWASP Q3', in_base: true },
     ], { running: true }));
-    await screen.findByTestId('chat-activity-stop');
+    const group = await screen.findByTestId('chat-tool-group');
+    // Reached: the line IS live (the state the pill used to show in).
+    expect(group).toHaveAttribute('data-live', 'true');
     expect(summaryText()).toBe('Bind all · Query in all');
     expect(screen.getByTestId('chat-activity-summary')).toHaveStyle({ color: '#e8c27a' });
+    expect(screen.queryByTestId('chat-activity-stop')).toBeNull();
+    // The only button on the line is its own toggle; the one Stop is the composer's.
+    expect(within(group).getAllByRole('button').map(b => b.dataset.testid)).toEqual(['chat-tool-group-toggle']);
+    expect(screen.getAllByRole('button', { name: /^Stop/ }).map(b => b.dataset.testid)).toEqual(['chat-stop']);
     fx.calls.length = 0;
-    fireEvent.click(screen.getByTestId('chat-activity-stop'));
+    fireEvent.click(screen.getByTestId('chat-stop'));
     expect(fx.calls.map(c => c.route)).toEqual([`POST ${BASE}/cancel`]);
   });
 

@@ -300,7 +300,7 @@ export function ChatPanel({ state, selectedId, actionError, notSent, landed, mod
                   }
                   return (
                     <ChatToolGroup key={b.key} lead={b.lead} calls={b.calls} approvals={state.approvals} bound={boundBefore.get(`${ti}:${b.key}`) ?? ''}
-                      running={live} onStop={onStop} selectedId={selectedId} onSelect={onSelect} onAnswer={onAnswer} />
+                      running={live} selectedId={selectedId} onSelect={onSelect} onAnswer={onAnswer} />
                   );
                 })}
                 {t.stopped && !live && (
