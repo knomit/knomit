@@ -96,6 +96,8 @@ func TestValidate_OAuthClients(t *testing.T) {
 		"no redirect uris": {ID: "app"},
 		"relative uri":     {ID: "app", RedirectURIs: []string{"/cb"}},
 		"fragment in uri":  {ID: "app", RedirectURIs: []string{"https://app.example/cb#x"}},
+		// The built-in browser client of the unified auth model (P3).
+		"reserved web client": {ID: "knomit-web", RedirectURIs: []string{"https://app.example/cb"}},
 	} {
 		cfg := Defaults()
 		cfg.OAuth.Issuer, cfg.OAuth.Addr = "https://knomit.example.com", "127.0.0.1:19280"

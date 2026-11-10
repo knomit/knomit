@@ -134,6 +134,9 @@ func (o OAuthConfig) validate() error {
 		if c.ID == "" {
 			return errors.New("config: [[oauth.client]] needs an id")
 		}
+		if c.ID == "knomit-web" {
+			return errors.New("config: [[oauth.client]] id \"knomit-web\" is reserved for the built-in browser client")
+		}
 		if seen[c.ID] {
 			return fmt.Errorf("config: [[oauth.client]] id %q appears twice", c.ID)
 		}

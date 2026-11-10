@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -68,17 +69,20 @@ func (p Pending) Expired(now time.Time) bool { return !now.Before(p.ExpiresAt) }
 // CreatePending parks a validated request. Expired rows are purged first, so
 // they neither count toward the cap nor accumulate.
 func (s *Store) CreatePending(ctx context.Context, p Pending) (Pending, error) {
+	if p.ClientID == WebClientID {
+		return Pending{}, fmt.Errorf("%w: %s is the built-in browser client; it pairs through StartPairing", ErrInvalidClient, WebClientID)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Pending{}, err
 	}
 	defer tx.Rollback()
 	now := s.now()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM oauth_pending WHERE expires_at <= ?`, now.Unix()); err != nil {
+	if err := purgeExpiredPending(ctx, tx, now); err != nil {
 		return Pending{}, err
 	}
 	var live int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oauth_pending WHERE decision = ''`).Scan(&live); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM oauth_pending WHERE decision = '' AND client_id != ?`, WebClientID).Scan(&live); err != nil {
 		return Pending{}, err
 	}
 	if live >= maxLivePending {
@@ -127,15 +131,37 @@ func getPending(ctx context.Context, q querier, id string) (Pending, error) {
 	return p, err
 }
 
+// getAgentPending is getPending for the OAuth client (agent) queue: a browser
+// pairing row (client WebClientID) is not an agent request, so every agent
+// path — list, describe, approve, deny, signed approve, collect into a code —
+// sees it as unknown. Pairings are decided only through pairing.go.
+func getAgentPending(ctx context.Context, q querier, id string) (Pending, error) {
+	p, err := getPending(ctx, q, id)
+	if err == nil && p.ClientID == WebClientID {
+		return Pending{}, ErrUnknownPending
+	}
+	return p, err
+}
+
+// purgeExpiredPending deletes expired requests, agent and pairing alike, and
+// the pairing rows whose request went with them.
+func purgeExpiredPending(ctx context.Context, tx *sql.Tx, now time.Time) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM oauth_pending WHERE expires_at <= ?`, now.Unix()); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `DELETE FROM auth_pairing WHERE pending_id NOT IN (SELECT id FROM oauth_pending)`)
+	return err
+}
+
 func (s *Store) GetPending(ctx context.Context, id string) (Pending, error) {
-	return getPending(ctx, s.db, id)
+	return getAgentPending(ctx, s.db, id)
 }
 
 // ListPending is what `knomit oauth pending` shows: undecided, unexpired,
 // oldest first.
 func (s *Store) ListPending(ctx context.Context) ([]Pending, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+pendingCols+` FROM oauth_pending
-WHERE decision = '' AND expires_at > ? ORDER BY created_at, id`, s.now().Unix())
+WHERE decision = '' AND expires_at > ? AND client_id != ? ORDER BY created_at, id`, s.now().Unix(), WebClientID)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +184,7 @@ func (s *Store) Decide(ctx context.Context, id, decision, subject string, ceilin
 		return err
 	}
 	defer tx.Rollback()
-	p, err := getPending(ctx, tx, id)
+	p, err := getAgentPending(ctx, tx, id)
 	if err != nil {
 		return err
 	}
@@ -189,7 +215,7 @@ func (s *Store) Collect(ctx context.Context, id string) (string, Pending, error)
 		return "", Pending{}, err
 	}
 	defer tx.Rollback()
-	p, err := getPending(ctx, tx, id)
+	p, err := getAgentPending(ctx, tx, id)
 	if err != nil {
 		return "", Pending{}, err
 	}

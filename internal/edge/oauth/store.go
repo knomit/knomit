@@ -241,6 +241,7 @@ func (s *Store) issuePairTx(ctx context.Context, tx *sql.Tx, f Family) (Issued, 
 type tokenRow struct {
 	kind      string
 	expiresAt time.Time
+	issuedAt  time.Time // created_at: a refresh token's idle lifetime runs from here
 	rotated   bool
 	family    Family
 }
@@ -282,18 +283,19 @@ func lookupToken(ctx context.Context, q querier, token string) (tokenRow, error)
 		r       tokenRow
 		exp     int64
 		rotated sql.NullInt64
+		issued  int64
 	)
 	f, err := scanFamily(q.QueryRowContext(ctx, `
-SELECT `+familyCols+`, t.kind, t.expires_at, t.rotated_at
+SELECT `+familyCols+`, t.kind, t.expires_at, t.rotated_at, t.created_at
 FROM oauth_tokens t JOIN oauth_families f ON f.id = t.family
-WHERE t.hash = ?`, hashSecret(token)).Scan, &r.kind, &exp, &rotated)
+WHERE t.hash = ?`, hashSecret(token)).Scan, &r.kind, &exp, &rotated, &issued)
 	if errors.Is(err, sql.ErrNoRows) {
 		return tokenRow{}, ErrUnknownToken
 	}
 	if err != nil {
 		return tokenRow{}, err
 	}
-	r.family, r.expiresAt, r.rotated = f, time.Unix(exp, 0), rotated.Valid
+	r.family, r.expiresAt, r.rotated, r.issuedAt = f, time.Unix(exp, 0), rotated.Valid, time.Unix(issued, 0)
 	return r, nil
 }
 
@@ -369,6 +371,12 @@ func (s *Store) Refresh(ctx context.Context, refresh, clientID, resource string,
 	reuse := func() (Issued, error) { return revokeWith(ErrReused) }
 	if r.rotated {
 		return reuse()
+	}
+	// Idle: a refresh token unused for RefreshIdle since it was issued is
+	// dead (rotation issues a new one, so each refresh restarts the clock).
+	// Nothing is rotated or revoked: the client just has to log in again.
+	if !s.now().Before(r.issuedAt.Add(s.lt.RefreshIdle)) {
+		return Issued{}, ErrExpired
 	}
 	// The family's absolute end is checked once, in issuePairTx: past it,
 	// the error rolls this transaction back, rotation included.
