@@ -29,7 +29,7 @@ import (
 //     refusing such a request only while it keeps whatever address and
 //     principal it had. A refusal test that needs the loopback address (the
 //     old gate refuses the anonymous LOOPBACK principal for lack of a grant)
-//     writes asAnonymous(fromLoopback(r)) so the address stays explicit.
+//     uses the asAnonymousOnLoopback(r) helper so the address stays explicit.
 func init() {
 	injectedPolicy = func(r *http.Request) (authz.Policy, bool) {
 		pol, ok := r.Context().Value(testPolicyKey{}).(authz.Policy)
