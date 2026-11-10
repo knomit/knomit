@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -41,21 +42,51 @@ type routeRule struct {
 	Possible []authz.Permission
 }
 
-// ruleFor finds the rule for r through router's own matcher (chi Mux.Find,
-// which descends into mounted subrouters and returns the composed pattern).
-// For the API router r.URL.Path must be relative to httpx.APIBase. No route,
-// or a method the route does not serve, is (zero, false): deny.
+// ruleFor finds the rule for the route chi itself would serve r with. It
+// routes r through router's own tree (Routes.Match, which descends into
+// mounted subrouters) on the SAME path chi routes on — r.URL.RawPath when it
+// is set, else r.URL.Path (chi Mux.routeHTTP) — and reads the matched
+// pattern back the way chi reports it at serve time (Context.RoutePattern).
+// So a mount root called without its trailing slash (GET /repos/alpha, the
+// form the clients use) finds the "/repos/{repo}/" rule, and an encoded slash
+// is one segment, exactly as chi sees it.
+//
+// For the API router the path must be relative to httpx.APIBase. No route, or
+// a method the route does not serve, is (zero, false): deny.
 func ruleFor(router chi.Routes, rules []routeRule, r *http.Request) (routeRule, bool) {
-	pattern := router.Find(chi.NewRouteContext(), r.Method, r.URL.Path)
-	if pattern == "" {
+	path := r.URL.RawPath
+	if path == "" {
+		path = r.URL.Path
+	}
+	if path == "" {
+		path = "/"
+	}
+	rctx := chi.NewRouteContext()
+	if !router.Match(rctx, r.Method, path) {
 		return routeRule{}, false
 	}
+	pattern := normalizePattern(rctx.RoutePattern())
 	for _, rule := range rules {
-		if rule.Method == r.Method && rule.Pattern == pattern {
+		if rule.Method == r.Method && normalizePattern(rule.Pattern) == pattern {
 			return rule, true
 		}
 	}
 	return routeRule{}, false
+}
+
+// normalizePattern spells a pattern the way chi's Context.RoutePattern does:
+// "/*/" collapsed to "/", and no trailing slash except on the root. The table
+// keeps walkFull's spelling ("/repos/{repo}/"); TestRouteRules_NormalizedPatternsUnique
+// guarantees no two rules of one method collapse onto each other.
+func normalizePattern(p string) string {
+	for strings.Contains(p, "/*/") {
+		p = strings.ReplaceAll(p, "/*/", "/")
+	}
+	if p != "/" {
+		p = strings.TrimSuffix(p, "//")
+		p = strings.TrimSuffix(p, "/")
+	}
+	return p
 }
 
 // allMethods are the methods chi registers for HandleFunc and Mount (chi

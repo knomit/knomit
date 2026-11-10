@@ -4,6 +4,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -319,6 +322,172 @@ func TestRuleFor_FindsMountedSubrouterPatterns(t *testing.T) {
 		if !ok || r.Pattern != c.wantPattern {
 			t.Errorf("outer %s %s: rule %s (%v), want pattern %s", c.method, c.path, ruleKey(r), ok, c.wantPattern)
 		}
+	}
+}
+
+// concretePath turns a walked pattern into a path chi routes to it: every
+// {param} becomes a plain segment, a trailing * a two-segment tail.
+func concretePath(pattern string) string {
+	var b strings.Builder
+	for i := 0; i < len(pattern); i++ {
+		switch pattern[i] {
+		case '{':
+			j := strings.IndexByte(pattern[i:], '}')
+			b.WriteString("v1")
+			i += j
+		case '*':
+			b.WriteString("a/b.md")
+		default:
+			b.WriteByte(pattern[i])
+		}
+	}
+	return b.String()
+}
+
+// TestRuleFor_EveryRouteByConcretePath: a request to a concrete path of EVERY
+// walked route finds that route's own rule, and so does the no-trailing-slash
+// spelling of a subrouter root (GET /repos/alpha, /secrets, /oauth/pending),
+// which is the spelling web/src/api.ts and the bridge actually call: chi
+// routes it to the same handler, so the rule must be the same one.
+func TestRuleFor_EveryRouteByConcretePath(t *testing.T) {
+	s := registryServer(t)
+	api := s.NewAPIRouter()
+	var chains []routeChain
+	walkFull(api, "", nil, &chains)
+	outer := s.Handler().(*chi.Mux)
+	var outerChains []routeChain
+	walkFull(outer, "", nil, &outerChains)
+
+	check := func(router chi.Routes, rules []routeRule, route string) {
+		t.Helper()
+		method, pattern, _ := strings.Cut(route, " ")
+		paths := []string{concretePath(pattern)}
+		if strings.HasSuffix(pattern, "/") && pattern != "/" {
+			paths = append(paths, strings.TrimSuffix(concretePath(pattern), "/"))
+		}
+		for _, p := range paths {
+			r, ok := ruleFor(router, rules, httptest.NewRequest(method, p, nil))
+			if !ok {
+				t.Errorf("%s %s (route %s): no rule", method, p, route)
+				continue
+			}
+			if ruleKey(r) != route {
+				t.Errorf("%s %s: got rule %s, want %s", method, p, ruleKey(r), route)
+			}
+		}
+	}
+	for _, rc := range chains {
+		check(api, apiRouteRules, rc.route)
+	}
+	for _, rc := range outerChains {
+		_, pattern, _ := strings.Cut(rc.route, " ")
+		if strings.HasPrefix(pattern, httpx.APIBase) {
+			continue
+		}
+		check(outer, outerRouteRules, rc.route)
+	}
+}
+
+// ruleFor compares patterns in chi's RoutePattern spelling; no two rules of
+// one method may collapse onto the same one, or a request would take
+// whichever comes first.
+func TestRouteRules_NormalizedPatternsUnique(t *testing.T) {
+	for name, rules := range map[string][]routeRule{"api": apiRouteRules, "outer": outerRouteRules} {
+		seen := map[string]string{}
+		for _, r := range rules {
+			k := r.Method + " " + normalizePattern(r.Pattern)
+			if prev, dup := seen[k]; dup {
+				t.Errorf("%s: %s and %s are the same route to chi", name, prev, ruleKey(r))
+			}
+			seen[k] = ruleKey(r)
+		}
+	}
+}
+
+// webClientPath matches an API path literal in web/src/api.ts: a quoted or
+// template string starting with /api/v1.
+var webClientPath = regexp.MustCompile("['`](/api/v1[^'`?]*)")
+
+// TestRuleFor_WebClientPaths: every API path the web client spells out finds
+// a rule for at least one method. The method lives elsewhere in each call,
+// so this checks the PATH spelling (trailing slash or not, parameters), which
+// is what a Find-style lookup got wrong. A path whose parameter is glued to a
+// segment (`/fleet${path}`) is skipped: its concrete form is not in the file.
+func TestRuleFor_WebClientPaths(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "..", "web", "src", "api.ts"))
+	if err != nil {
+		t.Skipf("web client source not available: %v", err)
+	}
+	api := registryServer(t).NewAPIRouter()
+	param := regexp.MustCompile(`\$\{[^}]*\}`)
+	seen := 0
+	for _, m := range webClientPath.FindAllStringSubmatch(string(src), -1) {
+		p := m[1]
+		if loc := param.FindStringIndex(p); loc != nil && p[loc[0]-1] != '/' {
+			continue
+		}
+		p = strings.TrimPrefix(param.ReplaceAllString(p, "v1"), httpx.APIBase)
+		if p == "" {
+			p = "/"
+		}
+		seen++
+		found := false
+		for _, method := range allMethods {
+			if _, ok := ruleFor(api, apiRouteRules, httptest.NewRequest(method, p, nil)); ok {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("web client path %q (%s) finds no rule for any method", m[1], p)
+		}
+	}
+	if seen < 30 {
+		t.Fatalf("extracted only %d paths from api.ts: the pattern no longer matches the client", seen)
+	}
+}
+
+// The named mount roots, without their trailing slash, as the clients call
+// them.
+func TestRuleFor_MountRootsWithoutSlash(t *testing.T) {
+	api := registryServer(t).NewAPIRouter()
+	for _, c := range []struct {
+		method, path, want string
+	}{
+		{"GET", "/repos/alpha", "GET /repos/{repo}/"},
+		{"PATCH", "/repos/alpha", "PATCH /repos/{repo}/"},
+		{"DELETE", "/repos/alpha", "DELETE /repos/{repo}/"},
+		{"GET", "/lenses/x", "GET /lenses/{lens}/"},
+		{"DELETE", "/lenses/x", "DELETE /lenses/{lens}/"},
+		{"GET", "/secrets", "GET /secrets/"},
+		{"POST", "/secrets", "POST /secrets/"},
+		{"GET", "/oauth/pending", "GET /oauth/pending/"},
+		{"GET", "/oauth/grants", "GET /oauth/grants/"},
+		{"GET", "/repos/a/origin-sessions", "GET /repos/{repo}/origin-sessions/"},
+		{"POST", "/repos/a/origin-sessions", "POST /repos/{repo}/origin-sessions/"},
+		{"DELETE", "/repos/a/experiments/e", "DELETE /repos/{repo}/experiments/{name}/"},
+		{"GET", "/repos/a/branches/b", "GET /repos/{repo}/branches/{branch}/"},
+	} {
+		r, ok := ruleFor(api, apiRouteRules, httptest.NewRequest(c.method, c.path, nil))
+		if !ok || ruleKey(r) != c.want {
+			t.Errorf("%s %s: rule %q (%v), want %q", c.method, c.path, ruleKey(r), ok, c.want)
+		}
+	}
+}
+
+// chi routes on r.URL.RawPath when it is set, so an encoded slash is one
+// segment to chi. The rule must be the one for the route chi actually picks:
+// this DELETE archives repo "a/branches/b/search/factset" (repo:manage), it
+// does not close a factset (kb:read).
+func TestRuleFor_FollowsRawPathLikeChi(t *testing.T) {
+	api := registryServer(t).NewAPIRouter()
+	req := httptest.NewRequest("DELETE", "/repos/a%2Fbranches%2Fb%2Fsearch%2Ffactset", nil)
+	if req.URL.RawPath == "" {
+		t.Fatal("fixture: RawPath not set, the test proves nothing")
+	}
+	r, ok := ruleFor(api, apiRouteRules, req)
+	if !ok || ruleKey(r) != "DELETE /repos/{repo}/" || r.Perm != authz.RepoManage {
+		t.Fatalf("rule %q -> %q (%v), want DELETE /repos/{repo}/ -> repo:manage", ruleKey(r), r.Perm, ok)
 	}
 }
 
