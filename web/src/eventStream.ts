@@ -334,12 +334,16 @@ export function watchUnauthorized(s: EventSourceLike, url: string): void {
     // probe, and a browser has only a handful per host (the requests the page
     // is waiting for queue behind them).
     probing = true;
+    // AbortSignal.timeout rather than a setTimeout: the stream's owners
+    // (chatEvents' reopen timer) count the page's timers.
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), PROBE_TIMEOUT_MS);
-    fetch(url, { headers: { Accept: 'text/event-stream' }, signal: ac.signal })
+    const signal = typeof AbortSignal.any === 'function' && typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.any([ac.signal, AbortSignal.timeout(PROBE_TIMEOUT_MS)])
+      : ac.signal;
+    fetch(url, { headers: { Accept: 'text/event-stream' }, signal })
       .then(r => { noteStatus(r.status); })
       .catch(() => { /* gone or aborted: nothing to learn */ })
-      .finally(() => { clearTimeout(timer); ac.abort(); probing = false; });
+      .finally(() => { ac.abort(); probing = false; });
   });
 }
 
