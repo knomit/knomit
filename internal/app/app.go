@@ -25,6 +25,7 @@ import (
 	"knomit/internal/engine/embeddings"
 	"knomit/internal/engine/llm"
 	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/authz"
 	"knomit/internal/foundation/config"
 	"knomit/internal/foundation/pki"
 	"knomit/internal/platform/logging"
@@ -41,6 +42,9 @@ type App struct {
 	agentBranch string
 	agentID     string // persisted instance_identity.agent_id
 	agentHost   string // host label persisted with the identity
+	// authz is the new authorization model's materializer (unified authn/z
+	// P1). Built and seeded at boot, consulted by nothing until the flip.
+	authz *authz.Materializer
 
 	closers []func()
 	// endLifetime ends server.Lifetime; Close calls it first.
@@ -252,6 +256,16 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		a.Close()
 		return nil, fmt.Errorf("start manager: %w", err)
 	}
+
+	// The new authorization model, dark (unified authn/z P1): sync the role
+	// seed and build the materializer. AFTER Start, which opens control.db.
+	// A failure stops the boot, for the same reason seedOwnPrincipal's does.
+	_, materializer, err := authzBoot(ctx, a.manager.ControlDB())
+	if err != nil {
+		a.Close()
+		return nil, fmt.Errorf("seed authz roles: %w", err)
+	}
+	a.authz = materializer
 
 	// The materialized-search (FactSet) cache is process-wide: one budget
 	// across every repo's FactSets, and its heartbeat keeps ahead of the

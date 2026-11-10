@@ -9,14 +9,6 @@ import (
 	"knomit/internal/edge/web/hal"
 )
 
-type probeOriginRequest struct {
-	URL        string `json:"url"`
-	Branch     string `json:"branch"`
-	AuthMethod string `json:"auth_method"`
-	AuthToken  string `json:"auth_token"`
-	SecretID   string `json:"secret_id"`
-}
-
 // handleReposProbeOrigin serves POST /api/v1/repos:probe-origin. Collection
 // level, because it runs BEFORE any repo exists — the origin-session test
 // endpoint needs a {repo} and so cannot serve pre-create probing.
@@ -29,7 +21,7 @@ type probeOriginRequest struct {
 // needs admin and must fit the URL (422).
 func handleReposProbeOrigin(m *repos.Manager, admin func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req probeOriginRequest
+		var req httpx.ProbeOriginBody
 		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}

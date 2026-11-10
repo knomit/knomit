@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/corpus/repos"
+	"knomit/internal/foundation/authz"
 )
 
 // registeredActions returns the values of a tool's `action` enum, or nil for a
@@ -281,5 +282,74 @@ func TestClassifyCall_ActionFollowsDispatch(t *testing.T) {
 			require.Equal(t, c.readOnly, got.ReadOnly)
 			require.Equal(t, c.destructive, got.Destructive)
 		})
+	}
+}
+
+// Every (tool, action) row declares the permission a call needs (unified
+// authn/z P1): the MCP half of the permission registry. Undeclared is denied.
+func TestToolEffects_EveryRowHasPermission(t *testing.T) {
+	for _, e := range toolEffects {
+		if _, err := authz.ParsePermission(string(e.Perm)); err != nil {
+			t.Errorf("%s %q: Perm %q is not a permission: %v", e.Tool, e.Action, e.Perm, err)
+		}
+	}
+}
+
+// ReadOnly <=> kb:read, with no exceptions: a read-only call needs only
+// kb:read and anything with a side effect needs more. This is also what moves
+// the read actions of review, hypothesize and experiment off kb:write (§3).
+func TestToolEffects_ReadOnlyRowsAreKBRead(t *testing.T) {
+	for _, e := range toolEffects {
+		if e.ReadOnly != (e.Perm == authz.KBRead) {
+			t.Errorf("%s %q: ReadOnly=%v but Perm=%q", e.Tool, e.Action, e.ReadOnly, e.Perm)
+		}
+	}
+}
+
+func TestPermissionFor_ReadActionsAreKBRead(t *testing.T) {
+	cases := []struct {
+		tool string
+		args map[string]any
+		want authz.Permission
+	}{
+		{"knomit_query", map[string]any{"text": "x"}, authz.KBRead},
+		{"knomit_explain", map[string]any{}, authz.KBRead},
+		{"knomit_bind", map[string]any{}, authz.KBRead},
+		{"knomit_experiment", map[string]any{"action": "list"}, authz.KBRead},
+		{"knomit_review", map[string]any{"session_id": "s", "page": float64(2)}, authz.KBRead},
+		{"knomit_review", map[string]any{"session_id": "s"}, authz.KBRead},
+		{"knomit_hypothesize", map[string]any{"session_id": "s", "current": true}, authz.KBRead},
+
+		{"knomit_experiment", map[string]any{"action": "open"}, authz.KBWrite},
+		{"knomit_experiment", map[string]any{"action": "sync"}, authz.KBWrite},
+		{"knomit_experiment", map[string]any{"action": "commit"}, authz.KBWrite},
+		{"knomit_experiment", map[string]any{"action": "rollback"}, authz.KBWrite},
+		{"knomit_review", map[string]any{}, authz.KBWrite},
+		{"knomit_review", map[string]any{"session_id": "s", "item_id": float64(3), "response": "{}"}, authz.KBWrite},
+		{"knomit_review", map[string]any{"takeover": true}, authz.KBWrite},
+		{"knomit_hypothesize", map[string]any{}, authz.KBWrite},
+		{"knomit_hypothesize", map[string]any{"session_id": "s"}, authz.KBWrite},
+		{"knomit_learn", map[string]any{}, authz.KBWrite},
+		{"knomit_update", map[string]any{}, authz.KBWrite},
+		{"knomit_retract", map[string]any{}, authz.KBWrite},
+	}
+	for _, c := range cases {
+		got, ok := PermissionFor(c.tool, c.args)
+		if !ok || got != c.want {
+			t.Errorf("PermissionFor(%s, %v) = %q, %v; want %q", c.tool, c.args, got, ok, c.want)
+		}
+	}
+	// A tool or action the table does not know is denied, not defaulted.
+	for _, c := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"knomit_nope", nil},
+		{"knomit_experiment", map[string]any{"action": "explode"}},
+		{"knomit_experiment", map[string]any{}},
+	} {
+		if p, ok := PermissionFor(c.tool, c.args); ok {
+			t.Errorf("PermissionFor(%s, %v) = %q, want denied", c.tool, c.args, p)
+		}
 	}
 }

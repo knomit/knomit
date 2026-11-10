@@ -122,6 +122,10 @@ var controlObjects = []string{
 	// repo_archive_reasons has no index: it is read by its uid primary key,
 	// and listed through a LEFT JOIN from repos.
 	"repo_archive_reasons",
+	// authz (unified authn/z P1). No secondary indexes: roles and their
+	// permissions are a handful of rows read whole, bindings are read by
+	// their (principal, role) primary key prefix, auth_state by key.
+	"auth_roles", "auth_role_permissions", "auth_role_bindings", "auth_state",
 }
 
 // newestControlVersion is the highest numbered up-migration in the EMBEDDED

@@ -56,22 +56,12 @@ func handleJoinFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	}
 }
 
-// joinRequest is the body of POST /fleet/join and /fleet/join:check.
-type joinRequest struct {
-	AuthMethod string `json:"auth_method,omitempty"`
-	AuthToken  string `json:"auth_token,omitempty"`
-	// SecretID: a stored secret for a forge-hosted fleet, instead of a
-	// pasted credential.
-	SecretID string `json:"secret_id,omitempty"`
-	Bundle   string `json:"bundle"`
-}
-
 // decodeJoinRequest reads a join body and runs its edge checks: a bundle is
 // required (bundle_required), and auth_method must fit the URL the bundle
 // names, as for every other origin (auth_invalid; cert is never an input).
 // A bundle that does not parse is left to JoinFleet's bundle_invalid.
-func decodeJoinRequest(w http.ResponseWriter, r *http.Request) (joinRequest, bool) {
-	var req joinRequest
+func decodeJoinRequest(w http.ResponseWriter, r *http.Request) (httpx.FleetJoinBody, bool) {
+	var req httpx.FleetJoinBody
 	if !httpx.DecodeJSON(w, r, &req, 0) {
 		return req, false
 	}
@@ -241,18 +231,6 @@ func handleHostFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	}
 }
 
-// followRequest is the body of POST /fleet/follow.
-type followRequest struct {
-	URL        string `json:"url"`
-	AuthMethod string `json:"auth_method,omitempty"`
-	AuthToken  string `json:"auth_token,omitempty"`
-	User       string `json:"user,omitempty"`
-	Password   string `json:"password,omitempty"`
-	// SecretID: a stored secret for the forge instead of a pasted
-	// credential ("Update access" with a stored secret, or a move).
-	SecretID string `json:"secret_id,omitempty"`
-}
-
 // writeSecretWithPasted answers a fleet body that carries secret_id and a
 // pasted credential: 400 auth_invalid.
 func writeSecretWithPasted(w http.ResponseWriter, r *http.Request) {
@@ -268,7 +246,7 @@ func writeSecretWithPasted(w http.ResponseWriter, r *http.Request) {
 // reachable (unreachable); the attach's own refusals map as PUT origin's do.
 func handleFollowFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req followRequest
+		var req httpx.FleetFollowBody
 		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}

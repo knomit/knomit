@@ -28,25 +28,13 @@ import (
 	"knomit/internal/foundation/pki"
 )
 
-// createSessionRequest is the expected JSON body for POST /origin/session.
-type createSessionRequest struct {
-	URL        string `json:"url"`
-	AuthMethod string `json:"auth_method"`
-	Token      string `json:"token"`
-	User       string `json:"user"`
-	Password   string `json:"password"`
-	// SecretID tests and commits with a stored secret instead of a pasted
-	// credential (admin only; the secret must fit the URL).
-	SecretID string `json:"secret_id"`
-}
-
 // handleCreateSession serves POST /repos/{repo}/origin-sessions. A session
 // with secret_id passes admin and must fit the URL (422).
 func handleCreateSession(b hal.URLBuilder, rm *repos.Manager, sm *sessionManager, admin func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo := chi.URLParam(r, "repo")
 
-		var req createSessionRequest
+		var req httpx.OriginSessionBody
 		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}

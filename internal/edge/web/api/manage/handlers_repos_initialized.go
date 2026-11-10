@@ -9,17 +9,6 @@ import (
 	"knomit/internal/edge/web/hal"
 )
 
-type probeInitializedRequest struct {
-	URL    string `json:"url"`
-	Branch string `json:"branch"`
-	// Credentials are carried for the same reason probe-origin carries them:
-	// an answer obtained anonymously is an answer about a different request.
-	AuthMethod string `json:"auth_method"`
-	AuthToken  string `json:"auth_token"`
-	// SecretID probes with a stored secret instead (admin only).
-	SecretID string `json:"secret_id"`
-}
-
 // handleReposProbeInitialized serves POST /api/v1/repos:probe-initialized —
 // "does this BRANCH of this remote already hold a knomit knowledge base?"
 //
@@ -40,7 +29,7 @@ type probeInitializedRequest struct {
 // Both are unrecoverable. The wizard blocks and offers a retry instead.
 func handleReposProbeInitialized(m *repos.Manager, admin func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req probeInitializedRequest
+		var req httpx.ProbeInitializedBody
 		// Bounded like the create endpoint's body. This one takes a URL and a
 		// credential and nothing else, so anything approaching the cap is not a
 		// request this handler can serve — and an unbounded decode on a public

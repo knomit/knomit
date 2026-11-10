@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+
+	"knomit/internal/foundation/authz"
 )
 
 // CallEffect classifies one (tool, action) pair. This table is the single
@@ -14,6 +16,12 @@ import (
 type CallEffect struct {
 	Tool, Action          string // Action "" for single-action tools
 	ReadOnly, Destructive bool
+	// Perm is the permission a call needs (unified authn/z design §3): the
+	// MCP half of the permission registry. ReadOnly rows are kb:read and
+	// every other row needs more (TestToolEffects_ReadOnlyRowsAreKBRead).
+	// Not yet enforced: the old permissionFilter and gatePermission decide until the
+	// flip (P4) gates each call on Policy.Has(PermissionFor(...)).
+	Perm authz.Permission
 	// Replay says whether calling the same thing again returns the same data
 	// and has no session effect (see Replay). Every row states it; the zero
 	// value is "not stated" and fails TestToolEffects_EveryRowStatesReplay.
@@ -58,45 +66,45 @@ var cursorArgs = []string{"cursor"}
 // or a new `action` enum value without a row fails
 // TestToolEffects_EveryRegisteredToolHasRows.
 var toolEffects = []CallEffect{
-	{Tool: "knomit_query", ReadOnly: true, Replay: ReplayYes, ReplayNotWith: cursorArgs},
-	{Tool: "knomit_explain", ReadOnly: true, Replay: ReplayYes, ReplayNotWith: cursorArgs},
-	{Tool: "knomit_materialize", ReadOnly: true, Replay: ReplayYes, ReplayNotWith: cursorArgs},
-	{Tool: "knomit_changes", ReadOnly: true, Replay: ReplayYes},
-	{Tool: "knomit_skill", ReadOnly: true, Replay: ReplayYes},
-	{Tool: "knomit_repos", ReadOnly: true, Replay: ReplayYes},
+	{Tool: "knomit_query", ReadOnly: true, Perm: authz.KBRead, Replay: ReplayYes, ReplayNotWith: cursorArgs},
+	{Tool: "knomit_explain", ReadOnly: true, Perm: authz.KBRead, Replay: ReplayYes, ReplayNotWith: cursorArgs},
+	{Tool: "knomit_materialize", ReadOnly: true, Perm: authz.KBRead, Replay: ReplayYes, ReplayNotWith: cursorArgs},
+	{Tool: "knomit_changes", ReadOnly: true, Perm: authz.KBRead, Replay: ReplayYes},
+	{Tool: "knomit_skill", ReadOnly: true, Perm: authz.KBRead, Replay: ReplayYes},
+	{Tool: "knomit_repos", ReadOnly: true, Perm: authz.KBRead, Replay: ReplayYes},
 	// bind mints a handle and writes no knowledge.
-	{Tool: "knomit_bind", ReadOnly: true, Replay: ReplayNo},
+	{Tool: "knomit_bind", ReadOnly: true, Perm: authz.KBRead, Replay: ReplayNo},
 
-	{Tool: "knomit_learn", Destructive: true, Replay: ReplayNo},
-	{Tool: "knomit_update", Destructive: true, Replay: ReplayNo},
-	{Tool: "knomit_retract", Destructive: true, Replay: ReplayNo},
+	{Tool: "knomit_learn", Destructive: true, Perm: authz.KBWrite, Replay: ReplayNo},
+	{Tool: "knomit_update", Destructive: true, Perm: authz.KBWrite, Replay: ReplayNo},
+	{Tool: "knomit_retract", Destructive: true, Perm: authz.KBWrite, Replay: ReplayNo},
 
 	// A start opens or resumes a pipeline session and can DISPLACE a session
 	// idle past the resume window even without takeover, so it needs approval.
-	{Tool: "knomit_review", Action: actStart, Replay: ReplayNo},
+	{Tool: "knomit_review", Action: actStart, Perm: authz.KBWrite, Replay: ReplayNo},
 	// page and current only read, or advance, the caller's own session. Neither
 	// is replayable: page advances, and current takes the session's next step
 	// when nothing is outstanding (Pipeline.Current), so calling it again can
 	// move the session.
-	{Tool: "knomit_review", Action: actPage, ReadOnly: true, Replay: ReplayNo},
-	{Tool: "knomit_review", Action: actCurrent, ReadOnly: true, Replay: ReplayNo},
-	{Tool: "knomit_review", Action: actAnswer, Destructive: true, Replay: ReplayNo},
+	{Tool: "knomit_review", Action: actPage, ReadOnly: true, Perm: authz.KBRead, Replay: ReplayNo},
+	{Tool: "knomit_review", Action: actCurrent, ReadOnly: true, Perm: authz.KBRead, Replay: ReplayNo},
+	{Tool: "knomit_review", Action: actAnswer, Destructive: true, Perm: authz.KBWrite, Replay: ReplayNo},
 	// A takeover start abandons another caller's session, so it is a write
 	// of its own kind, never covered by a grant for answers.
-	{Tool: "knomit_review", Action: actTakeover, Destructive: true, Replay: ReplayNo},
+	{Tool: "knomit_review", Action: actTakeover, Destructive: true, Perm: authz.KBWrite, Replay: ReplayNo},
 
 	// A start creates a session and silently displaces an active one on its
 	// branch (there is no resume rule, unlike review), so it needs approval.
-	{Tool: "knomit_hypothesize", Action: actStart, Replay: ReplayNo},
-	{Tool: "knomit_hypothesize", Action: actCurrent, ReadOnly: true, Replay: ReplayNo},
+	{Tool: "knomit_hypothesize", Action: actStart, Perm: authz.KBWrite, Replay: ReplayNo},
+	{Tool: "knomit_hypothesize", Action: actCurrent, ReadOnly: true, Perm: authz.KBRead, Replay: ReplayNo},
 	// session_id without current is an answer, even with an empty response.
-	{Tool: "knomit_hypothesize", Action: actAnswer, Replay: ReplayNo},
+	{Tool: "knomit_hypothesize", Action: actAnswer, Perm: authz.KBWrite, Replay: ReplayNo},
 
-	{Tool: "knomit_experiment", Action: "list", ReadOnly: true, Replay: ReplayYes},
-	{Tool: "knomit_experiment", Action: "open", Replay: ReplayNo},
-	{Tool: "knomit_experiment", Action: "sync", Replay: ReplayNo},
-	{Tool: "knomit_experiment", Action: "commit", Replay: ReplayNo},
-	{Tool: "knomit_experiment", Action: "rollback", Destructive: true, Replay: ReplayNo},
+	{Tool: "knomit_experiment", Action: "list", ReadOnly: true, Perm: authz.KBRead, Replay: ReplayYes},
+	{Tool: "knomit_experiment", Action: "open", Perm: authz.KBWrite, Replay: ReplayNo},
+	{Tool: "knomit_experiment", Action: "sync", Perm: authz.KBWrite, Replay: ReplayNo},
+	{Tool: "knomit_experiment", Action: "commit", Perm: authz.KBWrite, Replay: ReplayNo},
+	{Tool: "knomit_experiment", Action: "rollback", Destructive: true, Perm: authz.KBWrite, Replay: ReplayNo},
 }
 
 // actionOf names the action a call dispatches to, or "" when the tool has
@@ -137,6 +145,18 @@ func ClassifyCall(tool string, args map[string]any) (CallEffect, bool) {
 		}
 	}
 	return CallEffect{}, false
+}
+
+// PermissionFor is the permission a call to tool with the decoded arguments
+// args needs: its ClassifyCall row's Perm, so the action is the one the
+// handler will dispatch to, not the one the caller labelled. ok=false for a
+// tool or action the table does not know: deny it.
+func PermissionFor(tool string, args map[string]any) (authz.Permission, bool) {
+	e, known := ClassifyCall(tool, args)
+	if !known || e.Perm == "" {
+		return "", false
+	}
+	return e.Perm, true
 }
 
 // Replayable reports whether a call to tool with the JSON arguments args may be
