@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -429,4 +430,32 @@ func (s *Store) RevokePAT(ctx context.Context, id string) error {
 		return s.bindings.UnbindAll(ctx, PAT{ID: id}.Principal())
 	}
 	return nil
+}
+
+// --- OAuth access tokens, for the unified authenticator ----------------------
+
+// VerifyBearer answers the token principal (token:<family id>) and audience
+// of an OAuth ACCESS token, or ErrInvalid. The audience is the path of the
+// resource the token was issued for ("" for a whole-server resource): its
+// repo/lens reach is derived from that path, never from the URL's host, so a
+// token is valid on every external address (§15.2). Built for the P3
+// authenticator, which is not mounted yet; the OAuth listener keeps using
+// Verifier.Verify until the flip.
+func (s *Store) VerifyBearer(ctx context.Context, token string) (authz.Principal, string, error) {
+	if token == "" {
+		return authz.Principal{}, "", ErrInvalid
+	}
+	f, err := s.LookupAccess(ctx, token)
+	if err != nil {
+		if isStoreFailure(err) {
+			return authz.Principal{}, "", err
+		}
+		return authz.Principal{}, "", ErrInvalid
+	}
+	u, err := url.Parse(f.Resource)
+	if err != nil {
+		return authz.Principal{}, "", ErrInvalid
+	}
+	aud := strings.TrimSuffix(u.EscapedPath(), "/")
+	return authz.Principal{Kind: authz.KindToken, ID: f.ID}, aud, nil
 }

@@ -23,6 +23,8 @@ const (
 	seamFile    = webDir + "/testpolicy.go"
 	authzImport = "knomit/internal/foundation/authz"
 	seamName    = "injectedPolicy"
+	// authenticateFile is the one non-test file that may read the seam (rule 1).
+	authenticateFile = webDir + "/authenticate.go"
 )
 
 // The in-process auth test seam (unified authn/z plan, P2) is
@@ -35,7 +37,9 @@ const (
 // injectedPolicy may be mentioned exactly once, in its declaration in
 // testpolicy.go, which must name a func type and carry NO initializer. Any
 // other mention (assignment, `p := &injectedPolicy`, a read, a declaration
-// elsewhere) fails.
+// elsewhere) fails, with ONE exception (plan P3 Task 3.4): in
+// internal/edge/web/authenticate.go the authenticator may write exactly
+// `injectedPolicy != nil` and a one-argument call `injectedPolicy(r)`.
 //
 // Rule 2 (policyVarViolations, type-aware): in the non-test code of
 // internal/edge/web and every package below it, no package-level var other than
@@ -107,9 +111,32 @@ func checkInjectedPolicy(files map[string]string) []string {
 				}
 			}
 		}
+		// The authenticator (authenticateFile) may test the seam and call it,
+		// in exactly two shapes: `injectedPolicy != nil` and a call
+		// `injectedPolicy(<arg>)`. Nothing else — not a bare read, not
+		// `&injectedPolicy` (which is syntactically a read), not an
+		// assignment — and in no other file.
+		allowed := map[*ast.Ident]bool{}
+		if n == authenticateFile {
+			ast.Inspect(f, func(node ast.Node) bool {
+				switch x := node.(type) {
+				case *ast.BinaryExpr:
+					if id, ok := x.X.(*ast.Ident); ok && id.Name == seamName && x.Op == token.NEQ {
+						if nilID, ok := x.Y.(*ast.Ident); ok && nilID.Name == "nil" {
+							allowed[id] = true
+						}
+					}
+				case *ast.CallExpr:
+					if id, ok := x.Fun.(*ast.Ident); ok && id.Name == seamName && len(x.Args) == 1 {
+						allowed[id] = true
+					}
+				}
+				return true
+			})
+		}
 		ast.Inspect(f, func(node ast.Node) bool {
 			id, ok := node.(*ast.Ident)
-			if ok && id.Name == seamName && id != declIdent {
+			if ok && id.Name == seamName && id != declIdent && !allowed[id] {
 				add(id.Pos(), "mentions "+seamName+" in a non-test file; only its declaration in "+seamFile+" may")
 			}
 			return true
@@ -267,6 +294,14 @@ func TestInjectedPolicy_GuardShapes(t *testing.T) {
 	if got := checkInjectedPolicy(web("")); len(got) != 0 {
 		t.Fatalf("clean tree flagged: %v", got)
 	}
+	// The authenticator's two allowed shapes pass.
+	okAuthn := map[string]string{
+		seamFile:         goodSeamFile,
+		authenticateFile: "package web\n\nfunc f(r any) {\n\tif injectedPolicy != nil {\n\t\tif _, ok := injectedPolicy(r); ok {\n\t\t}\n\t}\n}\n",
+	}
+	if got := checkInjectedPolicy(okAuthn); len(got) != 0 {
+		t.Fatalf("the authenticator's allowed shapes were flagged: %v", got)
+	}
 
 	for _, tc := range []struct {
 		name  string
@@ -283,6 +318,27 @@ func TestInjectedPolicy_GuardShapes(t *testing.T) {
 		{"read from another package", map[string]string{
 			seamFile:                    goodSeamFile,
 			"internal/edge/mcp/peek.go": "package mcp\n\nfunc f() bool { return web.injectedPolicy != nil }\n",
+		}, "mentions injectedPolicy"},
+		// The authenticator's allowance is exactly two shapes, in one file.
+		{"authenticator takes its address", map[string]string{
+			seamFile:         goodSeamFile,
+			authenticateFile: "package web\n\nfunc f() { p := &injectedPolicy; _ = p }\n",
+		}, "mentions injectedPolicy"},
+		{"authenticator assigns it", map[string]string{
+			seamFile:         goodSeamFile,
+			authenticateFile: "package web\n\nfunc f() { injectedPolicy = nil }\n",
+		}, "mentions injectedPolicy"},
+		{"authenticator copies it", map[string]string{
+			seamFile:         goodSeamFile,
+			authenticateFile: "package web\n\nfunc f() { g := injectedPolicy; _ = g }\n",
+		}, "mentions injectedPolicy"},
+		{"authenticator compares it with something else", map[string]string{
+			seamFile:         goodSeamFile,
+			authenticateFile: "package web\n\nfunc f(x any) bool { return injectedPolicy == nil }\n",
+		}, "mentions injectedPolicy"},
+		{"the call shape in another file", map[string]string{
+			seamFile:            goodSeamFile,
+			webDir + "/more.go": "package web\n\nfunc f(r any) { if injectedPolicy != nil { injectedPolicy(r) } }\n",
 		}, "mentions injectedPolicy"},
 	} {
 		got := checkInjectedPolicy(tc.files)
