@@ -401,6 +401,20 @@ var apiRouteRules = concat(
 		rule(mGet, "/oauth/grants/", pAuthMgr),
 		rule(mPost, "/oauth/grants/{id}/revoke", pAuthMgr),
 	},
+
+	// The unified-auth management routes (P3): socket-only (RequireLocalVia)
+	// until the flip enforces these rows.
+	[]routeRule{
+		rule(mPost, "/auth/links", pAuthMgr),
+		rule(mGet, "/auth/tokens", pAuthMgr),
+		rule(mPost, "/auth/tokens", pAuthMgr),
+		rule(mDel, "/auth/tokens/{id}", pAuthMgr),
+		rule(mGet, "/auth/sessions", pAuthMgr),
+		rule(mDel, "/auth/sessions/{id}", pAuthMgr),
+		rule(mGet, "/auth/bindings", pAuthMgr),
+		rule(mPost, "/auth/bindings", pAuthMgr),
+		rule(mDel, "/auth/bindings/{principal}/{role}", pAuthMgr),
+	},
 )
 
 // outerRouteRules covers the outer router's own routes (Server.Handler); the
@@ -412,6 +426,11 @@ var outerRouteRules = concat(
 	[]routeRule{
 		rule(mGet, "/docs", pPublic),
 		rule(http.MethodHead, "/docs", pPublic),
+		// The login-link and pairing pages (P3): public by nature, they are
+		// how a caller without a session gets one.
+		rule(mGet, "/auth/link/{token}", pPublic),
+		rule(mPost, "/auth/pair", pPublic),
+		rule(mGet, "/auth/pair/{id}/wait", pPublic),
 		rule(mGet, "/assets/*", pPublic),
 		rule(http.MethodHead, "/assets/*", pPublic),
 		// The SPA shell: the page itself carries no data.

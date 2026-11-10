@@ -86,6 +86,11 @@ tags:
       origins link to. Values are write-only.
   - name: events
   - name: mcp
+  - name: auth
+    description: |
+      Credentials of the unified auth model (personal access tokens, browser
+      sessions, one-time login links, role bindings). Until the flip every
+      route here is LOCAL LISTENER ONLY.
   - name: sessions
     description: |
       MCP client sessions — every bridge or direct HTTP client this server has
@@ -5806,6 +5811,240 @@ paths:
     put: *sessionMcpSub
     delete: *sessionMcpSub
 
+  # --- unified auth (P3): credentials, managed over the local listener ----
+  /auth/links:
+    post:
+      tags: [auth]
+      summary: Mint a one-time browser login link
+      description: |
+        LOCAL LISTENER ONLY (the unix socket, or the named pipe on Windows)
+        until the unified-auth flip, when the route needs `auth:manage`; any
+        other transport is 403 and mints nothing. `knomit auth link` calls it.
+
+        The link signs a browser in as the caller (a session cookie), once,
+        within `[auth].link_ttl` (2 minutes by default). Its base is the
+        first `external_addresses` entry (or the address derived from the
+        bind when the list is empty); `?url=` names another LISTED address,
+        and an unlisted one is 400. Following the link on a Host that is not
+        a listed address is refused without spending it.
+      operationId: createAuthLink
+      parameters:
+        - name: url
+          in: query
+          required: false
+          description: One of this instance's external addresses to base the link on.
+          schema: { type: string }
+      responses:
+        "201":
+          description: The link and when it stops working.
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                required: [url, expires_at]
+                properties:
+                  url: { type: string, description: "<external address>/auth/link/<token>" }
+                  expires_at: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /auth/tokens:
+    get:
+      tags: [auth]
+      summary: List personal access tokens
+      description: |
+        LOCAL LISTENER ONLY until the unified-auth flip (then `auth:manage`).
+        The tokens that can still be used, newest first. A token's secret is
+        never listed: it is stored only as its hash.
+      operationId: listAuthTokens
+      responses:
+        "200":
+          description: The tokens.
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  tokens:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuthToken" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [auth]
+      summary: Create a personal access token
+      description: |
+        LOCAL LISTENER ONLY until the unified-auth flip (then `auth:manage`).
+        `knomit auth tokens create` calls it.
+
+        The token is its own principal `token:<id>`, bound to exactly one
+        role: reader, contributor or operator (never admin or guest). An
+        expiry is required: `expires_in` is a lifetime from now (`90d`,
+        `12h`, `30m`); empty means `[auth].pat_default_ttl` (90 days), and
+        more than `[auth].pat_max_ttl` (1 year) is 400. The response carries
+        the `secret` (prefix `knomit_pat_`) exactly once. Before the flip a
+        token is accepted nowhere.
+      operationId: createAuthToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [reader, contributor, operator] }
+                label: { type: string }
+                expires_in: { type: string, example: 90d }
+      responses:
+        "201":
+          description: The token, with its secret (shown once).
+          content:
+            application/hal+json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/AuthToken"
+                  - type: object
+                    required: [secret]
+                    properties:
+                      secret: { type: string, description: "knomit_pat_..., shown once" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+
+  /auth/tokens/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    delete:
+      tags: [auth]
+      summary: Revoke a personal access token
+      description: |
+        LOCAL LISTENER ONLY until the unified-auth flip (then `auth:manage`).
+        The token stops working and its role binding is removed. 404 when the
+        id names no live token.
+      operationId: revokeAuthToken
+      responses:
+        "204": { description: Revoked. }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /auth/sessions:
+    get:
+      tags: [auth]
+      summary: List browser sessions
+      description: |
+        LOCAL LISTENER ONLY until the unified-auth flip (then `auth:manage`).
+        The live browser sessions, newest first. A session ends after
+        `[auth].session_idle_ttl` unused or `[auth].session_absolute_ttl`
+        after sign-in.
+      operationId: listAuthSessions
+      responses:
+        "200":
+          description: The sessions.
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        principal: { type: string }
+                        user_agent: { type: string }
+                        created_at: { type: string, format: date-time }
+                        last_seen_at: { type: string, format: date-time }
+                        expires_at: { type: string, format: date-time }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /auth/sessions/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    delete:
+      tags: [auth]
+      summary: Revoke a browser session
+      description: |
+        LOCAL LISTENER ONLY until the unified-auth flip (then `auth:manage`).
+        404 when the id names no live session.
+      operationId: revokeAuthSession
+      responses:
+        "204": { description: Revoked. }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /auth/bindings:
+    get:
+      tags: [auth]
+      summary: List role bindings
+      description: |
+        LOCAL LISTENER ONLY until the unified-auth flip (then `auth:manage`).
+        Every stored principal-to-role binding. The owner is implicit and
+        never listed.
+      operationId: listAuthBindings
+      responses:
+        "200":
+          description: The bindings.
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  bindings:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        principal: { type: string }
+                        role: { type: string }
+                        label: { type: string }
+                        by: { type: string }
+                        at: { type: string, format: date-time }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      tags: [auth]
+      summary: Bind a principal to a role
+      description: |
+        LOCAL LISTENER ONLY until the unified-auth flip (then `auth:manage`).
+        `principal` is its one spelling (`os:uid:1000`, `os:sid:S-1-…`,
+        `anonymous`). Refused with 400: the owner, a node, anonymous to
+        anything but guest, and a token principal (a token's role is set
+        when it is minted or approved).
+      operationId: createAuthBinding
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [principal, role]
+              properties:
+                principal: { type: string }
+                role: { type: string, enum: [admin, operator, contributor, reader, guest] }
+                label: { type: string }
+      responses:
+        "201": { description: Bound. }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /auth/bindings/{principal}/{role}:
+    parameters:
+      - { name: principal, in: path, required: true, schema: { type: string } }
+      - { name: role, in: path, required: true, schema: { type: string } }
+    delete:
+      tags: [auth]
+      summary: Unbind a principal from a role
+      description: |
+        LOCAL LISTENER ONLY until the unified-auth flip (then `auth:manage`).
+        Removing a binding that does not exist is a no-op; a token principal
+        is 400 (revoke the token instead).
+      operationId: deleteAuthBinding
+      responses:
+        "204": { description: Unbound. }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
 components:
   parameters:
     OriginRunLastEventID:
@@ -6047,6 +6286,18 @@ components:
                   session: { $ref: "#/components/schemas/Link" }
 
   schemas:
+    AuthToken:
+      type: object
+      description: A personal access token as listed (never its secret).
+      required: [id, role, expires_at]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        role: { type: string, enum: [reader, contributor, operator] }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time }
     OriginCredentialRequest:
       type: object
       description: >-

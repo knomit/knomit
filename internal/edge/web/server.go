@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"knomit/internal/edge/web/httpx"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"knomit/internal/edge/web/hal"
 	"knomit/internal/engine/llm"
 	"knomit/internal/foundation/auth"
+	"knomit/internal/foundation/authz"
 	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/foundation/config"
 	"knomit/internal/platform/logging"
@@ -106,6 +108,19 @@ type Server struct {
 	// this router. Handler() never judges a bearer token.
 	OAuthIssuer    *oauth.Issuer
 	BearerVerifier *oauth.Verifier
+
+	// The unified-auth credentials (plan P3), DARK until the flip: app.New
+	// sets them on every boot, whether or not [oauth] is configured.
+	// AuthStore holds sessions, login links and PATs; AuthIssuer is the
+	// issuer core pairing runs on (the same object as OAuthIssuer when the
+	// OAuth listener is configured); AuthzStore the role bindings; Issuers
+	// the issuer set (config.Issuers over external_addresses). They serve
+	// /api/v1/auth/* (behind httpx.RequireLocalVia) and the public login and
+	// pairing pages. Nil fields make those routes answer 503.
+	AuthStore  *oauth.Store
+	AuthIssuer *oauth.Issuer
+	AuthzStore *authz.Store
+	Issuers    []*url.URL
 
 	// authDisabled makes AuthMiddleware attach the anonymous principal
 	// whatever the remote address is, and writeGate a no-op. It is FORM B of
@@ -294,6 +309,11 @@ func (s *Server) Handler() http.Handler {
 	docsRoute := r.With(compressor())
 	docsRoute.Method(http.MethodGet, "/docs", docs)
 	docsRoute.Method(http.MethodHead, "/docs", docs)
+
+	// The login-link and pairing pages (unified auth P3): public, on the
+	// outer router, and harmless before the flip — the session cookie they
+	// hand out is read by nothing on this port until P4 (auth_api.go).
+	s.mountAuthPages(r)
 
 	// Mount the API router.
 	r.Mount(httpx.APIBase, s.NewAPIRouter())

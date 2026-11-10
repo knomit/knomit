@@ -292,3 +292,52 @@ func TestOpenAPI_LensFactSetDeclared(t *testing.T) {
 	require.Contains(t, ni, "lens_repo")
 	require.Contains(t, ni, "repo_name")
 }
+
+// TestOpenAPI_AuthRoutesDeclared (unified auth P3): every /auth management
+// route is declared for its method, each says it is LOCAL LISTENER ONLY
+// until the flip and names auth:manage, and the token body and the
+// one-time secret are in the schema.
+func TestOpenAPI_AuthRoutesDeclared(t *testing.T) {
+	doc := servedOpenAPI(t)
+	paths := doc["paths"].(map[string]any)
+	want := map[string][]string{
+		"/auth/links":                       {"post"},
+		"/auth/tokens":                      {"get", "post"},
+		"/auth/tokens/{id}":                 {"delete"},
+		"/auth/sessions":                    {"get"},
+		"/auth/sessions/{id}":               {"delete"},
+		"/auth/bindings":                    {"get", "post"},
+		"/auth/bindings/{principal}/{role}": {"delete"},
+	}
+	for path, methods := range want {
+		item, ok := paths[path].(map[string]any)
+		require.True(t, ok, "%s must be declared", path)
+		for _, m := range methods {
+			op, ok := item[m].(map[string]any)
+			require.True(t, ok, "%s %s must be declared", m, path)
+			text := fmt.Sprint(op)
+			require.Contains(t, text, "LOCAL LISTENER ONLY", "%s %s is local only before the flip", m, path)
+			require.Contains(t, text, "auth:manage", "%s %s names its permission", m, path)
+		}
+	}
+	create := fmt.Sprint(paths["/auth/tokens"].(map[string]any)["post"])
+	for _, f := range []string{"role", "label", "expires_in", "secret", "reader", "contributor", "operator"} {
+		require.Contains(t, create, f)
+	}
+	require.Contains(t, fmt.Sprint(paths["/auth/links"]), "expires_at")
+	// Every /auth route the router serves is declared.
+	var routes []routeChain
+	walkFull((&Server{Manager: newTestManagerWithRepos(t)}).NewAPIRouter(), "", nil, &routes)
+	n := 0
+	for _, rc := range routes {
+		method, pattern, _ := strings.Cut(rc.route, " ")
+		if !strings.HasPrefix(pattern, "/auth/") {
+			continue
+		}
+		n++
+		item, ok := paths[pattern].(map[string]any)
+		require.True(t, ok, "%s is served but not declared", rc.route)
+		require.Contains(t, item, strings.ToLower(method), "%s is served but not declared", rc.route)
+	}
+	require.Equal(t, 9, n, "the /auth routes the router serves")
+}

@@ -36,6 +36,8 @@ func RootCmd() *cobra.Command {
 	root.AddCommand(versionCmd())
 	root.AddCommand(identityCmd())
 	root.AddCommand(grantsCmd())
+	// Hidden until the unified-auth flip (P4), which unhides it.
+	root.AddCommand(authCmd())
 	return root
 }
 

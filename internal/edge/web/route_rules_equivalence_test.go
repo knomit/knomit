@@ -119,6 +119,10 @@ var outerExpect = map[string][]authz.Permission{
 	"/docs":     {authz.Public},
 	"/assets/*": {authz.Public},
 	"/*":        {authz.Public},
+	// P3's login and pairing pages: ungated today and public in the registry.
+	"/auth/link/{token}":   {authz.Public},
+	"/auth/pair":           {authz.Public},
+	"/auth/pair/{id}/wait": {authz.Public},
 }
 
 // TestOuterRouteRules_EquivalentToOldGates: the outer router's own routes.
