@@ -30,22 +30,35 @@ type routeRule struct {
 	// body or query (inventory G9: create-with-origin, secret_id, git push vs
 	// fetch). It must return one of Possible and must leave the body readable
 	// for the handler. A body resolver (httpx/permission_bodies.go) decodes
-	// into the handler's OWN request struct, which the handler aliases, with
-	// httpx.PeekJSON (DecodeJSON's decoder), so the two read the same body
-	// the same way: case-insensitive field names, duplicate keys, empty
-	// objects. A body it cannot decode
-	// resolves to the strongest (last) of Possible: fail closed, and the
-	// handler answers 400 anyway.
+	// into the handler's OWN request struct (the handler decodes into
+	// httpx.XxxBody directly) with httpx.PeekJSON (DecodeJSON's decoder), so
+	// the two read the same body the same way: case-insensitive field names,
+	// duplicate keys, empty objects. A body it cannot decode, or one over the
+	// peek limit, resolves to the strongest (last) of Possible: fail closed,
+	// and the handler answers 400 anyway for an undecodable one.
 	//
 	// The handlers' own operator/admin checks stay: P4 rewrites them as
 	// Policy.Has(repo:origin|secret:manage) and must not delete them, because
 	// some depend on stored state no resolver sees (a repo whose origin is
 	// linked to a stored secret).
 	//
-	// P4 TODO: the gate must check Policy.Has(Possible[0]) BEFORE calling
-	// Resolve. A caller who lacks even the weakest permission is refused
-	// without the body being read, so an anonymous caller cannot make the
-	// server buffer bodies.
+	// P4 TODO (the gate that mounts this table):
+	//   - Check Policy.Has(Possible[0]) BEFORE calling Resolve. A caller who
+	//     lacks even the weakest permission is refused without the body
+	//     being read, so an anonymous caller cannot make the server buffer
+	//     bodies.
+	//   - The resolver peek limit (httpx.DefaultPeekBytes, 1 MiB, where the
+	//     handler passes 0) is LOWER than those handlers' own limit, which is
+	//     none. A valid body over 1 MiB resolves to the strongest permission
+	//     (fail closed, intended in P1, which is dark and changes no handler
+	//     limit). Decide in P4 whether to give those handlers a real limit
+	//     and peek up to it.
+	//   - OPTIONS finds no rule here: corsMiddleware answers preflights
+	//     itself, so the gate must sit AFTER CORS, or every preflight is
+	//     denied.
+	//   - apiRouteRules patterns are relative to /api/v1: when the gate runs
+	//     on the outer router it must strip httpx.APIBase from r.URL.RawPath
+	//     as well as r.URL.Path (ruleFor routes on RawPath when it is set).
 	//
 	// Possible is ordered weakest first. Under the fixed role seed each
 	// stronger entry is held only by roles that also hold the weaker ones

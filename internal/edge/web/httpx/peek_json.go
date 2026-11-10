@@ -29,6 +29,14 @@ const DefaultPeekBytes = 1 << 20
 // not exactly one JSON value of v's shape, or cannot be read. An empty or
 // all-whitespace body leaves v zero and reports true. The Content-Type is not
 // judged: the handler's DecodeJSON still refuses a non-JSON body with 415.
+//
+// The limit is deliberately allowed to be LOWER than the handler's: several
+// handlers decode with no limit at all (DecodeJSON/DecodeOptionalJSON with
+// 0), and their resolvers peek at most DefaultPeekBytes. A valid body over
+// that reports false, and the resolver answers the strongest permission.
+// That is intended fail-closed behaviour, not a bug: P1 is dark and changes
+// no handler limit, and P4 decides whether those handlers get a real limit
+// (route_rules.go's P4 TODO).
 func PeekJSON(r *http.Request, v any, maxBytes int64) bool {
 	if r.Body == nil || r.Body == http.NoBody {
 		return true

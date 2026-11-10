@@ -12,10 +12,11 @@ import (
 // (internal/edge/web route_rules.go, unified authn/z P1).
 //
 // Each body type is THE handler's request struct: the handler in api/manage
-// or api/origins names it through an unexported alias (type createRepoRequest
-// = httpx.RepoCreateBody), so the handler and the resolver decode into one
+// or api/origins decodes into httpx.XxxBody directly (var req
+// httpx.RepoCreateBody), so the handler and the resolver decode into one
 // type. They live here, not beside their handlers, because an api package
-// exports only Mount and only router.go and server.go may import one
+// exports only Mount, only router.go and server.go may import one, and no
+// family package may forward another's names through an alias
 // (test/archtest web_split_test.go).
 //
 // Each resolver decodes the body with PeekJSON (DecodeJSON's decoder) into
