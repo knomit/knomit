@@ -41,7 +41,7 @@ func TestRepoMiddleware_PassesRepoToNestedHandler(t *testing.T) {
 		}))
 	})
 
-	req := fromLoopback(httptest.NewRequest("POST", "/api/v1/testrepo/mcp", nil))
+	req := asOwner(httptest.NewRequest("POST", "/api/v1/testrepo/mcp", nil))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 

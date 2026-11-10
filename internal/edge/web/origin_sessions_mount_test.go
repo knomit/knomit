@@ -138,7 +138,7 @@ func TestRouter_OriginSessionsShareOneManagerAcrossRouters(t *testing.T) {
 	first, second := s.NewAPIRouter(), s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	first.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos/alpha/origin-sessions",
+	first.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos/alpha/origin-sessions",
 		strings.NewReader(`{"url":"https://example.invalid/kb.git"}`))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
@@ -151,7 +151,7 @@ func TestRouter_OriginSessionsShareOneManagerAcrossRouters(t *testing.T) {
 	}
 
 	got := httptest.NewRecorder()
-	second.ServeHTTP(got, fromLoopback(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions/"+created.SessionID, nil)))
+	second.ServeHTTP(got, asOwner(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions/"+created.SessionID, nil)))
 	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), created.SessionID) {
 		t.Fatalf("the second router does not know the session the first opened: %d %s", got.Code, got.Body.String())
 	}

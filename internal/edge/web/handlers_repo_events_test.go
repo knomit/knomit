@@ -46,7 +46,7 @@ func remoteFrames(t *testing.T, body string) []events.RemoteEvent {
 func attachAlphaOrigin(t *testing.T, r http.Handler, url, branch string) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin",
+	req := asOwner(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin",
 		strings.NewReader(mustJSON(t, map[string]any{"url": url, "branch": branch}))))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
@@ -63,7 +63,7 @@ func settleRepoEvents(t *testing.T, r http.Handler, rec *streamRecorder) string 
 	t.Helper()
 	before := len(indexFrames(t, rec.body()))
 	post := httptest.NewRecorder()
-	r.ServeHTTP(post, fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/index-rebuilds", nil)))
+	r.ServeHTTP(post, asOwner(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/index-rebuilds", nil)))
 	if post.Code != http.StatusCreated {
 		t.Fatalf("start rebuild: %d %s", post.Code, post.Body.String())
 	}
@@ -308,7 +308,7 @@ func heldIndexServer(t *testing.T) (http.Handler, *repos.Manager, func()) {
 
 	armed.Store(true)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/machine:test/index-rebuilds", nil)))
+	r.ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/machine:test/index-rebuilds", nil)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("start rebuild: %d %s", rec.Code, rec.Body.String())
 	}
@@ -332,7 +332,7 @@ func TestRepoIndexEvents_FailedHealEmitsError(t *testing.T) {
 	defer stop()
 
 	cancelRec := httptest.NewRecorder()
-	r.ServeHTTP(cancelRec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/index:cancel", nil)))
+	r.ServeHTTP(cancelRec, asOwner(httptest.NewRequest(http.MethodPost, "/repos/alpha/index:cancel", nil)))
 	if cancelRec.Code != http.StatusOK {
 		t.Fatalf("index:cancel: %d %s", cancelRec.Code, cancelRec.Body.String())
 	}

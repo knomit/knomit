@@ -45,7 +45,7 @@ func templatesServer(t *testing.T, mountPlaybooks bool) (http.Handler, *repos.Ma
 func getTemplates(t *testing.T, r http.Handler, path string) (int, []repos.TemplateInfo) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodGet, path, nil)))
+	r.ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodGet, path, nil)))
 	if rec.Code != http.StatusOK {
 		return rec.Code, nil
 	}
@@ -66,7 +66,7 @@ func TestTemplates_EmptyOnFreshHome(t *testing.T) {
 	require.Empty(t, got)
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodGet, "/ontologies/presets", nil)))
+	r.ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodGet, "/ontologies/presets", nil)))
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), `"default"`)
 }
@@ -110,7 +110,7 @@ func TestPostRepos_Template(t *testing.T) {
 	r, m := templatesServer(t, true)
 	post := func(body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
+		r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
 		return rec
 	}
 	for _, tc := range []struct {
@@ -154,7 +154,7 @@ func TestPostRepos_FleetOntologyReserved(t *testing.T) {
 		`{"name":"f1","mode":"custom","ontology_yaml":` + string(yamlJSON) + `}`,
 	} {
 		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
+		r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
 		require.Equal(t, http.StatusUnprocessableEntity, rec.Code, "%s -> %s", body, rec.Body.String())
 		var p struct {
 			Title  string `json:"title"`

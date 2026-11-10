@@ -205,7 +205,7 @@ func TestFactWrite_ResponseRefsResolveOnTheRequestBranch(t *testing.T) {
 	create := `{"title":"T","body":"b","type":"observation","domain":["arch","web"],
 	            "refs":["kb/eonly1.md","kb/eonly2.md"]}`
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/"+writeRefsURL+"/facts", strings.NewReader(create)))
+	req := asOwner(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/"+writeRefsURL+"/facts", strings.NewReader(create)))
 	req.Header.Set("Content-Type", "application/json")
 	s.NewAPIRouter().ServeHTTP(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
@@ -216,7 +216,7 @@ func TestFactWrite_ResponseRefsResolveOnTheRequestBranch(t *testing.T) {
 	body, err := json.Marshal(map[string]string{"content": content})
 	require.NoError(t, err)
 	rec = httptest.NewRecorder()
-	req = fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/branches/"+writeRefsURL+"/facts/kb/f.md", strings.NewReader(string(body))))
+	req = asOwner(httptest.NewRequest(http.MethodPut, "/repos/alpha/branches/"+writeRefsURL+"/facts/kb/f.md", strings.NewReader(string(body))))
 	req.Header.Set("Content-Type", "application/json")
 	s.NewAPIRouter().ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())

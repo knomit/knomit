@@ -28,7 +28,7 @@ import (
 func createViaAPI(t *testing.T, r http.Handler, name string) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := fromLoopback(newJSONRequest(http.MethodPost, "/repos",
+	req := asOwner(newJSONRequest(http.MethodPost, "/repos",
 		strings.NewReader(`{"name":"`+name+`","mode":"preset","ontology_preset":"default"}`)))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
@@ -90,7 +90,7 @@ func TestArchiveLifecycle_HTTP(t *testing.T) {
 
 	// DELETE /repos/work → archive
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/work", nil)))
+	r.ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodDelete, "/repos/work", nil)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("archive status %d body %s", rec.Code, rec.Body.String())
 	}
@@ -120,7 +120,7 @@ func TestArchiveLifecycle_HTTP(t *testing.T) {
 
 	// POST restore
 	rrec := httptest.NewRecorder()
-	r.ServeHTTP(rrec, fromLoopback(newJSONRequest(http.MethodPost, "/archived/"+info.ID+"/restore",
+	r.ServeHTTP(rrec, asOwner(newJSONRequest(http.MethodPost, "/archived/"+info.ID+"/restore",
 		strings.NewReader(`{}`))))
 	if rrec.Code != http.StatusOK {
 		t.Fatalf("restore status %d body %s", rrec.Code, rrec.Body.String())
@@ -139,7 +139,7 @@ func TestArchiveLastRepo_OK(t *testing.T) {
 	createViaAPI(t, r, "only")
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/only", nil)))
+	r.ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodDelete, "/repos/only", nil)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d body %s, want 200", rec.Code, rec.Body.String())
 	}
@@ -160,7 +160,7 @@ func TestArchived_ReportsSizeBytes(t *testing.T) {
 	createViaAPI(t, r, "work")
 
 	drec := httptest.NewRecorder()
-	r.ServeHTTP(drec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/work", nil)))
+	r.ServeHTTP(drec, asOwner(httptest.NewRequest(http.MethodDelete, "/repos/work", nil)))
 	if drec.Code != http.StatusOK {
 		t.Fatalf("archive status %d body %s", drec.Code, drec.Body.String())
 	}
@@ -244,7 +244,7 @@ func TestRestore_ConflictingKnowledgeBaseIs409(t *testing.T) {
 	createViaAPI(t, r, "work")
 
 	drec := httptest.NewRecorder()
-	r.ServeHTTP(drec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/work", nil)))
+	r.ServeHTTP(drec, asOwner(httptest.NewRequest(http.MethodDelete, "/repos/work", nil)))
 	if drec.Code != http.StatusOK {
 		t.Fatalf("archive status %d body %s", drec.Code, drec.Body.String())
 	}
@@ -275,7 +275,7 @@ func TestRestore_ConflictingKnowledgeBaseIs409(t *testing.T) {
 	}
 
 	rrec := httptest.NewRecorder()
-	r.ServeHTTP(rrec, fromLoopback(newJSONRequest(http.MethodPost, "/archived/"+archived.ID+"/restore",
+	r.ServeHTTP(rrec, asOwner(newJSONRequest(http.MethodPost, "/archived/"+archived.ID+"/restore",
 		strings.NewReader(`{}`))))
 	if rrec.Code != http.StatusConflict {
 		t.Fatalf("restore into a taken knowledge base: status %d, want 409; body=%s",
@@ -299,14 +299,14 @@ func TestPurge_HTTP(t *testing.T) {
 	r := s.NewAPIRouter()
 	createViaAPI(t, r, "work")
 	drec := httptest.NewRecorder()
-	r.ServeHTTP(drec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/work", nil)))
+	r.ServeHTTP(drec, asOwner(httptest.NewRequest(http.MethodDelete, "/repos/work", nil)))
 	var info struct {
 		ID string `json:"id"`
 	}
 	_ = json.Unmarshal(drec.Body.Bytes(), &info)
 
 	prec := httptest.NewRecorder()
-	r.ServeHTTP(prec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/archived/"+info.ID, nil)))
+	r.ServeHTTP(prec, asOwner(httptest.NewRequest(http.MethodDelete, "/archived/"+info.ID, nil)))
 	if prec.Code != http.StatusNoContent {
 		t.Fatalf("purge status %d, want 204", prec.Code)
 	}

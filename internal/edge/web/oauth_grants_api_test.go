@@ -159,8 +159,8 @@ func TestGrantsAPI_OnlyLocalOrSameOriginAdmin(t *testing.T) {
 	id := fams[0].ID
 	admin := f.mint(t, "admin-token", testIssuer, []string{"read", "write"}, auth.Read, auth.Write, auth.Admin)
 	for name, req := range map[string]*http.Request{
-		"anonymous loopback list":   fromLoopback(httptest.NewRequest(http.MethodGet, "/api/v1/oauth/grants", nil)),
-		"anonymous loopback revoke": fromLoopback(httptest.NewRequest(http.MethodPost, "/api/v1/oauth/grants/"+id+"/revoke", strings.NewReader(`{}`))),
+		"anonymous loopback list":   asAnonymousOnLoopback(httptest.NewRequest(http.MethodGet, "/api/v1/oauth/grants", nil)),
+		"anonymous loopback revoke": asAnonymousOnLoopback(httptest.NewRequest(http.MethodPost, "/api/v1/oauth/grants/"+id+"/revoke", strings.NewReader(`{}`))),
 	} {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+admin)

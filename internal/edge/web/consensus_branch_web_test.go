@@ -92,7 +92,7 @@ func tipOf(t *testing.T, ri *repos.RepoInstance, branch string) string {
 func deleteOrigin(t *testing.T, s *Server, repo string) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	s.NewAPIRouter().ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/"+repo+"/origin", nil)))
+	s.NewAPIRouter().ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodDelete, "/repos/"+repo+"/origin", nil)))
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("DELETE origin: %d %s", rec.Code, rec.Body.String())
 	}
@@ -161,7 +161,7 @@ func TestPutOrigin_NoBranchTracksTheRecordedConsensusBranch(t *testing.T) {
 	deleteOrigin(t, s, "mission")
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/mission/origin",
+	req := asOwner(httptest.NewRequest(http.MethodPut, "/repos/mission/origin",
 		strings.NewReader(mustJSON(t, map[string]any{"url": url, "auth_method": "none"}))))
 	req.Header.Set("Content-Type", "application/json")
 	s.NewAPIRouter().ServeHTTP(rec, req)

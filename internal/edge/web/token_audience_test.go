@@ -307,7 +307,7 @@ func TestEveryAuthEdgeRecordsALensReach(t *testing.T) {
 		_, _ = w.Write([]byte(out))
 	})
 	local := AuthMiddleware(config.AuthConfig{Require: false}, false)(echo)
-	if rr := serve(local, fromLoopback(httptest.NewRequest("GET", "/x", nil))); rr.Body.String() != "eo" {
+	if rr := serve(local, asOwner(httptest.NewRequest("GET", "/x", nil))); rr.Body.String() != "eo" {
 		t.Fatalf("a local caller reaches every lens: %q", rr.Body.String())
 	}
 

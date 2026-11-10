@@ -350,7 +350,7 @@ func TestWriteGate_InstancePrincipalNeedsAWriteRow(t *testing.T) {
 		Grants:  auth.StaticGrants{},
 	}
 	h := asTLSPeer(s.Handler(), peer.Cert)
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/api/v1/repos/alpha/branches/agent:test/facts", strings.NewReader(`{}`)))
+	req := asNode(fromLoopback(httptest.NewRequest(http.MethodPost, "/api/v1/repos/alpha/branches/agent:test/facts", strings.NewReader(`{}`))), peer.Fingerprint())
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)

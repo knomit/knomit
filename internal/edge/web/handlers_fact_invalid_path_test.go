@@ -36,7 +36,7 @@ func TestHandleFactCreate_UnreadablePathInDomain_Returns400(t *testing.T) {
 
 			body := `{"title":"My Fact","body":"some body","type":"observation","domain":[` + domain + `],"confidence":0.9,"sources":1}`
 			rec := httptest.NewRecorder()
-			req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body)))
+			req := asOwner(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body)))
 			req.Header.Set("Content-Type", "application/json")
 			r.ServeHTTP(rec, req)
 
@@ -50,7 +50,7 @@ func TestHandleFactCreate_UnreadablePathInDomain_Returns400(t *testing.T) {
 			// The branch is not poisoned: a valid create still succeeds.
 			ok := `{"title":"Good","body":"some body","type":"observation","domain":["ai"],"confidence":0.9,"sources":1}`
 			rec = httptest.NewRecorder()
-			req = fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(ok)))
+			req = asOwner(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(ok)))
 			req.Header.Set("Content-Type", "application/json")
 			r.ServeHTTP(rec, req)
 			if rec.Code != http.StatusCreated {
@@ -76,7 +76,7 @@ func TestHandleFactUpdate_UnreadablePath_Returns400(t *testing.T) {
 
 			body := `{"content":"` + testFactContent + `"}`
 			rec := httptest.NewRecorder()
-			req := fromLoopback(httptest.NewRequest(http.MethodPut,
+			req := asOwner(httptest.NewRequest(http.MethodPut,
 				"/repos/alpha/branches/agent:test/facts/"+urlPath, strings.NewReader(body)))
 			req.Header.Set("Content-Type", "application/json")
 			r.ServeHTTP(rec, req)

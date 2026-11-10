@@ -108,7 +108,7 @@ func TestReadOnlyRouter_GatesMutations(t *testing.T) {
 	h := s.Handler()
 
 	post := httptest.NewRecorder()
-	h.ServeHTTP(post, fromLoopback(httptest.NewRequest("POST", "/api/v1/repos", nil)))
+	h.ServeHTTP(post, asAnonymousOnLoopback(httptest.NewRequest("POST", "/api/v1/repos", nil)))
 	if post.Code != http.StatusForbidden {
 		t.Fatalf("POST /repos status = %d, want 403", post.Code)
 	}
@@ -146,7 +146,7 @@ func TestReadOnlyRouter_FactRouteBypassRegression(t *testing.T) {
 	// The exploit path: PUT to a fact URL whose key happens to contain
 	// /branches/evil/mcp — matched the old unanchored regex and bypassed the gate.
 	put := httptest.NewRecorder()
-	h.ServeHTTP(put, fromLoopback(httptest.NewRequest("PUT",
+	h.ServeHTTP(put, asAnonymousOnLoopback(httptest.NewRequest("PUT",
 		"/api/v1/repos/core/branches/main/facts/x/branches/evil/mcp", nil)))
 	if put.Code != http.StatusForbidden {
 		t.Errorf("PUT exploit path: got status %d, want 403 (bypass must be closed)", put.Code)
@@ -158,7 +158,7 @@ func TestReadOnlyRouter_FactRouteBypassRegression(t *testing.T) {
 	// answers 404 for the unknown repo: exact, so a 403 (gate regression) and a
 	// 500 (a recovered panic on the way, see the comment above) both fail.
 	mcp := httptest.NewRecorder()
-	h.ServeHTTP(mcp, fromLoopback(httptest.NewRequest("POST",
+	h.ServeHTTP(mcp, asAnonymousOnLoopback(httptest.NewRequest("POST",
 		"/api/v1/repos/core/branches/main/mcp", nil)))
 	// The title pins WHICH 404: chi answers 404 for a route that no longer
 	// exists too, and that would be a different regression.
@@ -170,14 +170,14 @@ func TestReadOnlyRouter_FactRouteBypassRegression(t *testing.T) {
 	// method (regression: the branch-only regex 403'd lens MCP on read-only).
 	// The lens middleware answers 503 while the registry is not started.
 	lensMCP := httptest.NewRecorder()
-	h.ServeHTTP(lensMCP, fromLoopback(httptest.NewRequest("POST", "/api/v1/lenses/myview/mcp", nil)))
+	h.ServeHTTP(lensMCP, asAnonymousOnLoopback(httptest.NewRequest("POST", "/api/v1/lenses/myview/mcp", nil)))
 	if lensMCP.Code != http.StatusServiceUnavailable {
 		t.Errorf("POST lens MCP path: got %d, want 503 from the lens middleware (403 = gate blocks lens MCP; 500 = a nil dependency was reached)", lensMCP.Code)
 	}
 
 	// But the lens REST CRUD must stay gated in read-only mode.
 	lensDelete := httptest.NewRecorder()
-	h.ServeHTTP(lensDelete, fromLoopback(httptest.NewRequest("DELETE", "/api/v1/lenses/myview", nil)))
+	h.ServeHTTP(lensDelete, asAnonymousOnLoopback(httptest.NewRequest("DELETE", "/api/v1/lenses/myview", nil)))
 	if lensDelete.Code != http.StatusForbidden {
 		t.Errorf("DELETE lens REST path: got status %d, want 403 (CRUD must stay gated)", lensDelete.Code)
 	}
@@ -185,7 +185,7 @@ func TestReadOnlyRouter_FactRouteBypassRegression(t *testing.T) {
 	// PATCH (mount/write/description edit) is a mutating REST route and must be
 	// gated just like POST/DELETE.
 	lensPatch := httptest.NewRecorder()
-	h.ServeHTTP(lensPatch, fromLoopback(httptest.NewRequest("PATCH", "/api/v1/lenses/myview", nil)))
+	h.ServeHTTP(lensPatch, asAnonymousOnLoopback(httptest.NewRequest("PATCH", "/api/v1/lenses/myview", nil)))
 	if lensPatch.Code != http.StatusForbidden {
 		t.Errorf("PATCH lens REST path: got status %d, want 403 (CRUD must stay gated)", lensPatch.Code)
 	}
@@ -237,7 +237,7 @@ func TestHandler_ReadOnly_DoesNotMountChat(t *testing.T) {
 		{"GET", "/api/v1/chat-providers"},
 	} {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, fromLoopback(httptest.NewRequest(tc.method, tc.path, nil)))
+		h.ServeHTTP(rec, asOwner(httptest.NewRequest(tc.method, tc.path, nil)))
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("read-only %s %s = %d, want 404", tc.method, tc.path, rec.Code)
 		}
@@ -250,7 +250,7 @@ func TestHandler_Writable_MountsChat(t *testing.T) {
 	s := &Server{APIOnly: true, Manager: newTestManagerWithRepos(t)}
 	h := s.Handler()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, fromLoopback(httptest.NewRequest("GET", "/api/v1/chat-providers", nil)))
+	h.ServeHTTP(rec, asOwner(httptest.NewRequest("GET", "/api/v1/chat-providers", nil)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /chat-providers = %d, want 200: %s", rec.Code, rec.Body)
 	}
@@ -279,7 +279,7 @@ func TestFactsResolve_IsARead(t *testing.T) {
 
 	s := &Server{ReadOnly: true, APIOnly: true, Manager: newTestManagerWithRepos(t)}
 	rec = httptest.NewRecorder()
-	r := fromLoopback(httptest.NewRequest("POST", "/api/v1/facts/resolve", strings.NewReader(`{"handles":["deadbeef"]}`)))
+	r := asAnonymousOnLoopback(httptest.NewRequest("POST", "/api/v1/facts/resolve", strings.NewReader(`{"handles":["deadbeef"]}`)))
 	r.Header.Set("Content-Type", "application/json")
 	s.Handler().ServeHTTP(rec, r)
 	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {

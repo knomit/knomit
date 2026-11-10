@@ -147,7 +147,7 @@ func TestREST_PutGatesContext(t *testing.T) {
 		content, err := json.Marshal(map[string]string{"content": "---\ntype: observation\nconfidence: 0.6\ndomain: [test]\nentities: []\nrefs: []\n" + ctxLine + "---\n# P\n\nbody\n"})
 		require.NoError(t, err)
 		rec := httptest.NewRecorder()
-		req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/branches/"+b+"/facts/"+path, strings.NewReader(string(content))))
+		req := asOwner(httptest.NewRequest(http.MethodPut, "/repos/alpha/branches/"+b+"/facts/"+path, strings.NewReader(string(content))))
 		req.Header.Set("Content-Type", "application/json")
 		r.ServeHTTP(rec, req)
 		return rec
@@ -210,7 +210,7 @@ func TestREST_PostRefusesContext(t *testing.T) {
 	ri := m.Get("alpha")
 	r := (&Server{Manager: m, AgentBranch: "machine/test", OntologyRoot: "kb"}).NewAPIRouter()
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/"+urlBranch(ri.AgentBranch())+"/facts",
+	req := asOwner(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/"+urlBranch(ri.AgentBranch())+"/facts",
 		strings.NewReader(`{"title":"T","body":"b","domain":["verdicts","x"],"context":{"task":"t-1"}}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)

@@ -80,7 +80,7 @@ func TestAnchor_RepoArchive_UnknownRepo_KeepsOwnEnvelope(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
 	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/missing", nil)))
+	r.ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodDelete, "/repos/missing", nil)))
 
 	p := problemOf(t, rec)
 	if p["title"] == "Repo not found" {
@@ -126,7 +126,7 @@ func TestAnchor_OriginSession_ConflictIsProblemJSON(t *testing.T) {
 
 	// Create a session, then commit it before it has been applied.
 	createRec := httptest.NewRecorder()
-	createReq := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions",
+	createReq := asOwner(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions",
 		strings.NewReader(`{"url":"https://github.com/example/repo.git"}`)))
 	createReq.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(createRec, createReq)
@@ -141,7 +141,7 @@ func TestAnchor_OriginSession_ConflictIsProblemJSON(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost,
+	r.ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodPost,
 		"/repos/alpha/origin-sessions/"+created.SessionID+"/commit", nil)))
 
 	if rec.Code != http.StatusConflict {
@@ -165,7 +165,7 @@ func TestAnchor_OriginSession_CreateIsHAL(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions",
+	req := asOwner(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions",
 		strings.NewReader(`{"url":"https://github.com/example/repo.git"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)

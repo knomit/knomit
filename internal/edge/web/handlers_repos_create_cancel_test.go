@@ -28,7 +28,7 @@ func TestPostRepoCreateCancel_DoneJobIs202AndTheRepoIsGone(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repo-creates/"+id+":cancel", nil)))
+	r.ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodPost, "/repo-creates/"+id+":cancel", nil)))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("cancel status = %d, want 202, body=%s", rec.Code, rec.Body.String())
 	}
@@ -50,7 +50,7 @@ func TestPostRepoCreateCancel_DoneJobIs202AndTheRepoIsGone(t *testing.T) {
 	// not 409. The request is idempotent, and a control whose own label reads
 	// "Cancelling…" must not fail when pressed twice.
 	dup := httptest.NewRecorder()
-	r.ServeHTTP(dup, fromLoopback(httptest.NewRequest(http.MethodPost, "/repo-creates/"+id+":cancel", nil)))
+	r.ServeHTTP(dup, asOwner(httptest.NewRequest(http.MethodPost, "/repo-creates/"+id+":cancel", nil)))
 	if dup.Code != http.StatusAccepted {
 		t.Fatalf("second cancel while cancelling = %d, want 202, body=%s", dup.Code, dup.Body.String())
 	}
@@ -99,7 +99,7 @@ func TestPostRepoCreateCancel_DoneJobIs202AndTheRepoIsGone(t *testing.T) {
 
 	// A second cancel has nothing to undo.
 	again := httptest.NewRecorder()
-	r.ServeHTTP(again, fromLoopback(httptest.NewRequest(http.MethodPost, "/repo-creates/"+id+":cancel", nil)))
+	r.ServeHTTP(again, asOwner(httptest.NewRequest(http.MethodPost, "/repo-creates/"+id+":cancel", nil)))
 	if again.Code != http.StatusConflict {
 		t.Fatalf("second cancel = %d, want 409, body=%s", again.Code, again.Body.String())
 	}
@@ -114,7 +114,7 @@ func TestPostRepoCreateCancel_RunningJobEndsCancelled(t *testing.T) {
 
 	id := startCreate(t, r, "work")
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repo-creates/"+id+":cancel", nil)))
+	r.ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodPost, "/repo-creates/"+id+":cancel", nil)))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("cancel status = %d, want 202, body=%s", rec.Code, rec.Body.String())
 	}
@@ -142,7 +142,7 @@ func TestPostRepoCreateCancel_UnknownIs404(t *testing.T) {
 	s := &Server{Manager: newRealManager(t)}
 	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repo-creates/nope:cancel", nil)))
+	r.ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodPost, "/repo-creates/nope:cancel", nil)))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404, body=%s", rec.Code, rec.Body.String())
 	}
@@ -169,7 +169,7 @@ func TestPostRepoCreateCancel_FailedJobIs409(t *testing.T) {
 		t.Fatalf("precondition: state = %v, want failed", final["state"])
 	}
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repo-creates/"+id+":cancel", nil)))
+	r.ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodPost, "/repo-creates/"+id+":cancel", nil)))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409, body=%s", rec.Code, rec.Body.String())
 	}

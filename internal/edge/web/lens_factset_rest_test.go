@@ -395,7 +395,7 @@ func TestLensFactSet_CloseOnAReadOnlyServer(t *testing.T) {
 	h := (&Server{ReadOnly: true, Manager: m, Embedder: emb}).Handler()
 	send := func(method, u string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, fromLoopback(httptest.NewRequest(method, u, nil)))
+		h.ServeHTTP(rec, asOwner(httptest.NewRequest(method, u, nil)))
 		return rec
 	}
 	alphaFS := "/api/v1/repos/alpha/branches/" + urlBranch(m.Get("alpha").AgentBranch()) + "/search/factset"

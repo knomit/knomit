@@ -115,7 +115,7 @@ func (f *factWriteFixture) do(method, url, body string) *httptest.ResponseRecord
 		rd = strings.NewReader(body)
 	}
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(method, url, rd))
+	req := asOwner(httptest.NewRequest(method, url, rd))
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -190,7 +190,7 @@ func TestHandleFactUpdate_UnknownRepo_Returns404(t *testing.T) {
 
 	body := `{"content":"anything"}`
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut,
+	req := asOwner(httptest.NewRequest(http.MethodPut,
 		"/repos/missing/branches/agent:test/facts/know/ai/test.md",
 		strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
@@ -391,7 +391,7 @@ func TestHandleFactDelete_UnknownRepo_Returns404(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodDelete,
+	req := asOwner(httptest.NewRequest(http.MethodDelete,
 		"/repos/missing/branches/agent:test/facts/know/ai/test.md", nil))
 	r.ServeHTTP(rec, req)
 

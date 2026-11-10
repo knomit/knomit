@@ -254,7 +254,7 @@ func TestSecretsAPI_Gate(t *testing.T) {
 	require.Contains(t, []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnauthorized}, code)
 	// ...and on the plain listener the header is ignored: anonymous loopback
 	// without the proof.
-	breq = fromLoopback(httptest.NewRequest(http.MethodGet, "/api/v1/secrets", nil))
+	breq = asAnonymousOnLoopback(httptest.NewRequest(http.MethodGet, "/api/v1/secrets", nil))
 	breq.Header.Set("Authorization", "Bearer "+tok)
 	require.Equal(t, http.StatusForbidden, serve(f.s.Handler(), breq).Code)
 

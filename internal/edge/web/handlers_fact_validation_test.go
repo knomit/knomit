@@ -66,7 +66,7 @@ func TestFactWrite_RESTRefusesAFactThatFailsTheOntology(t *testing.T) {
 		body, err := json.Marshal(map[string]string{"content": content})
 		require.NoError(t, err)
 		rec := httptest.NewRecorder()
-		req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/branches/agent:test/facts/"+p, strings.NewReader(string(body))))
+		req := asOwner(httptest.NewRequest(http.MethodPut, "/repos/alpha/branches/agent:test/facts/"+p, strings.NewReader(string(body))))
 		req.Header.Set("Content-Type", "application/json")
 		r.ServeHTTP(rec, req)
 		return rec
@@ -91,7 +91,7 @@ func TestFactWrite_RESTRefusesAFactThatFailsTheOntology(t *testing.T) {
 	// POST (create) goes through the same writer; its path is
 	// kb/<domain[0]>/<domain[1]>/<id>.md, here under principles/.
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts",
+	req := asOwner(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts",
 		strings.NewReader(`{"title":"A principle","body":"b","kind":"pragmatic","type":"policy","domain":["principles","ux"],"confidence":0.9,"sources":1}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)

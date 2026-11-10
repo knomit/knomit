@@ -23,7 +23,7 @@ func TestMCPMounts_QueryMethodIsRefused404(t *testing.T) {
 	for _, mount := range []string{unscopedMount, urlScopedMount} {
 		t.Run(mount, func(t *testing.T) {
 			sid := initAt(t, h, mount)
-			req := fromLoopback(httptest.NewRequest("QUERY", mount,
+			req := asOwner(httptest.NewRequest("QUERY", mount,
 				strings.NewReader(`{"jsonrpc":"2.0","id":7,"method":"tools/list"}`)))
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Accept", "application/json, text/event-stream")

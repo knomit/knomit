@@ -64,7 +64,7 @@ func TestPostRepos_AcceptsAndCreates(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(newJSONRequest(http.MethodPost, "/repos",
+	req := asOwner(newJSONRequest(http.MethodPost, "/repos",
 		strings.NewReader(`{"name":"work","mode":"preset","ontology_preset":"default"}`)))
 	r.ServeHTTP(rec, req)
 
@@ -127,7 +127,7 @@ func TestPostRepos_ConflictOnExistingName(t *testing.T) {
 	r := s.NewAPIRouter()
 	createViaAPI(t, r, "work")
 	rec := httptest.NewRecorder()
-	req := fromLoopback(newJSONRequest(http.MethodPost, "/repos",
+	req := asOwner(newJSONRequest(http.MethodPost, "/repos",
 		strings.NewReader(`{"name":"work","mode":"preset","ontology_preset":"default"}`)))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
@@ -139,7 +139,7 @@ func TestPostRepos_BadNameReturns400(t *testing.T) {
 	s := &Server{Manager: newRealManager(t)}
 	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
-	req := fromLoopback(newJSONRequest(http.MethodPost, "/repos",
+	req := asOwner(newJSONRequest(http.MethodPost, "/repos",
 		strings.NewReader(`{"name":"Bad Name","mode":"preset"}`)))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -165,7 +165,7 @@ func TestPostRepos_InitializeEmptyRemoteIs409NotAStreamedError(t *testing.T) {
 	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
 	body := createBody(t, "initialize", "default", fileuri.New(remote))
-	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
+	r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
@@ -197,7 +197,7 @@ func TestPostRepos_OversizeBodyIs413(t *testing.T) {
 	huge := strings.Repeat("x", maxOntologyBytes+1)
 	body := `{"name":"kb","mode":"custom","ontology_yaml":"` + huge + `"}`
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
+	r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413; body=%s", rec.Code, rec.Body.String())
@@ -219,7 +219,7 @@ func TestPostRepos_BodyUnderTheCapIsNotRejectedAsOversize(t *testing.T) {
 		strings.Repeat("# pad\\n", 1000)
 	body := `{"name":"kb","mode":"custom","ontology_yaml":"` + yaml + `"}`
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
+	r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
 
 	if rec.Code == http.StatusRequestEntityTooLarge {
 		t.Fatalf("a body well under the cap was rejected as oversize: %s", rec.Body.String())
@@ -256,7 +256,7 @@ func TestPostRepos_YAMLUnderTheCapWhoseJSONEncodingExceedsItIsAccepted(t *testin
 	}
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos", bytes.NewReader(encoded))))
+	r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos", bytes.NewReader(encoded))))
 
 	if rec.Code == http.StatusRequestEntityTooLarge {
 		t.Fatalf("an ontology of %d raw bytes (under the %d cap) was rejected as oversize: %s",
@@ -280,7 +280,7 @@ func TestPostRepos_OversizeOntologyYAMLIs413(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos", bytes.NewReader(encoded))))
+	r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos", bytes.NewReader(encoded))))
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413; body=%s", rec.Code, rec.Body.String())
@@ -316,7 +316,7 @@ func TestPostRepos_CloneOfANonKnowledgeBaseIs409NotAStreamedError(t *testing.T) 
 	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
 	body := mustJSON(t, map[string]any{"name": "kb", "mode": "clone", "origin": map[string]any{"url": url, "branch": "main"}})
-	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
+	r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
@@ -341,7 +341,7 @@ func TestPostRepos_InitializeOfAKnowledgeBaseIs409NotAStreamedError(t *testing.T
 	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
 	body := mustJSON(t, map[string]any{"name": "kb", "mode": "initialize", "ontology_preset": "default", "origin": map[string]any{"url": url, "branch": "main"}})
-	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
+	r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
@@ -363,7 +363,7 @@ func TestPostRepos_CloneOfARefLessRemoteIs409NotAStreamedError(t *testing.T) {
 	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
 	body := createBody(t, "clone", "", fileuri.New(remote))
-	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
+	r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
@@ -399,7 +399,7 @@ func TestPostRepos_ClientDisconnectDoesNotAbortTheCreate(t *testing.T) {
 	cancel() // the client is already gone
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(newJSONRequest(http.MethodPost, "/repos",
+	req := asOwner(newJSONRequest(http.MethodPost, "/repos",
 		strings.NewReader(`{"name":"work","mode":"preset","ontology_preset":"default"}`))).WithContext(ctx)
 	r.ServeHTTP(rec, req)
 
@@ -443,7 +443,7 @@ func TestGetRepoCreate_TimeoutIsReadableAsATerminalFailure(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos",
+	r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos",
 		strings.NewReader(`{"name":"work","mode":"preset","ontology_preset":"default"}`))))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202, body=%s", rec.Code, rec.Body.String())
@@ -556,7 +556,7 @@ func TestPostRepos_OriginURLAuthMismatchIs400WithTheSharedWording(t *testing.T) 
 		r := s.NewAPIRouter()
 		rec := httptest.NewRecorder()
 		body := mustJSON(t, map[string]any{"name": "kb", "mode": "subscribe", "origin": map[string]any{"url": tc.url, "auth_method": tc.method, "auth_token": "ghp_x"}})
-		r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
+		r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos", strings.NewReader(body))))
 		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), tc.want) {
 			t.Fatalf("%s + %s: status %d body %s; want 400 naming %q", tc.url, tc.method, rec.Code, rec.Body, tc.want)
 		}

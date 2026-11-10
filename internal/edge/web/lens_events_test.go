@@ -362,7 +362,7 @@ func TestLensEvents_IndexReadyWakesAHeldMember(t *testing.T) {
 	s.none(t, quietWindow)
 	held.set(false)
 	rec := httptest.NewRecorder()
-	env.r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost,
+	env.r.ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodPost,
 		"/repos/beta/branches/"+strings.ReplaceAll(beta.ReadBranch(), "/", ":")+"/index-rebuilds", nil)))
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	f := s.next(t, 20*time.Second)

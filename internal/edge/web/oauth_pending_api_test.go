@@ -135,9 +135,9 @@ func TestPendingAPI_OnlyLocalPrincipals(t *testing.T) {
 	h := f.s.Handler()
 	tok := f.mint(t, "admin-token", testIssuer, []string{"read", "write"}, auth.Read, auth.Write, auth.Admin)
 	for name, req := range map[string]*http.Request{
-		"anonymous loopback list":    fromLoopback(httptest.NewRequest(http.MethodGet, "/api/v1/oauth/pending", nil)),
-		"anonymous loopback approve": fromLoopback(httptest.NewRequest(http.MethodPost, "/api/v1/oauth/pending/"+id+"/approve", strings.NewReader(`{"subject":"x"}`))),
-		"anonymous loopback deny":    fromLoopback(httptest.NewRequest(http.MethodPost, "/api/v1/oauth/pending/"+id+"/deny", nil)),
+		"anonymous loopback list":    asAnonymousOnLoopback(httptest.NewRequest(http.MethodGet, "/api/v1/oauth/pending", nil)),
+		"anonymous loopback approve": asAnonymousOnLoopback(httptest.NewRequest(http.MethodPost, "/api/v1/oauth/pending/"+id+"/approve", strings.NewReader(`{"subject":"x"}`))),
+		"anonymous loopback deny":    asAnonymousOnLoopback(httptest.NewRequest(http.MethodPost, "/api/v1/oauth/pending/"+id+"/deny", nil)),
 	} {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+tok)

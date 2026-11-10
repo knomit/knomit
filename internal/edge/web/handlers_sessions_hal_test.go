@@ -91,7 +91,7 @@ func TestOriginSessions_UnknownRepo_Returns404(t *testing.T) {
 				bodyReader = strings.NewReader("")
 			}
 			rec := httptest.NewRecorder()
-			req := fromLoopback(httptest.NewRequest(tc.method, tc.path, bodyReader))
+			req := asOwner(httptest.NewRequest(tc.method, tc.path, bodyReader))
 			req.Header.Set("Content-Type", "application/json")
 			r.ServeHTTP(rec, req)
 
@@ -111,7 +111,7 @@ func TestOriginSessions_CreateSession_Returns200(t *testing.T) {
 
 	body := `{"url":"https://github.com/example/repo.git","auth_method":"token","token":"tok"}`
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions", strings.NewReader(body)))
+	req := asOwner(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -137,7 +137,7 @@ func TestOriginSessions_CreateSession_MissingURL_Returns400(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions", strings.NewReader(`{}`)))
+	req := asOwner(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions", strings.NewReader(`{}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -153,7 +153,7 @@ func TestOriginSessions_CreateSession_InvalidJSON_Returns400(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions", strings.NewReader(`not json`)))
+	req := asOwner(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions", strings.NewReader(`not json`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -171,7 +171,7 @@ func TestOriginSessions_GetSession_Returns200(t *testing.T) {
 	// Create a session first.
 	createBody := `{"url":"https://github.com/example/repo.git","auth_method":"token","token":"tok"}`
 	createRec := httptest.NewRecorder()
-	createReq := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions", strings.NewReader(createBody)))
+	createReq := asOwner(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions", strings.NewReader(createBody)))
 	createReq.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(createRec, createReq)
 	if createRec.Code != http.StatusOK {
@@ -187,7 +187,7 @@ func TestOriginSessions_GetSession_Returns200(t *testing.T) {
 
 	// Fetch the session.
 	getRec := httptest.NewRecorder()
-	getReq := fromLoopback(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions/"+createResp.SessionID, nil))
+	getReq := asOwner(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions/"+createResp.SessionID, nil))
 	r.ServeHTTP(getRec, getReq)
 
 	if getRec.Code != http.StatusOK {
@@ -213,7 +213,7 @@ func TestOriginSessions_GetSession_UnknownID_Returns404(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions/nonexistent", nil))
+	req := asOwner(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions/nonexistent", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
@@ -230,7 +230,7 @@ func TestOriginSessions_DeleteSession_Returns204(t *testing.T) {
 	// Create a session.
 	createBody := `{"url":"https://github.com/example/repo.git"}`
 	createRec := httptest.NewRecorder()
-	createReq := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions", strings.NewReader(createBody)))
+	createReq := asOwner(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions", strings.NewReader(createBody)))
 	createReq.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(createRec, createReq)
 	if createRec.Code != http.StatusOK {
@@ -246,7 +246,7 @@ func TestOriginSessions_DeleteSession_Returns204(t *testing.T) {
 
 	// Delete the session.
 	delRec := httptest.NewRecorder()
-	delReq := fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/alpha/origin-sessions/"+createResp.SessionID, nil))
+	delReq := asOwner(httptest.NewRequest(http.MethodDelete, "/repos/alpha/origin-sessions/"+createResp.SessionID, nil))
 	r.ServeHTTP(delRec, delReq)
 
 	if delRec.Code != http.StatusNoContent {
@@ -255,7 +255,7 @@ func TestOriginSessions_DeleteSession_Returns204(t *testing.T) {
 
 	// Confirm it's gone.
 	getRec := httptest.NewRecorder()
-	getReq := fromLoopback(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions/"+createResp.SessionID, nil))
+	getReq := asOwner(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions/"+createResp.SessionID, nil))
 	r.ServeHTTP(getRec, getReq)
 	if getRec.Code != http.StatusNotFound {
 		t.Errorf("after delete get: status %d, want 404", getRec.Code)
@@ -269,7 +269,7 @@ func TestOriginSessions_DeleteSession_NonExistent_Returns204(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/alpha/origin-sessions/ghost", nil))
+	req := asOwner(httptest.NewRequest(http.MethodDelete, "/repos/alpha/origin-sessions/ghost", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {

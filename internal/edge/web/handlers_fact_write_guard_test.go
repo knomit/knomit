@@ -137,7 +137,7 @@ func TestFactWrite_RefusesNonWritableBranchWith403(t *testing.T) {
 		{"ordinary repo on the consensus branch", http.MethodPut, "/repos/rw/branches/main/facts/kb/x.md", `{"content":"` + testFactContent + `"}`, rwDetail},
 	} {
 		rec := httptest.NewRecorder()
-		req := fromLoopback(httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body)))
+		req := asOwner(httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body)))
 		req.Header.Set("Content-Type", "application/json")
 		r.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusForbidden, rec.Code, "%s: %s %s: body=%s", tc.name, tc.method, tc.path, rec.Body.String())

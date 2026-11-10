@@ -83,7 +83,7 @@ func newJobsFixture(t *testing.T) jobsFixture {
 func (f jobsFixture) do(t *testing.T, method, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	f.r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(method, path, nil)))
+	f.r.ServeHTTP(rec, asOwner(httptest.NewRequest(method, path, nil)))
 	return rec
 }
 

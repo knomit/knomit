@@ -121,7 +121,7 @@ func TestUnscopedMCPMount_RecordsBindingPin(t *testing.T) {
 		})}
 	router := s.NewAPIRouter()
 
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/mcp",
+	req := asOwner(httptest.NewRequest(http.MethodPost, "/mcp",
 		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
 	req.Header.Set("Mcp-Session-Id", "sid-4")
 	rec := httptest.NewRecorder()
@@ -150,7 +150,7 @@ func TestUnscopedMCPMount_NoPinRecordedLeavesColumnEmpty(t *testing.T) {
 	s := &Server{Manager: m, ClientSessions: store, mcpHandler: stubMCP(200)}
 	router := s.NewAPIRouter()
 
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/mcp",
+	req := asOwner(httptest.NewRequest(http.MethodPost, "/mcp",
 		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
 	req.Header.Set("Mcp-Session-Id", "sid-5")
 	router.ServeHTTP(httptest.NewRecorder(), req)
@@ -192,7 +192,7 @@ func TestSessionBindingMiddleware_BodyUntouched(t *testing.T) {
 				readBack = string(b)
 				w.WriteHeader(http.StatusOK)
 			})
-			req := fromLoopback(httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body)))
+			req := asOwner(httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body)))
 			req.Header.Set("Mcp-Session-Id", "sid-old")
 			r.ServeHTTP(httptest.NewRecorder(), req)
 			require.Equal(t, body, readBack)

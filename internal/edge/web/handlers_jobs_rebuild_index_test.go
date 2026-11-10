@@ -45,7 +45,7 @@ func newIndexTestServer(t *testing.T, repo string) (http.Handler, *repos.RepoIns
 func postRebuildOn(t *testing.T, r http.Handler, repo, branch string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost,
+	r.ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodPost,
 		"/repos/"+repo+"/branches/"+branch+"/index-rebuilds", nil)))
 	return rec
 }

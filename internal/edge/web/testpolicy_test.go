@@ -116,6 +116,14 @@ func asAnonymous(r *http.Request) *http.Request {
 	return attachPolicy(r, authz.Policy{Principal: authz.Anonymous(), Via: authz.ViaNone})
 }
 
+// asAnonymousOnLoopback is the refusal-test spelling of "the anonymous local
+// caller": asAnonymous plus the loopback address, which the old gates need to
+// see before they refuse that principal for lack of a grant. P4 deletes the
+// address half (and this helper with it, in favour of asAnonymous).
+func asAnonymousOnLoopback(r *http.Request) *http.Request {
+	return asAnonymous(fromLoopback(r))
+}
+
 func TestTestPolicy_Helpers(t *testing.T) {
 	get := func() *http.Request { return newTestReq(http.MethodGet, "/x") }
 
