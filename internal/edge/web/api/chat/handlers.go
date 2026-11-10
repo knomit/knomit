@@ -376,8 +376,9 @@ func (m *manager) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleEvents is the page stream: one per browser tab, carrying the events
-// of every chat the caller has, each tagged with its chat id. A chat lives
-// while any page stream of its owner is attached.
+// of every chat the caller has, each tagged with its chat id. A chat does not
+// depend on it: closing every page stream of the owner ends no chat, and a page
+// that reconnects picks the owner's chats up again.
 func (m *manager) handleEvents(w http.ResponseWriter, r *http.Request) {
 	p, ok := caller(w, r)
 	if !ok {

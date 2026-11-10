@@ -963,9 +963,10 @@ func (c *chat) argsHook(tu llm.ToolUse) json.RawMessage {
 
 // ---- ending ----
 
-// end finishes the chat once, whatever called it (a DELETE or the server's
-// lifetime; those are the only two, and no page stream closing ends a chat,
-// so an idle chat with no page attached lives on): it forgets the chat, cancels its context so
+// end finishes the chat once, whatever called it (a DELETE, the server's
+// lifetime, or a create whose opening turn was refused; no page stream
+// closing ends a chat, so an idle chat with no page attached lives on): it
+// forgets the chat, cancels its context so
 // a blocked approval or a running turn unwinds, waits for the turn, records
 // the end in the MCP session (ended_at), writes chat_end to the session log
 // and removes the temp files. The session log file stays. Later callers wait
