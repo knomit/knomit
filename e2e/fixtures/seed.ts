@@ -359,8 +359,8 @@ export const E2E_EXTRA_TOPICS = [
  * The e2e repo's ontology: the server's own `default` preset (GET
  * /ontologies/presets/default) with E2E_EXTRA_TOPICS added under `topics:`.
  */
-export async function e2eOntologyYAML(baseURL: string): Promise<string> {
-  const res = await fetch(`${baseURL}/api/v1/ontologies/presets/default`);
+export async function e2eOntologyYAML(baseURL: string, headers: Record<string, string> = {}): Promise<string> {
+  const res = await fetch(`${baseURL}/api/v1/ontologies/presets/default`, { headers });
   if (!res.ok) {
     throw new Error(`Failed to read the default preset: ${res.status}\n${await res.text()}`);
   }
@@ -381,11 +381,11 @@ export async function e2eOntologyYAML(baseURL: string): Promise<string> {
  * self link until it reaches a terminal state, because the repo is not ready
  * until the job is `done`.
  */
-export async function createRepo(baseURL: string, repo = E2E_REPO): Promise<void> {
+export async function createRepo(baseURL: string, repo = E2E_REPO, headers: Record<string, string> = {}): Promise<void> {
   const res = await fetch(`${baseURL}/api/v1/repos`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: repo, mode: 'custom', ontology_yaml: await e2eOntologyYAML(baseURL) }),
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: repo, mode: 'custom', ontology_yaml: await e2eOntologyYAML(baseURL, headers) }),
   });
   if (!res.ok) {
     throw new Error(`Failed to create repo ${repo}: ${res.status} ${res.statusText}\n${await res.text()}`);
@@ -397,7 +397,7 @@ export async function createRepo(baseURL: string, repo = E2E_REPO): Promise<void
   while (job.state === 'running' || job.state === 'cancelling') {
     if (Date.now() > deadline) throw new Error(`Repo ${repo} creation did not finish in 60s:\n${JSON.stringify(job)}`);
     await new Promise(r => setTimeout(r, 250));
-    const poll = await fetch(`${baseURL}${href}`);
+    const poll = await fetch(`${baseURL}${href}`, { headers });
     if (!poll.ok) throw new Error(`Polling the ${repo} create failed: ${poll.status}\n${await poll.text()}`);
     job = await poll.json();
   }
@@ -411,8 +411,8 @@ export async function createRepo(baseURL: string, repo = E2E_REPO): Promise<void
  * Returns the first branch starting with "agent/" (encoded for URLs), or the first
  * branch overall if none starts with "agent/".
  */
-export async function discoverAgentBranch(baseURL: string, repo = E2E_REPO): Promise<string> {
-  const res = await fetch(`${baseURL}/api/v1/repos/${repo}/branches`);
+export async function discoverAgentBranch(baseURL: string, repo = E2E_REPO, headers: Record<string, string> = {}): Promise<string> {
+  const res = await fetch(`${baseURL}/api/v1/repos/${repo}/branches`, { headers });
   if (!res.ok) {
     throw new Error(`Failed to list branches: ${res.status} ${res.statusText}`);
   }
@@ -430,9 +430,9 @@ export async function discoverAgentBranch(baseURL: string, repo = E2E_REPO): Pro
 const BATCH_SIZE = 4;
 const BATCH_DELAY_MS = 1_500;
 
-export async function seedFixture(baseURL: string): Promise<void> {
+export async function seedFixture(baseURL: string, headers: Record<string, string> = {}): Promise<void> {
   // Discover the agent branch before writing any facts.
-  const encodedBranch = await discoverAgentBranch(baseURL);
+  const encodedBranch = await discoverAgentBranch(baseURL, E2E_REPO, headers);
 
   for (let i = 0; i < facts.length; i += BATCH_SIZE) {
     const batch = facts.slice(i, i + BATCH_SIZE);
@@ -442,7 +442,7 @@ export async function seedFixture(baseURL: string): Promise<void> {
         `${baseURL}/api/v1/repos/knomit/branches/${encodedBranch}/facts/${fact.path}`,
         {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...headers, 'Content-Type': 'application/json' },
           body: JSON.stringify({ content: fact.content }),
         },
       );

@@ -1,0 +1,20 @@
+//go:build windows
+
+package cmd
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"testing"
+
+	"knomit/internal/foundation/auth"
+)
+
+// authLocalListenerPath is a pipe name for one test's exclusive use: the
+// pipe namespace is flat and machine-wide, so uniqueness comes from hashing
+// the test's own temp dir.
+func authLocalListenerPath(t *testing.T) string {
+	t.Helper()
+	sum := sha256.Sum256([]byte(t.TempDir()))
+	return auth.PipePrefix + "knomit-ka-" + hex.EncodeToString(sum[:8])
+}

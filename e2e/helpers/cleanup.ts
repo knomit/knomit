@@ -9,6 +9,8 @@ export interface E2EState {
   port?: number;
   home: string;
   baseURL?: string;
+  /** The operator PAT global-setup minted for API request contexts (1 h). */
+  pat?: string;
 }
 
 /** Tears down whatever the state file describes. Safe to call when it does not exist. */

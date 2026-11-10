@@ -16,6 +16,8 @@
 // completes, so it works on all three platforms. The Go side is
 // tools/desktop/uistreams.go; DesktopFrame below mirrors its sseFrame.
 
+import { noteStatus } from './authState';
+
 export interface EventSourceLike {
   readonly url: string;
   readonly readyState: number;
@@ -303,6 +305,47 @@ export function streamErrorSuffix(e: unknown): string {
 }
 
 export function openEventStream(url: string): EventSourceLike {
-  if (!wailsStreamsEnabled()) return new EventSource(url) as unknown as EventSourceLike;
-  return new WailsEventSource(url, loadWailsStream);
+  const s = wailsStreamsEnabled()
+    ? new WailsEventSource(url, loadWailsStream)
+    : new EventSource(url) as unknown as EventSourceLike;
+  watchUnauthorized(s, url);
+  return s;
 }
+
+/**
+ * watchUnauthorized routes a stream refused with 401 to the login page
+ * (authState), as a 401 on any API call does. The desktop's stream carries the
+ * status on its error event; EventSource hides it, so once a native stream
+ * is CLOSED (a refusal, not a dropped connection, which reconnects) one GET of
+ * the same URL, aborted as soon as its status is known, asks.
+ */
+export function watchUnauthorized(s: EventSourceLike, url: string): void {
+  let probed = false;
+  s.addEventListener('error', (e: unknown) => {
+    const status = (e as { status?: unknown } | null)?.status;
+    if (typeof status === 'number') {
+      noteStatus(status);
+      return;
+    }
+    if (probed || probing || s.readyState !== CLOSED || typeof fetch !== 'function') return;
+    probed = true;
+    // ONE probe in flight for the whole page, and never for long: a stream
+    // route that holds its headers back would otherwise keep a connection per
+    // probe, and a browser has only a handful per host (the requests the page
+    // is waiting for queue behind them).
+    probing = true;
+    // AbortSignal.timeout rather than a setTimeout: the stream's owners
+    // (chatEvents' reopen timer) count the page's timers.
+    const ac = new AbortController();
+    const signal = typeof AbortSignal.any === 'function' && typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.any([ac.signal, AbortSignal.timeout(PROBE_TIMEOUT_MS)])
+      : ac.signal;
+    fetch(url, { headers: { Accept: 'text/event-stream' }, signal })
+      .then(r => { noteStatus(r.status); })
+      .catch(() => { /* gone or aborted: nothing to learn */ })
+      .finally(() => { ac.abort(); probing = false; });
+  });
+}
+
+let probing = false;
+const PROBE_TIMEOUT_MS = 3000;

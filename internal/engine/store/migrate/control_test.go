@@ -126,6 +126,9 @@ var controlObjects = []string{
 	// permissions are a handful of rows read whole, bindings are read by
 	// their (principal, role) primary key prefix, auth_state by key.
 	"auth_roles", "auth_role_permissions", "auth_role_bindings", "auth_state",
+	// credentials (unified authn/z P3). The UNIQUE hash columns carry
+	// SQLite's automatic indexes, which are not named objects here.
+	"auth_sessions", "auth_login_links", "auth_tokens", "auth_pairing",
 }
 
 // newestControlVersion is the highest numbered up-migration in the EMBEDDED

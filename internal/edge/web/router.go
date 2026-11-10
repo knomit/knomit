@@ -51,6 +51,9 @@ func (s *Server) NewAPIRouter() chi.Router {
 		r.Use(s.requireLocalOrSameOriginAdmin)
 		secrets.Mount(r, s.Manager)
 	})
+	// The unified-auth management routes (P3, dark): socket-only, like the
+	// fleet operations, until the flip enforces their auth:manage rows.
+	s.mountAuthAPI(r)
 	return r
 }
 

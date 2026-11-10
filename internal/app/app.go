@@ -260,7 +260,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	// The new authorization model, dark (unified authn/z P1): sync the role
 	// seed and build the materializer. AFTER Start, which opens control.db.
 	// A failure stops the boot, for the same reason seedOwnPrincipal's does.
-	_, materializer, err := authzBoot(ctx, a.manager.ControlDB())
+	authzStore, materializer, err := authzBoot(ctx, a.manager.ControlDB())
 	if err != nil {
 		a.Close()
 		return nil, fmt.Errorf("seed authz roles: %w", err)
@@ -308,8 +308,30 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	// grants table, only when [oauth] is configured. The server then has an
 	// OAuthHandler for `knomit serve` to put on [oauth].addr, and the plain
 	// router gains the operator's approval endpoints (local principals only).
+	//
+	// The unified-auth credential store and issuer core (plan P3) are built
+	// on EVERY boot, OAuth listener or not, DARK: sessions, login links, PATs
+	// and pairing live in them, and nothing on the main port reads a session
+	// cookie or a PAT until the flip (P4). The OAuth token lifetimes stay
+	// [oauth].access_ttl / refresh_ttl (refresh idle = absolute) so the
+	// existing listener's tokens behave exactly as before; the credential
+	// lifetimes come from [auth].
+	lt := oauth.Lifetimes{
+		Access: cfg.OAuth.AccessTTL, RefreshIdle: cfg.OAuth.RefreshTTL, RefreshAbsolute: cfg.OAuth.RefreshTTL,
+		Pending: cfg.Auth.PendingTTL, Link: cfg.Auth.LinkTTL,
+		SessionIdle: cfg.Auth.SessionIdleTTL, SessionAbsolute: cfg.Auth.SessionAbsoluteTTL,
+		PATDefault: cfg.Auth.PATDefaultTTL, PATMax: cfg.Auth.PATMaxTTL,
+	}
+	store := oauth.NewStoreWith(a.manager.ControlDB(), lt, authzStore)
+	issuers, _ := cfg.Issuers()
+	if w := cfg.IssuerWarning(); w != "" {
+		log.Warn().Str("host", cfg.Host).Msg(w)
+	}
+	a.server.AuthStore, a.server.AuthzStore, a.server.Issuers = store, authzStore, issuers
+	clients := oauth.NewResolver(cfg.OAuth.EffectiveClients())
+	a.server.AuthIssuer = oauth.NewIssuer(oauth.Options{Issuer: cfg.OAuth.Issuer, Store: store, Clients: clients, Grants: sqlGrants})
+
 	if cfg.OAuth.Enabled() && !opts.NoOAuth {
-		store := oauth.NewStore(a.manager.ControlDB(), cfg.OAuth.AccessTTL, cfg.OAuth.RefreshTTL)
 		// Consent path 2 (phase 3b): a master-key statement must name THIS
 		// instance's pki fingerprint and verify against the fleet root in
 		// [tls].dir, read per statement so an instance enrolled after boot
@@ -322,10 +344,11 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			log.Warn().Err(err).Msg("oauth: cannot read the instance key; master-key approvals will be refused")
 		}
 		rootPath := filepath.Join(cfg.TLS.Dir, pki.RootCertFile)
-		a.server.OAuthIssuer = oauth.NewIssuer(oauth.Options{
+		// One issuer for both: pairing and agent approvals share its waiters.
+		a.server.AuthIssuer = oauth.NewIssuer(oauth.Options{
 			Issuer:              cfg.OAuth.Issuer,
 			Store:               store,
-			Clients:             oauth.NewResolver(cfg.OAuth.EffectiveClients()),
+			Clients:             clients,
 			Grants:              sqlGrants,
 			InstanceFingerprint: instanceFP,
 			FleetRoot: func() (ed25519.PublicKey, error) {
@@ -340,6 +363,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 				return pub, nil
 			},
 		})
+		a.server.OAuthIssuer = a.server.AuthIssuer
 		a.server.BearerVerifier = oauth.NewVerifier(cfg.OAuth.Issuer, store)
 	}
 

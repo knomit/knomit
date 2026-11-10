@@ -2,6 +2,7 @@ import { createOutageLog } from './streamOutage';
 import { openEventStream, streamErrorSuffix } from './eventStream';
 import { lensListSearchParams, listSearchParams } from './listSearch';
 import { apiUrl } from './apiBase';
+import { noteStatus } from './authState';
 export { lensListSearchParams, listSearchParams, parseSearchQuery } from './listSearch';
 export type { ListFilters, ListKind } from './listSearch';
 // API_BASE is the origin the REST/SSE API is served from. Empty in the cloud
@@ -15,6 +16,14 @@ export type { ListFilters, ListKind } from './listSearch';
 // read at call time.
 export { apiUrl };
 
+// apiFetch is fetch for every API call in this module: a 401 answer asks the
+// app to show the login page (authState, once however many calls fail), and
+// the response is returned unchanged so the caller rejects as before. Before
+// the unified-auth flip the server never answers the UI with 401.
+function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  return fetch(input, init).then(r => { noteStatus(r.status); return r; });
+}
+
 function encodeBranch(name: string): string {
   return name.replaceAll('/', ':');
 }
@@ -25,7 +34,7 @@ function encodeBranch(name: string): string {
 // missing fields to callers — backend 500s became indistinguishable from
 // "no results" in the UI.
 export async function fetchJSON<T = unknown>(url: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(url, init);
+  const r = await apiFetch(url, init);
   if (!r.ok) {
     // Best-effort: surface a problem+json `title`/`detail` if present. The
     // status and the problem's `code` ride on the Error (HttpError) so a
@@ -1066,7 +1075,7 @@ function diagStream(level: 'info' | 'error', message: string): void {
 }
 
 export function createSession(repo: string, opts: { url: string; auth_method?: string; token?: string; user?: string; password?: string; secret_id?: string }): Promise<SessionCreateResponse> {
-  return fetch(`${repoBase(repo)}/origin-sessions`, {
+  return apiFetch(`${repoBase(repo)}/origin-sessions`, {
     method: 'POST',
     headers: secretAwareHeaders(opts.secret_id),
     body: JSON.stringify(opts),
@@ -1135,7 +1144,7 @@ export async function followRunEvents(res: Response, onEvent?: (e: SSEEvent) => 
 export async function streamApply(repo: string, sessionId: string, strategy: string, branch?: string, onEvent?: (e: SSEEvent) => void): Promise<void> {
   const body: Record<string, string> = { conflict_strategy: strategy };
   if (branch) body.branch = branch;
-  const res = await fetch(`${sessionBase(repo, sessionId)}/apply`, {
+  const res = await apiFetch(`${sessionBase(repo, sessionId)}/apply`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -1160,12 +1169,12 @@ export async function streamCommit(repo: string, sessionId: string, onEvent: (e:
     : opts?.cancelIndexing
       ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cancel_indexing: true }) }
       : { method: 'POST' };
-  const res = await fetch(`${sessionBase(repo, sessionId)}/commit`, init);
+  const res = await apiFetch(`${sessionBase(repo, sessionId)}/commit`, init);
   await followRunEvents(res, onEvent);
 }
 
 export function deleteSession(repo: string, sessionId: string): Promise<void> {
-  return fetch(`${sessionBase(repo, sessionId)}`, { method: 'DELETE' }).then(r => { if (!r.ok) throw new Error(r.statusText); });
+  return apiFetch(`${sessionBase(repo, sessionId)}`, { method: 'DELETE' }).then(r => { if (!r.ok) throw new Error(r.statusText); });
 }
 
 // stripOntologyRoot removes the ontology root prefix from a full path.
@@ -1504,7 +1513,7 @@ async function createRepo(
   body: CreateRepoBody,
   onStatus: (s: RepoCreateStatus) => void,
 ): Promise<RepoCreateStatus> {
-  const r = await fetch(apiUrl('/api/v1/repos'), {
+  const r = await apiFetch(apiUrl('/api/v1/repos'), {
     method: 'POST',
     headers: secretAwareHeaders(body.origin?.secret_id),
     body: JSON.stringify(body),
@@ -1566,7 +1575,7 @@ async function getRepoCreate(id: string): Promise<RepoCreateStatus> {
 // It does NOT cancel a running create — the server answers 409 for one — and
 // it never touches the repo a successful create made.
 async function dismissRepoCreate(id: string): Promise<void> {
-  const r = await fetch(apiUrl(`/api/v1/repo-creates/${id}`), { method: 'DELETE' });
+  const r = await apiFetch(apiUrl(`/api/v1/repo-creates/${id}`), { method: 'DELETE' });
   if (!r.ok) throw new Error(`dismiss create → ${r.status}`);
 }
 
@@ -1588,7 +1597,7 @@ async function cancelRepoCreate(id: string): Promise<RepoCreateStatus> {
   // The colon is part of the route spelling (`{id}:cancel`, as
   // /repos:probe-origin), so only the id itself is escaped — encoding the
   // colon would address a different, non-existent route.
-  const r = await fetch(apiUrl(`/api/v1/repo-creates/${encodeURIComponent(id)}:cancel`), {
+  const r = await apiFetch(apiUrl(`/api/v1/repo-creates/${encodeURIComponent(id)}:cancel`), {
     method: 'POST',
   });
   if (!r.ok) {
@@ -1631,7 +1640,7 @@ export type RestoreCredential =
 
 async function restoreRepo(id: string, newName?: string, credential?: RestoreCredential): Promise<{ name: string }> {
   const secretId = credential && 'secret_id' in credential ? credential.secret_id : undefined;
-  const r = await fetch(apiUrl(`/api/v1/archived/${id}/restore`), {
+  const r = await apiFetch(apiUrl(`/api/v1/archived/${id}/restore`), {
     method: 'POST',
     headers: secretAwareHeaders(secretId),
     body: JSON.stringify({ ...(newName ? { new_name: newName } : {}), ...(credential ?? {}) }),
@@ -1641,7 +1650,7 @@ async function restoreRepo(id: string, newName?: string, credential?: RestoreCre
 }
 
 async function purgeRepo(id: string): Promise<void> {
-  const r = await fetch(apiUrl(`/api/v1/archived/${id}`), { method: 'DELETE' });
+  const r = await apiFetch(apiUrl(`/api/v1/archived/${id}`), { method: 'DELETE' });
   if (!r.ok) throw new Error(`purge → ${r.status}`);
 }
 
@@ -2000,7 +2009,7 @@ async function updateLens(name: string, body: { write?: LensMemberRef; reads?: L
 // deleteLens DELETEs /api/v1/lenses/{name} (204 → void). Raw fetch (not
 // fetchJSON) because a 204 carries no JSON body to parse.
 async function deleteLens(name: string): Promise<void> {
-  const r = await fetch(apiUrl(`/api/v1/lenses/${name}`), { method: 'DELETE' });
+  const r = await apiFetch(apiUrl(`/api/v1/lenses/${name}`), { method: 'DELETE' });
   if (!r.ok) {
     let detail = r.statusText;
     try { const b = await r.json(); detail = b?.detail || b?.title || detail; } catch { /* ignore */ }
@@ -2061,7 +2070,7 @@ async function oauthFailure(r: Response): Promise<Error> {
 // has no OAuth issuer (404: [oauth] unset, or the desktop, which never opens
 // the OAuth listener). null is what hides the Authorizations server tab.
 async function listOAuthPending(): Promise<OAuthPending[] | null> {
-  const r = await fetch(apiUrl('/api/v1/oauth/pending'), { headers: oauthHeaders(false) });
+  const r = await apiFetch(apiUrl('/api/v1/oauth/pending'), { headers: oauthHeaders(false) });
   if (r.status === 404) return null;
   if (!r.ok) throw await oauthFailure(r);
   const data = (await r.json()) as { pending?: OAuthPending[] };
@@ -2077,7 +2086,7 @@ export interface OAuthApproval {
 }
 
 async function approveOAuthPending(id: string, subject: string, scopes: string[]): Promise<OAuthApproval> {
-  const r = await fetch(apiUrl(`/api/v1/oauth/pending/${encodeURIComponent(id)}/approve`), {
+  const r = await apiFetch(apiUrl(`/api/v1/oauth/pending/${encodeURIComponent(id)}/approve`), {
     method: 'POST',
     headers: oauthHeaders(true),
     body: JSON.stringify({ subject, scopes }),
@@ -2088,7 +2097,7 @@ async function approveOAuthPending(id: string, subject: string, scopes: string[]
 }
 
 async function denyOAuthPending(id: string): Promise<void> {
-  const r = await fetch(apiUrl(`/api/v1/oauth/pending/${encodeURIComponent(id)}/deny`), {
+  const r = await apiFetch(apiUrl(`/api/v1/oauth/pending/${encodeURIComponent(id)}/deny`), {
     method: 'POST',
     headers: oauthHeaders(true),
     body: '{}',
@@ -2118,7 +2127,7 @@ export interface OAuthGrant {
 // listOAuthGrants returns the approved logins, or null when this server has
 // no OAuth issuer (404), the same rule as listOAuthPending.
 async function listOAuthGrants(): Promise<OAuthGrant[] | null> {
-  const r = await fetch(apiUrl('/api/v1/oauth/grants'), { headers: oauthHeaders(false) });
+  const r = await apiFetch(apiUrl('/api/v1/oauth/grants'), { headers: oauthHeaders(false) });
   if (r.status === 404) return null;
   if (!r.ok) throw await oauthFailure(r);
   const data = (await r.json()) as { grants?: OAuthGrant[] };
@@ -2126,7 +2135,7 @@ async function listOAuthGrants(): Promise<OAuthGrant[] | null> {
 }
 
 async function revokeOAuthGrant(id: string): Promise<void> {
-  const r = await fetch(apiUrl(`/api/v1/oauth/grants/${encodeURIComponent(id)}/revoke`), {
+  const r = await apiFetch(apiUrl(`/api/v1/oauth/grants/${encodeURIComponent(id)}/revoke`), {
     method: 'POST',
     headers: oauthHeaders(true),
     body: '{}',
@@ -2396,7 +2405,7 @@ async function fleetFailure(r: Response): Promise<Error> {
 // fleetCall is one fleet route: JSON in, JSON out, a FleetRefusal on any
 // non-2xx. A 204 resolves to undefined.
 async function fleetCall<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const r = await fetch(apiUrl(`/api/v1/fleet${path}`), {
+  const r = await apiFetch(apiUrl(`/api/v1/fleet${path}`), {
     method,
     headers: oauthHeaders(body !== undefined),
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -2409,7 +2418,7 @@ async function fleetCall<T>(method: string, path: string, body?: unknown): Promi
 /** createFleet answers the status with the HTTP code: 201 when main holds
  *  the active record, 202 while a publish is pending. */
 async function createFleet(origin?: FleetOriginBody): Promise<{ status: number; fleet: FleetStatus }> {
-  const r = await fetch(apiUrl('/api/v1/fleet/create'), {
+  const r = await apiFetch(apiUrl('/api/v1/fleet/create'), {
     method: 'POST',
     headers: oauthHeaders(true),
     body: JSON.stringify(origin ? { origin } : {}),
@@ -2477,13 +2486,13 @@ const rebuildFleetIndex = () =>
   fleetCall<{ id: string; kind: 'index-rebuild'; state: string; repo: string; branch: string }>('POST', '/index-rebuild', {});
 
 async function getFleet(): Promise<FleetStatus> {
-  const r = await fetch(apiUrl('/api/v1/fleet'), { headers: oauthHeaders(false) });
+  const r = await apiFetch(apiUrl('/api/v1/fleet'), { headers: oauthHeaders(false) });
   if (!r.ok) throw await fleetFailure(r);
   return (await r.json()) as FleetStatus;
 }
 
 async function listFleetMembers(): Promise<FleetMember[]> {
-  const r = await fetch(apiUrl('/api/v1/fleet/members'), { headers: oauthHeaders(false) });
+  const r = await apiFetch(apiUrl('/api/v1/fleet/members'), { headers: oauthHeaders(false) });
   if (!r.ok) throw await fleetFailure(r);
   const data = (await r.json()) as { members?: FleetMember[] };
   return data.members ?? [];
@@ -2584,7 +2593,7 @@ function secretAwareHeaders(secretId: string | null | undefined): Record<string,
 }
 
 async function secretsCall<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const r = await fetch(apiUrl(`/api/v1/secrets${path}`), {
+  const r = await apiFetch(apiUrl(`/api/v1/secrets${path}`), {
     method,
     headers: oauthHeaders(body !== undefined),
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -2620,7 +2629,7 @@ export interface OriginCredentialBody {
 
 async function setOriginCredential(repo: string, body: OriginCredentialBody): Promise<void> {
   const gated = body.secret_id !== undefined;
-  const r = await fetch(`${repoBase(repo)}/origin/credential`, {
+  const r = await apiFetch(`${repoBase(repo)}/origin/credential`, {
     method: 'PUT',
     headers: gated ? oauthHeaders(true) : { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -2727,7 +2736,7 @@ export const api = {
   // returns text/yaml, not JSON, so it needs a plain fetch with its own
   // non-OK check rather than fetchJSON (which assumes a JSON body).
   ontologyPresetYAML: async (name: string): Promise<string> => {
-    const r = await fetch(apiUrl(`/api/v1/ontologies/presets/${encodeURIComponent(name)}`));
+    const r = await apiFetch(apiUrl(`/api/v1/ontologies/presets/${encodeURIComponent(name)}`));
     if (!r.ok) throw new Error(`preset ${name} → ${r.status}`);
     return r.text();
   },
@@ -2917,7 +2926,7 @@ export const api = {
   },
 
   getOrigin: (repo: string): Promise<OriginResponse | null> =>
-    fetch(`${repoBase(repo)}/origin`).then(r => {
+    apiFetch(`${repoBase(repo)}/origin`).then(r => {
       if (r.status === 204) return null; // no origin configured
       if (!r.ok) throw new Error(`origin → ${r.status} ${r.statusText}`);
       return r.json();
@@ -2935,7 +2944,7 @@ export const api = {
   // A linked repo's detach unlinks it, which needs the admin gate: the call
   // carries the same-origin proof header.
   deleteOrigin: (repo: string): Promise<void> =>
-    fetch(`${repoBase(repo)}/origin`, { method: 'DELETE', headers: oauthHeaders(false) })
+    apiFetch(`${repoBase(repo)}/origin`, { method: 'DELETE', headers: oauthHeaders(false) })
       .then(async r => {
         if (r.ok) return;
         let body: unknown = null;
@@ -2948,7 +2957,7 @@ export const api = {
   // setOriginUpstream changes ONLY the consensus ("main") branch of an existing
   // origin (no reconnect, no auth change). The reconcile loop picks it up next tick.
   setOriginUpstream: (repo: string, branch: string): Promise<void> =>
-    fetch(`${repoBase(repo)}/origin/upstream`, {
+    apiFetch(`${repoBase(repo)}/origin/upstream`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ branch }),
@@ -2996,7 +3005,7 @@ export const api = {
   // chosen by looking at which paths. So the rejection is rethrown as a typed
   // error carrying them rather than flattened into a message.
   experimentAction: async (repo: string, name: string, action: 'commit' | 'rollback' | 'sync'): Promise<void> => {
-    const r = await fetch(`${repoBase(repo)}/experiments/${encodeURIComponent(name)}/${action}`, { method: 'POST' });
+    const r = await apiFetch(`${repoBase(repo)}/experiments/${encodeURIComponent(name)}/${action}`, { method: 'POST' });
     if (r.ok) return;
     // Only the two members this function branches on. A problem document may
     // carry more; nothing here reads them, so nothing here has to name them.
@@ -3028,7 +3037,7 @@ export const api = {
   mergePushedBranch: async (
     repo: string, branch: string, expectedTip: string, resolution?: 'host' | 'peer',
   ): Promise<{ mode: string; new_tip: string; into: string }> => {
-    const r = await fetch(`${branchBase(repo, branch)}/merge`, {
+    const r = await apiFetch(`${branchBase(repo, branch)}/merge`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(resolution ? { expected_tip: expectedTip, resolution } : { expected_tip: expectedTip }),
@@ -3050,7 +3059,7 @@ export const api = {
   },
 
   retractFact: (repo: string, branch: string, path: string): Promise<void> =>
-    fetch(`${branchBase(repo, branch)}/facts/${path}`, { method: 'DELETE' })
+    apiFetch(`${branchBase(repo, branch)}/facts/${path}`, { method: 'DELETE' })
       .then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.title || e.detail || r.statusText); }); }),
 
   completions: (repo: string, branch: string, category: string, prefix = ''): Promise<{ values: string[] }> =>
@@ -3063,7 +3072,7 @@ export const api = {
   ): Promise<{ from: Fact | null; to: Fact | null }> => {
     const fetchSide = async (commit: string): Promise<Fact | null> => {
       const url = `${branchBase(repo, branch)}/commits/${commit}/facts/${path}`;
-      const res = await fetch(url, { signal });
+      const res = await apiFetch(url, { signal });
       if (res.status === 404) {
         // A side the fact is absent at is null (the diff shows it empty).
         // A commit this repo does not hold is not an absent side: rethrow
@@ -3193,8 +3202,8 @@ export const api = {
       });
     };
     return Promise.all([
-      fetch(`${factURL}/incoming${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw httpError(r.status, errorText(e, r.statusText), problemCode(e)); })),
-      fetch(`${factURL}/outgoing${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw httpError(r.status, errorText(e, r.statusText), problemCode(e)); })),
+      apiFetch(`${factURL}/incoming${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw httpError(r.status, errorText(e, r.statusText), problemCode(e)); })),
+      apiFetch(`${factURL}/outgoing${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw httpError(r.status, errorText(e, r.statusText), problemCode(e)); })),
     ]).then(([inc, out]) => ({
       incoming: groupRefs(parseRefs(inc), 'incoming'),
       outgoing: groupRefs(parseRefs(out), 'outgoing'),

@@ -1,4 +1,4 @@
-import { useReducer, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { useReducer, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { flushSync } from 'react-dom';
 import type { Dispatch } from 'react';
 import { reducer, init, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText, sameContext } from './state';
@@ -54,6 +54,8 @@ import { StatusFooter } from './StatusFooter';
 import { useVersion } from './hooks';
 import { createOutageLog } from './streamOutage';
 import './App.css';
+import { LoginPage } from './LoginPage';
+import { authState } from './authState';
 
 // Library | RightPanel splitter sizing. Persisted to localStorage so the
 // width survives reloads. Clamped on read + on every drag step.
@@ -336,7 +338,19 @@ function mergeMissingRepos(prev: RepoInfo[], next: RepoInfo[]): RepoInfo[] {
   return out;
 }
 
+// App shows the login page while the server has asked this browser to sign in
+// (an API answer of 401, authState; never before the unified-auth flip), and
+// the app otherwise. Signing in reloads, so the app boots again as the new
+// session.
 export default function App() {
+  const loginRequired = useSyncExternalStore(authState.subscribe, authState.isLoginRequired);
+  if (loginRequired) {
+    return <LoginPage onLoggedIn={() => { authState.loggedIn(); window.location.reload(); }} />;
+  }
+  return <AppMain />;
+}
+
+function AppMain() {
   const [state, dispatch] = useReducer(reducer, init);
   // The view state: which page of the shell is on screen. Its own reducer and
   // NOT AppState, because none of it is a way of looking at facts (see

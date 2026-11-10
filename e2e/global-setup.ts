@@ -6,7 +6,8 @@ import getPort from 'get-port';
 import { knomitModelsDir } from './helpers/appdirs.js';
 import { onnxEnv, requireBuild } from './helpers/binary.js';
 import { cleanupFromState, STATE_FILE, type E2EState } from './helpers/cleanup.js';
-import { createRepo, seedFixture } from './fixtures/seed.js';
+import { createRepo, seedFixture, E2E_REPO } from './fixtures/seed.js';
+import { bearer, mintPAT } from './helpers/auth.js';
 
 function writeState(state: E2EState) {
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
@@ -74,13 +75,14 @@ async function start() {
   const baseURL = `http://localhost:${port}`;
   writeState({ pid, port, home: knomitHome, baseURL });
 
-  // 6. Poll GET /api/v1/repos until 200
+  // 6. Poll a PUBLIC route until 200: after the unified-auth flip
+  //    /api/v1/repos needs a credential, /api/v1/version never does.
   const deadline = Date.now() + 60_000;
   let ready = false;
 
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`${baseURL}/api/v1/repos`);
+      const res = await fetch(`${baseURL}/api/v1/version`);
       if (res.ok) {
         ready = true;
         break;
@@ -97,13 +99,20 @@ async function start() {
 
   console.log('[e2e] Server is ready');
 
+  // 6b. An operator token for every API request the harness makes, minted
+  //     over the local listener (helpers/auth.ts). The server ignores it
+  //     until the unified-auth flip; after it, nothing works without it.
+  const pat = await mintPAT(knomitHome, 'operator');
+  writeState({ pid, port, home: knomitHome, baseURL, pat });
+  const headers = bearer(pat);
+
   // 7. Create the repo the tests work in. A fresh knomit serves none.
   console.log('[e2e] Creating e2e repo...');
-  await createRepo(baseURL);
+  await createRepo(baseURL, E2E_REPO, headers);
 
   // 8. Seed data
   console.log('[e2e] Seeding fixture data...');
-  await seedFixture(baseURL);
+  await seedFixture(baseURL, headers);
   console.log('[e2e] Seed complete');
 
   // 9. Set env for Playwright

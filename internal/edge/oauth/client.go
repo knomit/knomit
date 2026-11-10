@@ -131,6 +131,9 @@ func NewResolver(clients []config.OAuthClient) *Resolver {
 }
 
 func (r *Resolver) Resolve(ctx context.Context, id string) (Client, error) {
+	if id == WebClientID {
+		return Client{}, fmt.Errorf("%w: %s is the built-in browser client, not an OAuth client", ErrInvalidClient, id)
+	}
 	if c, ok := r.static[id]; ok {
 		return c, nil
 	}
