@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { EditorState, StateEffect, StateField } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
 import { Decoration, EditorView, MatchDecorator, ViewPlugin, drawSelection, hoverTooltip, keymap } from '@codemirror/view';
@@ -223,9 +223,11 @@ export function JsonView({ text, json: isJson, error = false, links, onOpenFact,
   const view = useRef<EditorView | null>(null);
   const openRef = useRef(onOpenFact);
   const readyRef = useRef(onReady);
-  useEffect(() => { openRef.current = onOpenFact; readyRef.current = onReady; });
+  useLayoutEffect(() => { openRef.current = onOpenFact; readyRef.current = onReady; });
 
-  useEffect(() => {
+  // A layout effect: the editor is in the box before the page paints (or a test
+  // finds the box), never an empty well for a frame.
+  useLayoutEffect(() => {
     const parent = host.current;
     if (!parent) return;
     const highlighted = isJson && !error;

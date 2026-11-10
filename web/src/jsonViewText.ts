@@ -57,8 +57,11 @@ export function jsonText(v: unknown): ViewText {
   try {
     return { text: JSON.stringify(unpackJson(v ?? null), null, 2) ?? 'null', json: true };
   } catch {
-    // Too deep to walk (a RangeError): the compact form, as plain text, if even that fits.
-    try { return { text: JSON.stringify(v) ?? 'null', json: false }; } catch { return { text: String(v), json: false }; }
+    // Too deep to walk (a RangeError): the compact form, as plain text, if even
+    // that fits. String(v) recurses through nested arrays too (it overflowed on
+    // node 22's smaller stack), so it is guarded as well; past it, nothing is shown.
+    try { return { text: JSON.stringify(v) ?? 'null', json: false }; } catch { /* still too deep */ }
+    try { return { text: String(v), json: false }; } catch { return { text: '', json: false }; }
   }
 }
 

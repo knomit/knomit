@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { dateAt, foldLabel, initialFolds, jsonBlocks, jsonText, kbRefs, resultText, unpackJson } from './jsonViewText';
 
 describe('resultText: what the JSON view shows for a raw result', () => {
@@ -33,16 +33,24 @@ describe('resultText: what the JSON view shows for a raw result', () => {
     expect(resultText(JSON.stringify({ s: '{"__proto__":{"x":1}}' })).text).toContain('"__proto__": {');
   });
 
-  it('a structure too deep to walk falls back to plain text instead of throwing', () => {
-    const raw = '['.repeat(20000) + ']'.repeat(20000);
-    expect(() => JSON.parse(raw)).not.toThrow();
-    const out = resultText(raw);
-    expect(out).toEqual({ text: raw, json: false });
-    // The same depth arriving as a call's arguments does not throw either.
-    let deep: unknown = [];
-    for (let i = 0; i < 20000; i++) deep = [deep];
-    expect(() => jsonText(deep)).not.toThrow();
-    expect(jsonText(deep).json).toBe(false);
+  // A structure too deep to walk overflows the stack with a RangeError, but HOW
+  // deep depends on the engine (20000 levels passed on node 26 and threw on node
+  // 22), so these force the RangeError instead of building a deep value.
+  describe('a structure too deep to walk', () => {
+    const overflow = () => { throw new RangeError('Maximum call stack size exceeded'); };
+    afterEach(() => { vi.restoreAllMocks(); });
+
+    it('resultText falls back to the raw text, plain, instead of throwing', () => {
+      vi.spyOn(JSON, 'stringify').mockImplementation(overflow);
+      expect(resultText('[[[1]]]')).toEqual({ text: '[[[1]]]', json: false });
+    });
+
+    it('jsonText (the Arguments tab) falls back to plain text, then to nothing, never throwing', () => {
+      vi.spyOn(JSON, 'stringify').mockImplementation(overflow);
+      expect(jsonText([[1], 2])).toEqual({ text: '1,2', json: false });
+      // String() overflows on nested arrays too: past it, an empty view, not a crash.
+      expect(jsonText({ toString: overflow })).toEqual({ text: '', json: false });
+    });
   });
 
   it('jsonText: a call\'s arguments, unpacked and pretty-printed; no arguments is null', () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react';
 import { EditorView } from '@codemirror/view';
 import { EditorSelection } from '@codemirror/state';
@@ -12,16 +12,8 @@ import type { ResolvedFact } from './chatFactLinks';
 // LOOKS (wrapping, colours, the chevron's turn, the tooltip) is checked in a
 // real browser.
 
-// A mouse press makes CodeMirror map the pointer to a position, which measures
-// text ranges; jsdom's Range has no getClientRects/getBoundingClientRect, and
-// the measure threw an unhandled error after the test. Empty geometry is enough
-// here: the tests assert the link handler, not where the caret lands.
-beforeAll(() => {
-  const proto = Range.prototype as unknown as Record<string, unknown>;
-  if (!proto.getClientRects) proto.getClientRects = () => ({ length: 0, item: () => null, [Symbol.iterator]: [][Symbol.iterator] });
-  if (!proto.getBoundingClientRect) proto.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) });
-});
-
+// jsdom's Range has no geometry; test-setup.ts gives it empty rects, which
+// CodeMirror needs when a mouse press or a selection is measured.
 const FACT_REF = 'kb://3ec012f5b4d2/kb/architecture/web/api-chat/ca7a68fa.md';
 const fact: ResolvedFact = { handle: FACT_REF, id: 'ca7a68fa', title: 'A chat title', type: 'observation', repo: 'knomit-kb', branch: 'agent/x', path: 'kb/architecture/web/api-chat/ca7a68fa.md', excerpt: '' };
 

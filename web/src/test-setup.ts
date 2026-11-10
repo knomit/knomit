@@ -39,6 +39,18 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = function () {};
 }
 
+// jsdom's Range has no getClientRects/getBoundingClientRect. CodeMirror measures
+// text ranges after a mouse press, a selection or a focus (drawSelection's
+// layer), so any test that renders an editor (the chat's JsonView, the ontology
+// editor) logged "textRange(...).getClientRects is not a function" from the
+// measure frame, or failed with it as an unhandled error. Empty geometry is
+// enough: no test asserts where CodeMirror draws.
+{
+  const proto = Range.prototype as unknown as Record<string, unknown>;
+  if (!proto.getClientRects) proto.getClientRects = () => ({ length: 0, item: () => null, [Symbol.iterator]: [][Symbol.iterator] });
+  if (!proto.getBoundingClientRect) proto.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) });
+}
+
 // jsdom does not implement EventSource. Components that subscribe to a server
 // stream on mount (the Activity facet's sessions reader, App's branch and repo
 // events) would throw on construction otherwise — in EVERY test that renders
