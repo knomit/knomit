@@ -12,17 +12,28 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/corpus/repos"
 	"knomit/internal/edge/web/httpx"
+	"knomit/internal/engine/llm"
+	"knomit/internal/engine/store"
 	"knomit/internal/foundation/clientsessions"
 	"knomit/internal/foundation/pki"
 )
 
-// shortGrace shortens the stream grace for a test.
-func shortGrace(t *testing.T, d time.Duration) {
+// idleWait is how long the lifetime tests leave a chat with no page stream
+// before they look at it again. Chats used to end 60 s after their owner's
+// last page stream closed (or 60 s after creation with none attached); the
+// sabotage for these tests puts that clock back at a fraction of idleWait.
+const idleWait = 400 * time.Millisecond
+
+// logTypes lists the record types of a chat's session log, in order.
+func logTypes(t *testing.T, dir, id string) []string {
 	t.Helper()
-	orig := chatStreamGrace
-	chatStreamGrace = d
-	t.Cleanup(func() { chatStreamGrace = orig })
+	var out []string
+	for _, l := range readLog(t, dir, id) {
+		out = append(out, l["type"].(string))
+	}
+	return out
 }
 
 func eventually(t *testing.T, what string, cond func() bool) {
@@ -69,45 +80,141 @@ func readLog(t *testing.T, dir, id string) []map[string]any {
 	return out
 }
 
-// Review Focus 3: a tab closed on an idle chat.
-func TestChat_EndsAfterStreamGrace(t *testing.T) {
-	shortGrace(t, 150*time.Millisecond)
+// A tab closed (or a laptop asleep, or a hidden desktop window whose stream
+// Wails reaped) on an idle chat: the chat stays, keeps working with no page
+// attached, and ends only on DELETE, which still does every part of the end.
+//
+// SABOTAGE: put the stream grace back (detachPage starts a clock on the last
+// close that ends the chat) with a clock shorter than idleWait -> the chat is
+// gone from GET /chats and this fails.
+func TestChat_OutlivesItsPageStream(t *testing.T) {
 	h := newHarness(t)
+	h.queue("a1", textStep("first", usage), textStep("second", usage))
 	id := h.create("uid:501", "a1")
 	c := h.mgr.find(id, writer.String())
 	require.NotNil(t, c)
 	dir := c.store.dir
-	require.True(t, exists(dir), "the chat has a temp dir while it lives")
-	row, ok := h.sessionRow(id)
-	require.True(t, ok)
-	require.Nil(t, row.Ended, "the MCP session is open while the chat lives")
 
 	s := h.attach("uid:501", id)
-	time.Sleep(300 * time.Millisecond) // longer than the grace: an attached stream keeps the chat
-	code, _ := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
-	require.Equal(t, http.StatusOK, code, "an attached stream holds the chat past the grace")
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "one"))
+	untilChat(s, id, "turn_done")
 	s.close()
+	h.waitDetached(writer.String())
+	time.Sleep(idleWait)
 
-	eventually(t, "the chat to end", func() bool { return !exists(dir) })
-	row, ok = h.sessionRow(id)
+	require.Equal(t, "idle", h.row("uid:501", id).State, "GET /chats still lists the chat with no page stream")
+	code, _ := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
+	require.Equal(t, http.StatusOK, code)
+	require.True(t, exists(dir), "the temp dir stays while the chat lives")
+	sess, ok := h.sessionRow(id)
 	require.True(t, ok)
-	require.NotNil(t, row.Ended, "the MCP session recorded ended_at")
+	require.Nil(t, sess.Ended, "the MCP session stays open while the chat lives")
+	require.NotContains(t, logTypes(t, h.logDir, id), "chat_end")
+
+	// A turn with no page attached runs; its end is parked for the next page.
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "two"))
+	eventually(t, "the second turn to finish", func() bool {
+		r := h.row("uid:501", id)
+		return r.State == "idle" && r.Turns == 2
+	})
+
+	code, _ = h.do("uid:501", http.MethodDelete, "/chats/"+id, nil)
+	require.Equal(t, http.StatusNoContent, code)
+	require.False(t, exists(dir), "DELETE removes the temp dir")
+	sess, ok = h.sessionRow(id)
+	require.True(t, ok)
+	require.NotNil(t, sess.Ended, "DELETE records ended_at on the MCP session")
+	lines := readLog(t, h.logDir, id)
+	require.Equal(t, "chat_end", lines[len(lines)-1]["type"])
+	require.Equal(t, "deleted", lines[len(lines)-1]["reason"])
 	code, _ = h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
 	require.Equal(t, http.StatusNotFound, code)
 }
 
-func TestChat_ReconnectWithinGraceKeepsChat(t *testing.T) {
-	shortGrace(t, 600*time.Millisecond)
+// A chat created while no page stream of its owner is attached (a client that
+// creates over the API, or a page whose stream was dropped) lives too.
+//
+// SABOTAGE: put the creation clock back (create starts the grace when the
+// owner has no page stream) with a clock shorter than idleWait -> the chat is
+// 404 and this fails.
+func TestChat_CreatedWithNoPageStreamLives(t *testing.T) {
 	h := newHarness(t)
+	h.queue("a1", textStep("hello", usage))
 	id := h.create("uid:501", "a1")
-	s1 := h.attach("uid:501", id)
-	s1.close()
-	time.Sleep(150 * time.Millisecond)
-	s2 := h.attach("uid:501", id) // attach asserts the first frame is "ready"
-	time.Sleep(900 * time.Millisecond)
+	time.Sleep(idleWait)
 	code, _ := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
-	require.Equal(t, http.StatusOK, code, "the reattached stream kept the chat alive past one full grace")
-	s2.close()
+	require.Equal(t, http.StatusOK, code, "no page stream ever attached, and the chat lives")
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "hi"))
+	eventually(t, "the turn to finish", func() bool { return h.row("uid:501", id).Turns == 1 && h.row("uid:501", id).State == "idle" })
+}
+
+// A page that comes back (a reload, a woken laptop, a desktop window whose
+// stream was reaped and reopened) gets ready, finds the chat in GET /chats with
+// its row state, gets the turn end it missed, and its next turn's chat_state.
+//
+// SABOTAGE: put the stream grace back with a clock shorter than idleWait ->
+// the chat is not listed and this fails.
+func TestChat_ReattachingPageSeesTheChatAndItsState(t *testing.T) {
+	h := newHarness(t)
+	release := make(chan struct{})
+	h.queue("a1", step{fn: func(llm.Snapshot) step { <-release; return textStep("late", usage) }}, textStep("again", usage))
+	id := h.create("uid:501", "a1")
+	s := h.attachPage("uid:501")
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "one"))
+	untilChat(s, id, "chat_state")
+	s.close()
+	h.waitDetached(writer.String())
+	close(release) // the turn ends while no page is attached
+	eventually(t, "the turn to end", func() bool { return h.row("uid:501", id).State == "idle" })
+	time.Sleep(idleWait)
+
+	s2 := h.attachPage("uid:501") // asserts the first frame is ready
+	r := h.row("uid:501", id)
+	require.Equal(t, "idle", r.State)
+	require.Equal(t, 1, r.Turns)
+	require.Equal(t, "one", r.Title)
+	missed := s2.next("missed end", 3*time.Second)
+	require.Equal(t, "turn_done", missed.Name)
+	require.Equal(t, id, chatOfEvent(missed))
+
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "two"))
+	st := untilChat(s2, id, "chat_state")[0]
+	var body rowState
+	require.NoError(t, json.Unmarshal(st.Data, &body))
+	require.Equal(t, 2, body.Turns, "the reattached stream carries the chat's chat_state")
+	untilChat(s2, id, "turn_done")
+}
+
+// A turn waiting for approval when its page goes away keeps waiting: nothing
+// times the approval out, the chat lists as awaiting_approval, and a page that
+// comes back can answer it and the turn completes.
+//
+// SABOTAGE: put the stream grace back with a clock shorter than idleWait ->
+// ending the chat cancels the turn, the approval is gone (404) and this fails.
+func TestChat_ApprovalWaitsWithNoPageAttached(t *testing.T) {
+	h := newHarness(t)
+	handle := h.bind(writer, "chat-00000000000000000000000000000081", "alpha")
+	h.queue("a1", toolStep("tu_w", "knomit_learn", learnArgs(handle, "Written after the page came back"), usage), textStep("done", usage))
+	id := h.create("uid:501", "a1")
+	c := h.mgr.find(id, writer.String())
+	s := h.attach("uid:501", id)
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "write"))
+	s.until("approval")
+	s.close()
+	h.waitDetached(writer.String())
+	time.Sleep(idleWait)
+
+	require.Equal(t, "awaiting_approval", h.row("uid:501", id).State)
+	c.mu.Lock()
+	running, pending := c.running, len(c.pending)
+	c.mu.Unlock()
+	require.True(t, running, "the turn is still running, blocked in Decide")
+	require.Equal(t, 1, pending)
+
+	s2 := h.attach("uid:501", id)
+	require.Equal(t, http.StatusNoContent, h.approve("uid:501", id, "tu_w", "allow"))
+	untilChat(s2, id, "turn_done")
+	require.Contains(t, h.queryTitles(writer, "chat-00000000000000000000000000000082", handle), "Written after the page came back")
 }
 
 // Review Focus 3: a tab closed during an approval.
@@ -165,19 +272,19 @@ func TestChat_SweepAtStartRemovesDeadRuns(t *testing.T) {
 }
 
 func TestChat_SessionLogOutlivesChat(t *testing.T) {
-	shortGrace(t, 100*time.Millisecond)
 	h := newHarness(t)
 	id := h.create("uid:501", "a1")
 	c := h.mgr.find(id, writer.String())
 	dir := c.store.dir
-	h.mgr.find(id, writer.String()) // still live
-	eventually(t, "the chat to end by grace", func() bool { return !exists(dir) })
+	code, _ := h.do("uid:501", http.MethodDelete, "/chats/"+id, nil)
+	require.Equal(t, http.StatusNoContent, code)
+	require.False(t, exists(dir))
 
 	lines := readLog(t, h.logDir, id)
 	require.Equal(t, "chat_start", lines[0]["type"])
 	last := lines[len(lines)-1]
 	require.Equal(t, "chat_end", last["type"])
-	require.Equal(t, "stream_grace", last["reason"])
+	require.Equal(t, "deleted", last["reason"])
 
 	// A later start's sweep touches only the sessions directory.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -205,4 +312,79 @@ func TestChat_ShutdownEndsEveryChatAndRemovesTheRun(t *testing.T) {
 		last := readLog(t, h.logDir, id)
 		require.Equal(t, "shutdown", last[len(last)-1]["reason"])
 	}
+}
+
+// A chat idle longer than the session reaper's tool idle TTL (15 min in
+// production, session.tool_idle_ttl) still works on its next turn: the reaper
+// deletes the paging session the chat's earlier query opened, and the chat's
+// next query, through the same binding handle, answers and pages as before.
+// Only the reaped cursor itself is gone, as it is for any MCP client.
+//
+// The TTL is shortened by calling the reaper's own pass (ReapIdleSessions)
+// with a 1 ms TTL (last_used_at has second precision, hence the sleep); the
+// test asserts the pass deleted at least one session, so it cannot pass with
+// a reaper that reached nothing.
+func TestChat_IdleChatSurvivesTheToolSessionReaper(t *testing.T) {
+	h := newHarness(t)
+	handle := h.bind(writer, "chat-00000000000000000000000000000091", "alpha")
+	learn := learnArgs(handle, "Idle chat fact one")
+	learn["facts"] = append(learn["facts"].([]any), map[string]any{
+		"topic": "gotchas", "category": "chat/api", "title": "Idle chat fact two",
+		"body": "the second fact, so a one-row query pages", "confidence": 0.8, "sources": 1,
+	})
+	query := map[string]any{"binding": handle, "path": "kb/gotchas/chat", "limit": 1}
+	var oldCursor string
+	m := h.queue("a1",
+		toolStep("tu_l", "knomit_learn", learn, usage),
+		toolStep("tu_q1", "knomit_query", query, usage),
+		textStep("first", usage),
+		toolStep("tu_q2", "knomit_query", query, usage),
+		step{fn: func(llm.Snapshot) step {
+			return toolStep("tu_q3", "knomit_query", map[string]any{"binding": handle, "cursor": oldCursor}, usage)
+		}},
+		textStep("second", usage),
+	)
+	id := h.create("uid:501", "a1")
+	s := h.attach("uid:501", id)
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "write then read"))
+	s.until("approval")
+	require.Equal(t, http.StatusNoContent, h.approve("uid:501", id, "tu_l", "allow"))
+	untilChat(s, id, "turn_done")
+	s.close()
+	h.waitDetached(writer.String())
+	oldCursor = cursorOf(t, lastToolResult(m.requests()[2]))
+	require.NotEmpty(t, oldCursor, "the first query paged")
+
+	time.Sleep(1100 * time.Millisecond)
+	reaped := 0
+	h.repos.ForEach(func(_ string, ri *repos.RepoInstance) {
+		_ = ri.WithRead(func(svc *store.Service) {
+			n, err := svc.ReapIdleSessions(context.Background(), time.Millisecond, time.Millisecond)
+			require.NoError(t, err)
+			reaped += n
+		})
+	})
+	require.Positive(t, reaped, "the reaper pass deleted the chat's idle paging session")
+
+	require.Equal(t, http.StatusAccepted, h.turn("uid:501", id, "read again"))
+	eventually(t, "the second turn to finish", func() bool {
+		r := h.row("uid:501", id)
+		return r.State == "idle" && r.Turns == 2
+	})
+	reqs := m.requests()
+	require.Len(t, reqs, 6)
+	fresh := lastToolResult(reqs[4])
+	require.Contains(t, fresh, "Idle chat fact", "the query after the reap answered through the same handle")
+	require.NotEmpty(t, cursorOf(t, fresh), "and paged: a new paging session was opened")
+	require.Contains(t, lastToolResult(reqs[5]), "session expired", "only the reaped cursor is gone, with the error any client gets")
+}
+
+// cursorOf reads the cursor out of a knomit_query result ("" when none).
+func cursorOf(t *testing.T, content string) string {
+	t.Helper()
+	var env struct {
+		Cursor string `json:"cursor"`
+	}
+	_ = json.NewDecoder(strings.NewReader(content)).Decode(&env)
+	return env.Cursor
 }

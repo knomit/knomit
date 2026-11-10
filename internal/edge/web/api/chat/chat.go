@@ -18,12 +18,6 @@ import (
 	"knomit/internal/engine/llm"
 )
 
-// chatStreamGrace is how long a chat lives once its owner has no page events
-// stream attached (plan P11): the clock starts when the owner's LAST page
-// stream closes, or at creation when none is attached. A package variable so
-// tests can shorten it; production never changes it.
-var chatStreamGrace = 60 * time.Second
-
 // maxApprovalArgs bounds the arguments echoed in an approval event; a larger
 // call is shown without them (the call file keeps them in full).
 const maxApprovalArgs = 16 * 1024
@@ -245,10 +239,6 @@ type chat struct {
 	turnsDone  int       // turns that finished normally (no error, not stopped): auto-title waits for titleAfterTurns
 	startedAt  time.Time // when the chat was made
 	lastActive time.Time // the last turn start or row change
-	// afterGraceStep is a test seam: graceFired calls it after clearing the
-	// fired timer and before it counts the owner's streams.
-	afterGraceStep func()
-	grace          *time.Timer
 	// betweenRunAndEnd is a test seam: finishTurn calls it after it has marked
 	// the turn not running and released c.mu, and before it sends the turn's
 	// end, which is where the next turn can start.
@@ -553,51 +543,19 @@ func (c *chat) noteState() {
 	c.sendLocked("chat_state", st, false, 0)
 }
 
-// adoptPage is what a newly attached page stream does to a chat: stop its
-// grace clock and take the terminal event no stream received.
+// adoptPage is what a newly attached page stream does to a chat: take the
+// terminal event no stream received. A chat does not need a page stream to
+// live (it ends only on DELETE or when the server's lifetime ends), so there is
+// nothing else to do here.
 func (c *chat) adoptPage(s *pageSub) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.ended {
 		return
 	}
-	if c.grace != nil {
-		c.grace.Stop()
-		c.grace = nil
-	}
 	if c.missedEnd != nil && !c.running && c.missedTurn == c.turnAt && c.m.deliverTo(s, c.missedEnd) {
 		c.missedEnd = nil
 	}
-}
-
-// startGrace starts the clock that ends the chat unless a page stream of its
-// owner is attached when it runs out.
-func (c *chat) startGrace() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.ended || c.grace != nil {
-		return
-	}
-	c.grace = time.AfterFunc(chatStreamGrace, c.graceFired)
-}
-
-func (c *chat) graceFired() {
-	// Clear the fired timer FIRST, then look at the streams: a stream that
-	// closes after the look finds no timer and starts a new one (startGrace
-	// returns early while c.grace is set), so the chat is never left with no
-	// stream and no clock.
-	c.mu.Lock()
-	c.grace = nil
-	hook := c.afterGraceStep
-	c.mu.Unlock()
-	if hook != nil {
-		hook()
-	}
-	// A stream may have attached while the timer was already running out.
-	if c.m.pageCount(c.owner) > 0 {
-		return
-	}
-	c.end("stream_grace")
 }
 
 // ---- the turn ----
@@ -1005,8 +963,9 @@ func (c *chat) argsHook(tu llm.ToolUse) json.RawMessage {
 
 // ---- ending ----
 
-// end finishes the chat once, whatever called it (the stream grace timer, a
-// DELETE, the server's lifetime): it forgets the chat, cancels its context so
+// end finishes the chat once, whatever called it (a DELETE or the server's
+// lifetime; those are the only two, and no page stream closing ends a chat,
+// so an idle chat with no page attached lives on): it forgets the chat, cancels its context so
 // a blocked approval or a running turn unwinds, waits for the turn, records
 // the end in the MCP session (ended_at), writes chat_end to the session log
 // and removes the temp files. The session log file stays. Later callers wait
@@ -1016,10 +975,6 @@ func (c *chat) end(reason string) {
 		defer close(c.done)
 		c.mu.Lock()
 		c.ended = true
-		if c.grace != nil {
-			c.grace.Stop()
-			c.grace = nil
-		}
 		c.mu.Unlock()
 		c.m.forget(c.id)
 		c.cancel()

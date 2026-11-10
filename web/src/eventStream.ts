@@ -93,7 +93,7 @@ export const RECONNECT_MAX_MS = 5000;
  * window), ends its streams on the Go side without a close reaching the page,
  * and the page's next poll quietly gets a new, empty session. Without this the
  * page keeps a stream that is open with nothing behind it until reload, and
- * every chat it starts sees no event and is ended by the server's stream grace.
+ * every chat it shows or starts sees no event.
  */
 export const STALE_STREAM_MS = 45_000;
 

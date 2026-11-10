@@ -108,71 +108,27 @@ func TestPageStream_ChatStateTracksTheRow(t *testing.T) {
 	require.Equal(t, "idle", states[len(states)-1])
 }
 
-// A chat lives while ANY page stream of its owner is attached, and ends the
-// grace after the last one closes. Two streams are two tabs.
+// Chats outlive every page stream of their owner: two tabs close one after the
+// other, and a chat made while none is attached, all stay listed.
 //
-// Two independent guards keep the chat alive when one of two tabs closes:
-// detachPage starts the clocks only when the owner's set is empty, and
-// graceFired re-checks the count. This end-to-end test fails only when BOTH
-// are broken; the tests in pagestream_grace_test.go each fail on one guard.
-//
-// SABOTAGE: mount.go detachPage `if empty {` -> `if true {` AND chat.go
-// graceFired, skip the pageCount return -> the chat ends and this fails.
-func TestPageStream_ChatLivesWhileAnyStreamIsAttached(t *testing.T) {
-	shortGrace(t, 250*time.Millisecond)
+// SABOTAGE: put the stream grace back (detachPage starts a clock on the last
+// close, create starts one with no stream) with a clock shorter than idleWait
+// -> the chats are 404 and this fails.
+func TestPageStream_ChatsOutliveEveryStreamOfTheirOwner(t *testing.T) {
 	h := newHarness(t)
-	id := h.create("uid:501", "a1")
+	a := h.create("uid:501", "a1")
 	s1 := h.attachPage("uid:501")
 	s2 := h.attachPage("uid:501")
-
+	b := h.create("uid:501", "a2")
 	s1.close()
-	time.Sleep(600 * time.Millisecond) // more than two graces
-	code, _ := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
-	require.Equal(t, http.StatusOK, code, "the second stream keeps the chat alive")
-
 	s2.close()
-	eventually(t, "the chat to end after the last stream closed", func() bool {
-		code, _ := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
-		return code == http.StatusNotFound
-	})
-}
-
-// A chat created while a page stream is attached is covered at once: no grace
-// clock ends it. One created with none attached still follows the grace.
-func TestPageStream_CreateWhileAttachedIsCoveredAndWithoutIsNot(t *testing.T) {
-	shortGrace(t, 200*time.Millisecond)
-	h := newHarness(t)
-	bare := h.create("uid:501", "a1") // no page stream yet
-	s := h.attachPage("uid:501")      // attaching adopts it
-	covered := h.create("uid:501", "a2")
-	time.Sleep(500 * time.Millisecond)
-	for _, id := range []string{bare, covered} {
+	h.waitDetached(writer.String())
+	c := h.create("uid:501", "a1")
+	time.Sleep(idleWait)
+	for _, id := range []string{a, b, c} {
 		code, _ := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
 		require.Equal(t, http.StatusOK, code, id)
 	}
-	s.close()
-	eventually(t, "the server to see the stream gone", func() bool { return h.mgr.pageCount(writer.String()) == 0 })
-	alone := h.create("uid:501", "a1") // created with no stream attached
-	for _, id := range []string{bare, covered, alone} {
-		id := id
-		eventually(t, "chat to end by grace", func() bool {
-			code, _ := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
-			return code == http.StatusNotFound
-		})
-	}
-}
-
-// A chat nobody ever attached to still ends after the grace, though the owner's
-// other chats are covered by a stream of ANOTHER owner.
-func TestPageStream_AnotherOwnersStreamDoesNotCover(t *testing.T) {
-	shortGrace(t, 150*time.Millisecond)
-	h := newHarness(t)
-	id := h.create("uid:501", "a1")
-	_ = h.attachPage("uid:1000")
-	eventually(t, "the chat to end", func() bool {
-		code, _ := h.do("uid:501", http.MethodGet, "/chats/"+id, nil)
-		return code == http.StatusNotFound
-	})
 }
 
 // DELETE ends a chat at once while page streams are attached, and the stream

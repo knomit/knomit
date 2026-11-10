@@ -225,7 +225,8 @@ describe('WailsEventSource', () => {
   // The user-visible failure this guards: Wails reaped the page's stream session
   // while the window was not polling, so the desktop dropped the chat page
   // stream but the page's socket never closed. Every chat started afterwards got
-  // no event and was ended by the server's 60 s stream grace.
+  // no event (and, while chats still ended 60 s after their page stream, was
+  // ended by the server).
   it('reopens a socket that carries no frame for STALE_STREAM_MS, with no close and no error from Wails', async () => {
     vi.useFakeTimers();
     const { es, socks, sock } = await make();

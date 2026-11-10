@@ -212,13 +212,6 @@ func (m *manager) forget(id string) {
 	m.mu.Unlock()
 }
 
-// pageCount is how many page streams owner has attached.
-func (m *manager) pageCount(owner string) int {
-	m.pageMu.Lock()
-	defer m.pageMu.Unlock()
-	return len(m.pages[owner])
-}
-
 // broadcast offers frame to every page stream of owner and reports whether any
 // took it. A stream whose buffer is full is dropped (closed); its handler then
 // returns and detaches, and the client reconnects.
@@ -256,8 +249,8 @@ func (m *manager) deliverTo(s *pageSub, frame []byte) bool {
 	}
 }
 
-// attachPage registers owner's page stream. Every chat of the owner stops its
-// grace clock, and takes the terminal event no stream received into the stream.
+// attachPage registers owner's page stream. Every chat of the owner takes the
+// terminal event no stream received into the stream.
 func (m *manager) attachPage(owner string) *pageSub {
 	s := &pageSub{owner: owner, ch: make(chan []byte, 1024)}
 	m.pageMu.Lock()
@@ -275,10 +268,13 @@ func (m *manager) attachPage(owner string) *pageSub {
 	return s
 }
 
-// detachPage removes a page stream; the last one out of an owner starts the
-// grace clock of every chat the owner has.
+// detachPage removes a page stream. It does not touch the owner's chats: a
+// chat outlives every page stream of its owner (a closed tab, a sleeping
+// laptop, a hidden desktop window whose stream Wails reaped) and ends only on
+// DELETE or when the server's lifetime ends.
 func (m *manager) detachPage(s *pageSub) {
 	m.pageMu.Lock()
+	defer m.pageMu.Unlock()
 	if set := m.pages[s.owner]; set != nil {
 		if _, ok := set[s]; ok {
 			delete(set, s)
@@ -286,13 +282,6 @@ func (m *manager) detachPage(s *pageSub) {
 		}
 		if len(set) == 0 {
 			delete(m.pages, s.owner)
-		}
-	}
-	empty := len(m.pages[s.owner]) == 0
-	m.pageMu.Unlock()
-	if empty {
-		for _, c := range m.listFor(s.owner) {
-			c.startGrace()
 		}
 	}
 }
@@ -469,15 +458,6 @@ func (m *manager) create(ctx context.Context, p auth.Principal, provider, model 
 	}
 	m.chats[id] = c
 	m.mu.Unlock()
-
-	// A chat created while its owner's page stream is attached is covered by
-	// it at once. With none attached, the grace clock starts now. The check
-	// follows the registration above, so a stream that closes meanwhile finds
-	// this chat when it starts the clocks, and one that attaches meanwhile is
-	// caught by graceFired.
-	if m.pageCount(c.owner) == 0 {
-		c.startGrace()
-	}
 	return c, nil
 }
 
