@@ -51,19 +51,12 @@ import (
 // sessionCookie is the browser session cookie's name.
 const sessionCookie = "knomit_session"
 
-// authenticator holds what authentication reads. sessions, pats and bearer
-// are interfaces so tests can count calls; production passes *oauth.Store.
+// authenticator holds what authentication reads. The credential store is the
+// concrete *oauth.Store (sessions, PATs and OAuth access tokens alike): the
+// web package declares no interfaces (test/archtest web_no_interfaces).
 type authenticator struct {
-	mat      *authz.Materializer
-	sessions interface {
-		LookupSession(context.Context, string) (oauth.Session, error)
-	}
-	pats interface {
-		VerifyPAT(context.Context, string) (oauth.PAT, error)
-	}
-	bearer interface {
-		VerifyBearer(context.Context, string) (authz.Principal, string, error)
-	}
+	mat     *authz.Materializer
+	store   *oauth.Store
 	issuers []*url.URL // config.Issuers(); MatchIssuer per request
 }
 
@@ -188,7 +181,7 @@ func (a *authenticator) identify(w http.ResponseWriter, r *http.Request) (identi
 			a.refuseSession(w, r, "more than one session cookie")
 			return identified{}, false
 		}
-		sess, err := a.sessions.LookupSession(r.Context(), cookies[0])
+		sess, err := a.store.LookupSession(r.Context(), cookies[0])
 		if err != nil {
 			if !errors.Is(err, oauth.ErrInvalid) {
 				log.Error().Err(err).Msg("auth: look up session")
@@ -222,13 +215,13 @@ func (a *authenticator) token(ctx context.Context, tok string) (identified, erro
 		return identified{}, oauth.ErrInvalid
 	}
 	if strings.HasPrefix(tok, oauth.PATPrefix) {
-		pat, err := a.pats.VerifyPAT(ctx, tok)
+		pat, err := a.store.VerifyPAT(ctx, tok)
 		if err != nil {
 			return identified{}, err
 		}
 		return identified{principal: pat.Principal(), repoReach: auth.AllRepos, lensReach: auth.AllLenses}, nil
 	}
-	p, audience, err := a.bearer.VerifyBearer(ctx, tok)
+	p, audience, err := a.store.VerifyBearer(ctx, tok)
 	if err != nil {
 		return identified{}, err
 	}

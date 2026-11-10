@@ -59,8 +59,8 @@ func newAuthnFixture(t *testing.T) *authnFixture {
 	return &authnFixture{
 		db: db, store: store, bindings: bindings, owner: owner,
 		a: &authenticator{
-			mat:      authz.NewMaterializer(bindings, owner, authz.MaterializerOptions{}),
-			sessions: store, pats: store, bearer: store,
+			mat:     authz.NewMaterializer(bindings, owner, authz.MaterializerOptions{}),
+			store:   store,
 			issuers: issuers,
 		},
 	}
