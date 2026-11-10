@@ -19,7 +19,7 @@ import (
 var bodyReadAllowed = map[string]string{
 	"api/manage/handlers_ontologies.go": "ontologies:validate reads YAML, not JSON",
 	"oauth_pending_api.go":              "OAuth approve: browserProof already requires application/json from a browser, and it shares httpx.IsJSONMediaType",
-	"route_rules.go":                    "a permission resolver PEEKS at the body to pick the route's permission and puts the bytes back; the handler still decodes it with httpx.DecodeJSON",
+	"httpx/peek_json.go":                "PeekJSON lets a permission resolver read the body with DecodeJSON's own decoder and puts the bytes back; the handler still decodes it with httpx.DecodeJSON",
 }
 
 // TestNoHandlerDecodesARequestBodyOutsideDecodeJSON keeps every JSON request

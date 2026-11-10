@@ -1,14 +1,13 @@
 package web
 
 import (
-	"bytes"
-	"encoding/json"
-	"io"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 
+	"knomit/internal/edge/web/api/manage"
+	"knomit/internal/edge/web/api/origins"
 	"knomit/internal/foundation/authz"
 )
 
@@ -31,8 +30,22 @@ type routeRule struct {
 	// Resolve picks the permission from the request when it depends on the
 	// body or query (inventory G9: create-with-origin, secret_id, git push vs
 	// fetch). It must return one of Possible and must leave the body readable
-	// for the handler. A body it cannot parse resolves to the strongest
-	// (last) of Possible: fail closed, and the handler answers 400 anyway.
+	// for the handler. A body resolver lives next to its handler and decodes
+	// into the handler's OWN request struct with httpx.PeekJSON (DecodeJSON's
+	// decoder), so the two read the same body the same way: case-insensitive
+	// field names, duplicate keys, empty objects. A body it cannot decode
+	// resolves to the strongest (last) of Possible: fail closed, and the
+	// handler answers 400 anyway.
+	//
+	// The handlers' own operator/admin checks stay: P4 rewrites them as
+	// Policy.Has(repo:origin|secret:manage) and must not delete them, because
+	// some depend on stored state no resolver sees (a repo whose origin is
+	// linked to a stored secret).
+	//
+	// P4 TODO: the gate must check Policy.Has(Possible[0]) BEFORE calling
+	// Resolve. A caller who lacks even the weakest permission is refused
+	// without the body being read, so an anonymous caller cannot make the
+	// server buffer bodies.
 	//
 	// Possible is ordered weakest first. Under the fixed role seed each
 	// stronger entry is held only by roles that also hold the weaker ones
@@ -113,113 +126,6 @@ func rule(method, pattern string, perm authz.Permission) routeRule {
 
 func resolved(method, pattern string, f func(*http.Request) authz.Permission, possible ...authz.Permission) routeRule {
 	return routeRule{Method: method, Pattern: pattern, Resolve: f, Possible: possible}
-}
-
-// maxPeek bounds what a resolver reads of a body. A JSON body larger than
-// this does not parse and so resolves to the strongest permission.
-const maxPeek = 1 << 20
-
-// peekJSON decodes r's JSON body into a generic map and puts the bytes back
-// so the handler reads the whole body. ok=false when the body is not a JSON
-// object; an empty body is an empty object.
-func peekJSON(r *http.Request) (map[string]json.RawMessage, bool) {
-	if r.Body == nil || r.Body == http.NoBody {
-		return map[string]json.RawMessage{}, true
-	}
-	buf, err := io.ReadAll(io.LimitReader(r.Body, maxPeek))
-	r.Body = struct {
-		io.Reader
-		io.Closer
-	}{io.MultiReader(bytes.NewReader(buf), r.Body), r.Body}
-	if err != nil {
-		return nil, false
-	}
-	if len(bytes.TrimSpace(buf)) == 0 {
-		return map[string]json.RawMessage{}, true
-	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(buf, &m); err != nil {
-		return nil, false
-	}
-	return m, true
-}
-
-// set reports whether field is present with a value other than null, "",
-// false or an empty object. nullCounts makes a JSON null count as set.
-func jsonSet(m map[string]json.RawMessage, field string, nullCounts bool) bool {
-	raw, ok := m[field]
-	if !ok {
-		return false
-	}
-	switch string(bytes.TrimSpace(raw)) {
-	case "null":
-		return nullCounts
-	case `""`, "false", "{}":
-		return false
-	}
-	return true
-}
-
-// object returns the JSON object under field, or nil.
-func jsonObject(m map[string]json.RawMessage, field string) map[string]json.RawMessage {
-	var sub map[string]json.RawMessage
-	if raw, ok := m[field]; ok && json.Unmarshal(raw, &sub) == nil {
-		return sub
-	}
-	return nil
-}
-
-// withSecret: base, or secret:manage when the body names a stored secret
-// (top-level secret_id, or origin.secret_id). Linking or unlinking a stored
-// secret is the admin gate today (secret_field.go admitSecretID,
-// handlers_origin_credential.go, origins/handlers.go). nullCounts: a
-// "secret_id": null means "unlink" on the credential route.
-func withSecret(base authz.Permission, nullCounts bool) func(*http.Request) authz.Permission {
-	return func(r *http.Request) authz.Permission {
-		m, ok := peekJSON(r)
-		if !ok {
-			return authz.SecretManage
-		}
-		if jsonSet(m, "secret_id", nullCounts) || jsonSet(jsonObject(m, "origin"), "secret_id", false) {
-			return authz.SecretManage
-		}
-		return base
-	}
-}
-
-// resolveRepoCreate: POST /repos. An origin needs repo:origin (the operator
-// gate inside handleHALReposCreate), an origin with secret_id secret:manage
-// (admitSecretID), anything else repo:manage.
-func resolveRepoCreate(r *http.Request) authz.Permission {
-	m, ok := peekJSON(r)
-	if !ok {
-		return authz.SecretManage
-	}
-	origin := jsonObject(m, "origin")
-	switch {
-	case jsonSet(origin, "secret_id", false):
-		return authz.SecretManage
-	case jsonSet(m, "origin", false):
-		return authz.RepoOrigin
-	}
-	return authz.RepoManage
-}
-
-// resolveArchivedRestore: POST /archived/{id}/restore. secret_id needs
-// secret:manage, a pasted credential repo:origin (handlers_archived_hal.go's
-// admin and operator gates), a plain restore repo:manage.
-func resolveArchivedRestore(r *http.Request) authz.Permission {
-	m, ok := peekJSON(r)
-	if !ok {
-		return authz.SecretManage
-	}
-	switch {
-	case jsonSet(m, "secret_id", false):
-		return authz.SecretManage
-	case jsonSet(m, "auth_method", false), jsonSet(m, "token", false), jsonSet(m, "user", false), jsonSet(m, "password", false):
-		return authz.RepoOrigin
-	}
-	return authz.RepoManage
 }
 
 // resolveGit: a push (receive-pack, either leg) needs repo:push, everything
@@ -316,9 +222,9 @@ var apiRouteRules = concat(
 	[]routeRule{
 		rule(mGet, "/repo-events", pRead),
 		rule(mGet, "/repos", pRead),
-		resolved(mPost, "/repos", resolveRepoCreate, pManage, pOrigin, pSecret),
-		resolved(mPost, "/repos:probe-origin", withSecret(pOrigin, false), pOrigin, pSecret),
-		resolved(mPost, "/repos:probe-initialized", withSecret(pOrigin, false), pOrigin, pSecret),
+		resolved(mPost, "/repos", manage.ResolveRepoCreate, pManage, pOrigin, pSecret),
+		resolved(mPost, "/repos:probe-origin", manage.ResolveProbeOrigin, pOrigin, pSecret),
+		resolved(mPost, "/repos:probe-initialized", manage.ResolveProbeInitialized, pOrigin, pSecret),
 		rule(mGet, "/repos/{repo}/", pRead),
 		rule(mPatch, "/repos/{repo}/", pManage),
 		rule(mDel, "/repos/{repo}/", pManage),
@@ -333,7 +239,7 @@ var apiRouteRules = concat(
 		rule(mGet, "/archived", pRead),
 		rule(mGet, "/archived/{id}", pRead),
 		rule(mDel, "/archived/{id}", pManage),
-		resolved(mPost, "/archived/{id}/restore", resolveArchivedRestore, pManage, pOrigin, pSecret),
+		resolved(mPost, "/archived/{id}/restore", manage.ResolveArchivedRestore, pManage, pOrigin, pSecret),
 	},
 
 	// api/manage: origin (the operator gate today)
@@ -342,14 +248,14 @@ var apiRouteRules = concat(
 		rule(mPut, "/repos/{repo}/origin", pOrigin),
 		rule(mDel, "/repos/{repo}/origin", pOrigin),
 		rule(mPatch, "/repos/{repo}/origin/upstream", pOrigin),
-		resolved(mPut, "/repos/{repo}/origin/credential", withSecret(pOrigin, true), pOrigin, pSecret),
+		resolved(mPut, "/repos/{repo}/origin/credential", manage.ResolveOriginCredential, pOrigin, pSecret),
 		rule(mPost, "/repos/{repo}/branches/{branch}/merge", pOrigin),
 	},
 
 	// api/origins: origin sessions (the operator gate today, reads included)
 	[]routeRule{
 		rule(mGet, "/repos/{repo}/origin-sessions/", pOrigin),
-		resolved(mPost, "/repos/{repo}/origin-sessions/", withSecret(pOrigin, false), pOrigin, pSecret),
+		resolved(mPost, "/repos/{repo}/origin-sessions/", origins.ResolveCreateSession, pOrigin, pSecret),
 		rule(mGet, "/repos/{repo}/origin-sessions/{sessionID}", pOrigin),
 		rule(mDel, "/repos/{repo}/origin-sessions/{sessionID}", pOrigin),
 		rule(mGet, "/repos/{repo}/origin-sessions/{sessionID}/preview", pOrigin),
@@ -452,15 +358,15 @@ var apiRouteRules = concat(
 		rule(mGet, "/fleet/root", pFleet),
 		rule(mPut, "/fleet/root", pFleet),
 		rule(mDel, "/fleet/root", pFleet),
-		resolved(mPost, "/fleet/create", withSecret(pFleet, false), pFleet, pSecret),
+		resolved(mPost, "/fleet/create", manage.ResolveFleetCreate, pFleet, pSecret),
 		rule(mPost, "/fleet/enroll", pFleet),
-		resolved(mPost, "/fleet/join", withSecret(pFleet, false), pFleet, pSecret),
-		resolved(mPost, "/fleet/join:check", withSecret(pFleet, false), pFleet, pSecret),
+		resolved(mPost, "/fleet/join", manage.ResolveFleetJoin, pFleet, pSecret),
+		resolved(mPost, "/fleet/join:check", manage.ResolveFleetJoin, pFleet, pSecret),
 		rule(mPost, "/fleet/leave", pFleet),
 		rule(mPost, "/fleet/revoke", pFleet),
 		rule(mPost, "/fleet/decommission", pFleet),
 		rule(mPost, "/fleet/host", pFleet),
-		resolved(mPost, "/fleet/follow", withSecret(pFleet, false), pFleet, pSecret),
+		resolved(mPost, "/fleet/follow", manage.ResolveFleetFollow, pFleet, pSecret),
 		rule(mPost, "/fleet/index-rebuild", pFleet),
 		rule(mPost, "/fleet/drop-commit", pFleet),
 	},

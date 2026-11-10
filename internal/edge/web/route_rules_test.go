@@ -158,13 +158,29 @@ var resolverFixtures = map[string][]resolverCase{
 		{"/repos", `{"name":"a","origin":{"url":"https://x/y.git","auth_token":"t"}}`, authz.RepoOrigin},
 		{"/repos", `{"name":"a","origin":{"url":"https://x/y.git","secret_id":"s1"}}`, authz.SecretManage},
 		{"/repos", `{not json`, authz.SecretManage},
+		// The handler decodes with encoding/json into its own struct: field
+		// names match case-insensitively, a duplicate key decodes into the
+		// SAME origin pointer, and an empty origin object is still an origin.
+		{"/repos", `{"name":"a","origin":{"url":"https://x","Secret_ID":"s1"}}`, authz.SecretManage},
+		{"/repos", `{"name":"a","Origin":{"url":"https://x"}}`, authz.RepoOrigin},
+		{"/repos", `{"origin":{"url":"https://x"},"origin":{"secret_id":"s1"}}`, authz.SecretManage},
+		{"/repos", `{"origin":{"secret_id":"s1"},"origin":{"url":"https://x"}}`, authz.SecretManage},
+		{"/repos", `{"origin":{}}`, authz.RepoOrigin},
+		{"/repos", `{"name":"a"} {"origin":{"secret_id":"s1"}}`, authz.SecretManage}, // trailing data: 400, fail closed
 	},
 	"POST /archived/{id}/restore": {
 		{"/archived/u1/restore", ``, authz.RepoManage},
 		{"/archived/u1/restore", `{"new_name":"b"}`, authz.RepoManage},
 		{"/archived/u1/restore", `{"no_credential":true}`, authz.RepoManage},
 		{"/archived/u1/restore", `{"auth_method":"token","token":"t"}`, authz.RepoOrigin},
-		{"/archived/u1/restore", `{"user":"u","password":"p"}`, authz.RepoOrigin},
+		{"/archived/u1/restore", `{"auth_method":"basic","user":"u","password":"p"}`, authz.RepoOrigin},
+		{"/archived/u1/restore", `{"auth_method":"token"}`, authz.RepoOrigin},
+		// No method: AssembleAuthToken ignores user/password, the handler
+		// restores with no pasted credential and runs no operator gate.
+		{"/archived/u1/restore", `{"user":"u","password":"p"}`, authz.RepoManage},
+		{"/archived/u1/restore", `{"Token":"t"}`, authz.RepoOrigin},
+		{"/archived/u1/restore", `{"SECRET_ID":"s1"}`, authz.SecretManage},
+		{"/archived/u1/restore", `{"secret_id":"s1","secret_id":""}`, authz.RepoManage}, // the last key wins, as in the handler
 		{"/archived/u1/restore", `{"secret_id":"s1"}`, authz.SecretManage},
 		{"/archived/u1/restore", `[`, authz.SecretManage},
 	},
@@ -172,29 +188,37 @@ var resolverFixtures = map[string][]resolverCase{
 		{"/repos:probe-origin", `{"url":"https://x"}`, authz.RepoOrigin},
 		{"/repos:probe-origin", `{"url":"https://x","secret_id":""}`, authz.RepoOrigin},
 		{"/repos:probe-origin", `{"url":"https://x","secret_id":"s"}`, authz.SecretManage},
+		{"/repos:probe-origin", `{"url":"https://x","Secret_ID":"s"}`, authz.SecretManage},
 	},
 	"POST /repos:probe-initialized": {
 		{"/repos:probe-initialized", `{"url":"https://x"}`, authz.RepoOrigin},
 		{"/repos:probe-initialized", `{"url":"https://x","secret_id":"s"}`, authz.SecretManage},
+		{"/repos:probe-initialized", `{"url":"https://x","SECRET_ID":"s"}`, authz.SecretManage},
 	},
 	"PUT /repos/{repo}/origin/credential": {
 		{"/repos/alpha/origin/credential", `{"auth_method":"token","token":"t"}`, authz.RepoOrigin},
 		{"/repos/alpha/origin/credential", `{"secret_id":"s"}`, authz.SecretManage},
 		// null unlinks a stored secret, which needs the admin gate today.
 		{"/repos/alpha/origin/credential", `{"secret_id":null}`, authz.SecretManage},
+		{"/repos/alpha/origin/credential", `{"SECRET_ID":"s"}`, authz.SecretManage},
+		{"/repos/alpha/origin/credential", `{"Secret_Id":null}`, authz.SecretManage},
 	},
 	"POST /repos/{repo}/origin-sessions/": {
 		{"/repos/alpha/origin-sessions/", `{"url":"https://x"}`, authz.RepoOrigin},
 		{"/repos/alpha/origin-sessions/", `{"url":"https://x","secret_id":"s"}`, authz.SecretManage},
+		{"/repos/alpha/origin-sessions/", `{"url":"https://x","Secret_id":"s"}`, authz.SecretManage},
 	},
 	"POST /fleet/create": {
 		{"/fleet/create", `{"name":"f"}`, authz.FleetManage},
 		{"/fleet/create", `{"origin":{"url":"https://x","auth_token":"t"}}`, authz.FleetManage},
 		{"/fleet/create", `{"origin":{"url":"https://x","secret_id":"s"}}`, authz.SecretManage},
+		{"/fleet/create", `{"origin":{"url":"https://x","Secret_ID":"s"}}`, authz.SecretManage},
+		{"/fleet/create", `{"origin":{"url":"https://x"},"origin":{"secret_id":"s"}}`, authz.SecretManage},
 	},
 	"POST /fleet/join": {
 		{"/fleet/join", `{"bundle":"b"}`, authz.FleetManage},
 		{"/fleet/join", `{"bundle":"b","secret_id":"s"}`, authz.SecretManage},
+		{"/fleet/join", `{"bundle":"b","SECRET_ID":"s"}`, authz.SecretManage},
 	},
 	"POST /fleet/join:check": {
 		{"/fleet/join:check", `{"bundle":"b"}`, authz.FleetManage},
@@ -203,6 +227,7 @@ var resolverFixtures = map[string][]resolverCase{
 	"POST /fleet/follow": {
 		{"/fleet/follow", `{"url":"https://x"}`, authz.FleetManage},
 		{"/fleet/follow", `{"url":"https://x","secret_id":"s"}`, authz.SecretManage},
+		{"/fleet/follow", `{"url":"https://x","Secret_Id":"s"}`, authz.SecretManage},
 	},
 }
 
