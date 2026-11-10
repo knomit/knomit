@@ -5,12 +5,13 @@ import { render, screen, waitFor, cleanup, fireEvent, within, act } from '@testi
 import { useEffect, useReducer } from 'react';
 import { ChatFacet } from './ChatFacet';
 import { ChatSidePanel } from './ChatSidePanel';
-import { clampPanelWidth, initialPanelState, panelReducer, PANEL_WIDTH_KEY, PANEL_DEFAULT_WIDTH, PANEL_MAX_FRACTION, PANEL_MIN_WIDTH, usePanelWidth } from './chatPanelState';
+import { clampPanelWidth, initialPanelState, panelReducer, PANEL_WIDTH_KEY, PANEL_DEFAULT_WIDTH, PANEL_MAX_FRACTION, PANEL_MIN_WIDTH, typingIn, usePanelWidth } from './chatPanelState';
 import type { BrowseFactRequest, PanelEntry, PanelState } from './chatPanelState';
 import { installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
 import { stubFleetFetch, problem } from './fleetTestFetch';
 import type { ChatSnapshot } from './chatApi';
 import { ChatToolGroup } from './ChatToolGroup';
+import { resetResultLinks } from './jsonViewLinks';
 import type { ToolCall } from './chatState';
 import sidePanelSrc from './ChatSidePanel.tsx?raw';
 import resultPanelSrc from './ChatResultPanel.tsx?raw';
@@ -47,18 +48,19 @@ function routes() {
 
 /** The panel with its own history, driven through the panel API (the way fact links will). */
 let api: { open: (e: PanelEntry) => void; state: () => PanelState };
-function Harness({ running = false, onBrowse, bound = '', callFor }: { running?: boolean; onBrowse?: (r: BrowseFactRequest) => void; bound?: string; callFor?: (id: string) => ToolCall | undefined }) {
+// `bound` is what the chat was bound to; the panel no longer reads it (a result is
+// headed by its row, not crumbed by its target), and the tests still say it.
+function Harness({ running = false, onBrowse, callFor }: { running?: boolean; onBrowse?: (r: BrowseFactRequest) => void; bound?: string; callFor?: (id: string) => ToolCall | undefined }) {
   const [panel, dispatch] = useReducer(panelReducer, initialPanelState);
   useEffect(() => { api = { open: entry => dispatch({ type: 'open', entry }), state: () => panel }; });
   const w = usePanelWidth();
-  return <ChatSidePanel chatId="chat-a" panel={panel} dispatch={dispatch} running={running} width={w.width} onSplitterDown={w.onSplitterDown} onBrowse={onBrowse} boundFor={() => bound} callFor={callFor} />;
+  return <ChatSidePanel chatId="chat-a" panel={panel} dispatch={dispatch} running={running} width={w.width} onSplitterDown={w.onSplitterDown} onBrowse={onBrowse} callFor={callFor} />;
 }
 
 beforeEach(() => { installFakeEventSource(); localStorage.clear(); });
 afterEach(() => { cleanup(); uninstallFakeEventSource(); vi.unstubAllGlobals(); });
 
 const panelW = () => screen.getByTestId('chat-side-panel').style.getPropertyValue('--k-panel-w');
-const crumb = () => screen.getByTestId('chat-panel-crumb').textContent;
 const footer = () => screen.getByTestId('chat-panel-footer').textContent;
 
 describe('panelReducer', () => {
@@ -134,14 +136,17 @@ describe('ChatSidePanel', () => {
     expect(screen.getByTestId('chat-result-text')).toHaveTextContent('RESULT-ONE');
   });
 
-  it('draws Esc as a keycap, and has no back, forward, back key or count (mockup .kbdh)', async () => {
+  it('the footer has no "Esc close" hint, only Find ⌘F; and no back, forward, back key or count (mockup .kbdh)', async () => {
     stubFleetFetch(routes());
     render(<Harness bound="r1" />);
     act(() => api.open(R1));
     await screen.findByTestId('chat-result-text');
     const f = screen.getByTestId('chat-panel-footer');
-    expect([...f.querySelectorAll('span')].filter(e => e.style.border.includes('solid')).map(e => e.textContent)).toEqual(['Esc']);
-    expect(footer()).toBe('Esc close');
+    await within(f).findByTestId('chat-panel-find');
+    expect(footer()).not.toContain('Esc');
+    expect(footer()).not.toContain('close');
+    expect(footer()).toBe('Find⌘F');
+    expect(within(f).getByTestId('chat-panel-find').querySelector('kbd')).toHaveTextContent('⌘F');
     expect(screen.queryByTestId('chat-panel-back')).toBeNull();
     expect(screen.queryByTestId('chat-panel-forward')).toBeNull();
     // The close is the mockup's 26px button holding a 13px stroke icon, in the header.
@@ -169,7 +174,7 @@ describe('ChatSidePanel', () => {
     act(() => api.open(R2));
     await screen.findByTestId('chat-result-fact');
     expect(screen.queryByTestId('fact-title')).toBeNull();
-    await waitFor(() => expect(crumb()).toBe('r1 / kb / decisions / web'));
+    await screen.findByTestId('chat-result-title');
     fireEvent.click(screen.getByTestId('chat-panel-close'));
     expect(screen.queryByTestId('chat-side-panel')).toBeNull();
   });
@@ -182,7 +187,7 @@ describe('ChatSidePanel', () => {
     expect(screen.queryByTestId('chat-panel-browse')).toBeNull();
     act(() => api.open(R2));
     await screen.findByTestId('chat-result-fact');
-    await waitFor(() => expect(crumb()).toBe('r1 / kb / decisions / web'));
+    await screen.findByTestId('chat-result-title');
     expect(screen.queryByTestId('chat-panel-browse')).toBeNull();
     expect(document.body.textContent).not.toContain('Open in Browse');
   });
@@ -409,36 +414,42 @@ describe('the side panel in the chat page', () => {
 });
 
 describe('the side panel: target, width clamp, errors, keys', () => {
-  it('a materialize result (file + audience + binding, no repo) is crumbed by the bound target and its path', async () => {
+  it('a result is headed by its call\'s row IN THE TOP ROW: no breadcrumb, and no second heading in the body', async () => {
+    // A bind used to be crumbed "B / Bind" and drawn again inside the body.
+    stubFleetFetch({ [`GET ${BASE}/calls/tu_b`]: { body: { name: 'knomit_bind', title: 'Bind', key_arg: 'B', arguments: { name: 'B' }, result: 'ok', is_error: false, elided: false } } });
+    render(<Harness bound="A" />);
+    act(() => api.open({ kind: 'result', callId: 'tu_b' }));
+    await screen.findByTestId('chat-result-text');
+    const header = screen.getByTestId('chat-panel-header');
+    expect(screen.queryByTestId('chat-panel-crumb')).toBeNull();
+    expect(header.textContent).not.toContain(' / ');
+    // Exactly one heading, and it is in the header, beside the close.
+    expect(screen.getAllByTestId('chat-result-title')).toHaveLength(1);
+    const head = within(header).getByTestId('chat-result-title');
+    expect(head.querySelector('[data-call-part="label"]')).toHaveTextContent('Bind');
+    expect(head.querySelector('[data-call-part="arg"]')).toHaveTextContent('B');
+    expect(within(header).getByTestId('chat-panel-close')).toBeInTheDocument();
+    expect(within(screen.getByTestId('chat-result-panel')).queryByTestId('chat-result-title')).toBeNull();
+    expect(within(screen.getByTestId('chat-result-panel')).queryByText('Bind')).toBeNull();
+  });
+
+  it('a materialize result is headed by its row too, not by a path breadcrumb', async () => {
     stubFleetFetch(routes());
     render(<Harness bound="r1" />);
     act(() => api.open(R2));
     await screen.findByTestId('chat-result-fact');
-    await waitFor(() => expect(crumb()).toBe('r1 / kb / decisions / web'));
+    const head = await within(screen.getByTestId('chat-panel-header')).findByTestId('chat-result-title');
+    expect(head.querySelector('[data-call-part="label"]')).toHaveTextContent('Materialize');
+    expect(screen.queryByTestId('chat-panel-crumb')).toBeNull();
+    expect(screen.getByTestId('chat-panel-header').textContent).not.toContain('kb / decisions');
   });
 
-  it('a kb://<store>/ file\'s breadcrumb drops the store', async () => {
-    stubFleetFetch({ ...routes(), [`GET ${BASE}/calls/tu_3`]: { body: { ...calls.tu_2, arguments: { file: 'kb://abc123def456/kb/x/y/z.md', audience: 'agent' } } } });
-    render(<Harness bound="all" />);
-    act(() => api.open({ kind: 'result', callId: 'tu_3' }));
-    await waitFor(() => expect(crumb()).toBe('all / kb / x / y'));
-  });
-
-  it('a bind result is crumbed by the target it names (name, like lens/repo), not the binding in force before it', async () => {
-    // The call endpoint carries the title too, for a call the transcript no longer holds.
-    stubFleetFetch({ [`GET ${BASE}/calls/tu_b`]: { body: { name: 'knomit_bind', title: 'Bind', key_arg: 'B', arguments: { name: 'B' }, result: 'ok', is_error: false, elided: false } } });
-    render(<Harness bound="A" />); // the binding in force BEFORE the call is A
-    act(() => api.open({ kind: 'result', callId: 'tu_b' }));
-    await screen.findByTestId('chat-result-text');
-    expect(crumb()).toBe('B / Bind');
-  });
-
-  it('a result with neither a target nor a binding is crumbed by its label', async () => {
-    stubFleetFetch(routes());
-    render(<Harness bound="" />);
-    act(() => api.open(R2));
-    await screen.findByTestId('chat-result-fact');
-    await waitFor(() => expect(crumb()).toBe('Materialize / kb / decisions / web'));
+  it('a commit keeps its breadcrumb header', async () => {
+    stubFleetFetch({ ...routes(), 'GET /api/v1/repos/r1/branches/main/commits/abcdef1234567': { body: { commit: 'abcdef1234567', files: [] } } });
+    render(<Harness />);
+    act(() => api.open({ kind: 'commit', repo: 'r1', branch: 'main', commit: 'abcdef1234567' }));
+    expect(screen.getByTestId('chat-panel-crumb').textContent).toBe('r1 / abcdef1');
+    expect(screen.queryByTestId('chat-result-title')).toBeNull();
   });
 
   it('clampPanelWidth: the minimum, the share of the container, and no bound without a container', () => {
@@ -640,8 +651,9 @@ describe('a tool call\'s panel header is the row it opens from', () => {
       expect(lineOf(head).textContent).toBe(lineOf(row).textContent);
       expect(looks(lineOf(head))).toBe(looks(lineOf(row)));
       expect(head.getAttribute('data-error')).toBe(row.getAttribute('data-error'));
-      // The breadcrumb names the call by the same label.
-      expect(crumb()?.endsWith(labelOf(row).textContent ?? '\u0000')).toBe(true);
+      // The heading IS the panel's top row: no breadcrumb beside it.
+      expect(head.closest('[data-testid="chat-panel-header"]')).not.toBeNull();
+      expect(screen.queryByTestId('chat-panel-crumb')).toBeNull();
     });
   }
 
@@ -685,5 +697,154 @@ describe('the activity line of a group with a failed bind', () => {
     ];
     render(<ChatToolGroup lead={[]} calls={calls} approvals={{}} selectedId={null} bound="r1" onSelect={vi.fn()} onAnswer={vi.fn()} />);
     expect(screen.getByTestId('chat-activity-summary').textContent).toBe('Query in r1');
+  });
+});
+
+// The least chrome (user, 2026-11-09): no rule under the result's top row, under
+// the tabs or above the footer, one edge line on the left, and 12px sides.
+describe('a result panel\'s chrome', () => {
+  it('has no rule under the header, under the tab row or above the footer; the active tab keeps its underline', async () => {
+    stubFleetFetch(routes());
+    render(<Harness />);
+    act(() => api.open(R1));
+    await screen.findByTestId('chat-result-text');
+    const header = screen.getByTestId('chat-panel-header');
+    expect(header.style.borderBottomStyle).toBe('none');
+    expect(header.style.height).toBe('36px');
+    expect(header.style.padding).toBe('0px 6px 0px 12px');
+    expect(screen.getByTestId('chat-panel-footer').style.borderTop).toBe('');
+    expect(screen.getByTestId('chat-panel-footer').style.padding).toBe('4px 12px');
+    const tablist = screen.getByRole('tablist');
+    expect(tablist.style.borderBottom).toBe('');
+    expect(screen.getByTestId('chat-result-tab-result').style.boxShadow).toContain('inset 0 -2px 0');
+    expect(screen.getByTestId('chat-result-panel').style.padding).toBe('0px 12px');
+  });
+
+  it('a commit keeps the rule under its breadcrumb header', () => {
+    stubFleetFetch(routes());
+    render(<Harness />);
+    act(() => api.open({ kind: 'commit', repo: 'r1', branch: 'main', commit: 'abcdef1234567' }));
+    expect(screen.getByTestId('chat-panel-header').style.borderBottomStyle).toBe('solid');
+  });
+
+  it('the panel draws no left border of its own: the splitter is the one edge line', () => {
+    const css = readFileSync(join(process.cwd(), 'src/App.css'), 'utf8');
+    const rule = /\.k-chat-result \{[^}]*\}/.exec(css)?.[0] ?? '';
+    expect(rule).toContain('width: var(--k-panel-w');
+    expect(rule).not.toMatch(/border-left:\s*1px/);
+  });
+});
+
+// The result as a JSON view (JsonView): what the side panel wires to it.
+describe('a result\'s JSON view in the side panel', () => {
+  const REF = 'kb://3ec012f5b4d2/kb/decisions/web/one.md';
+  const MISSING = 'kb://3ec012f5b4d2/kb/nowhere/gone.md';
+  const resolveReply = (body: unknown) => {
+    const handles = (body as { handles: string[] }).handles;
+    return { body: handles.filter(h => h === REF).map(h => ({ handle: h, id: 'one', title: 'One decision', type: 'observation', repo: 'r1', branch: 'main', path: 'kb/decisions/web/one.md', excerpt: '' })) };
+  };
+  const withRefs = () => ({
+    ...routes(),
+    [`GET ${BASE}/calls/tu_k`]: { body: { name: 'knomit_query', arguments: { text: 'x' }, result: JSON.stringify({ facts: [{ file: REF }, { file: MISSING }] }), is_error: false, elided: false } },
+    'POST /api/v1/facts/resolve': resolveReply,
+  });
+  beforeEach(() => resetResultLinks());
+
+  it('resolves the kb:// paths in one POST /facts/resolve, links the one that resolved, and a click opens that fact here', async () => {
+    const fx = stubFleetFetch(withRefs());
+    render(<Harness />);
+    act(() => api.open({ kind: 'result', callId: 'tu_k' }));
+    const text = await screen.findByTestId('chat-result-text');
+    const link = await waitFor(() => {
+      const l = text.querySelector('.k-json-fact') as HTMLElement;
+      expect(l).not.toBeNull();
+      return l;
+    });
+    const asked = fx.calls.filter(c => c.route === 'POST /api/v1/facts/resolve');
+    expect(asked).toHaveLength(1);
+    expect((asked[0].body as { handles: string[] }).handles).toEqual([REF, MISSING]);
+    expect(text.querySelectorAll('.k-json-fact')).toHaveLength(1);
+    expect(link.getAttribute('data-ref')).toBe(REF);
+    fireEvent.click(link);
+    await screen.findByTestId('fact-title');
+    expect(api.state().entry).toEqual({ kind: 'fact', repo: 'r1', branch: 'main', path: 'kb/decisions/web/one.md' });
+  });
+
+  it('a failed resolve is not remembered: the paths stay text, and the next time the result is opened they are asked again and link', async () => {
+    const fx = stubFleetFetch({ ...withRefs(), 'POST /api/v1/facts/resolve': { status: 500, body: { detail: 'boom' } } });
+    render(<Harness />);
+    act(() => api.open({ kind: 'result', callId: 'tu_k' }));
+    const first = await screen.findByTestId('chat-result-text');
+    await waitFor(() => expect(fx.calls.filter(c => c.route === 'POST /api/v1/facts/resolve')).toHaveLength(1));
+    expect(first.querySelector('.k-json-fact')).toBeNull();
+    // The server recovers; the reader opens something else, then the result again.
+    fx.set('POST /api/v1/facts/resolve', resolveReply);
+    act(() => api.open(F1));
+    await screen.findByTestId('fact-title');
+    act(() => api.open({ kind: 'result', callId: 'tu_k' }));
+    const again = await screen.findByTestId('chat-result-text');
+    await waitFor(() => expect(again.querySelector('.k-json-fact')).not.toBeNull());
+    expect(fx.calls.filter(c => c.route === 'POST /api/v1/facts/resolve')).toHaveLength(2);
+  });
+
+  it('the footer\'s Find opens the find bar of the view on screen, on either tab', async () => {
+    stubFleetFetch(routes());
+    render(<Harness />);
+    act(() => api.open(R1));
+    const find = await screen.findByTestId('chat-panel-find');
+    expect(find).toHaveTextContent('Find');
+    expect(find.querySelector('svg')).not.toBeNull();
+    fireEvent.click(find);
+    const bar = within(screen.getByTestId('chat-result-text')).getByTestId('json-find');
+    expect(document.activeElement).toBe(within(bar).getByTestId('json-find-input'));
+    fireEvent.click(screen.getByTestId('chat-result-tab-arguments'));
+    await waitFor(() => expect(screen.getByTestId('chat-panel-find')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('chat-panel-find'));
+    expect(within(screen.getByTestId('chat-result-args')).getByTestId('json-find')).toBeInTheDocument();
+  });
+
+  it('no Find where there is no JSON view: a materialize result, and a fact', async () => {
+    stubFleetFetch(routes());
+    render(<Harness bound="r1" />);
+    act(() => api.open(R2));
+    await screen.findByTestId('chat-result-fact');
+    expect(screen.queryByTestId('chat-panel-find')).toBeNull();
+    act(() => api.open(F1));
+    await screen.findByTestId('fact-title');
+    expect(screen.queryByTestId('chat-panel-find')).toBeNull();
+    expect(footer()).toBe('');
+  });
+
+  it('Esc with the focus in the result text closes the panel, as it did when the result was a <pre>', async () => {
+    stubFleetFetch(routes());
+    render(<Harness />);
+    act(() => api.open(R1));
+    const text = await screen.findByTestId('chat-result-text');
+    const content = text.querySelector('.cm-content') as HTMLElement;
+    // jsdom does not implement isContentEditable; a browser reports true for
+    // CodeMirror's content, which is what made Esc there look like typing.
+    expect(content.getAttribute('contenteditable')).toBe('true');
+    Object.defineProperty(content, 'isContentEditable', { value: true });
+    expect(typingIn(content)).toBe(false);
+    const field = document.createElement('div');
+    Object.defineProperty(field, 'isContentEditable', { value: true });
+    expect(typingIn(field)).toBe(true);
+    content.focus();
+    expect(document.activeElement).toBe(content);
+    fireEvent.keyDown(content, { key: 'Escape' });
+    expect(screen.queryByTestId('chat-side-panel')).toBeNull();
+  });
+
+  it('Esc in the find bar closes the bar and not the panel; the next Esc closes the panel', async () => {
+    stubFleetFetch(routes());
+    render(<Harness />);
+    act(() => api.open(R1));
+    fireEvent.click(await screen.findByTestId('chat-panel-find'));
+    const input = screen.getByTestId('json-find-input');
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByTestId('json-find')).toBeNull();
+    expect(screen.getByTestId('chat-side-panel')).toBeInTheDocument();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    expect(screen.queryByTestId('chat-side-panel')).toBeNull();
   });
 });

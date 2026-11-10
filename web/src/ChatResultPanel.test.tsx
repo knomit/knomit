@@ -18,7 +18,8 @@ describe('ChatResultPanel', () => {
     expect(fact.className).toContain('k-prose');
     expect(fact.querySelector('h1')).toHaveTextContent('A decision');
     expect(fact.querySelector('strong')).toHaveTextContent('SSE');
-    expect(screen.getByTestId('chat-result-title')).toHaveTextContent('Materialize');
+    // The call's heading is the side panel's top row now, not drawn in here.
+    expect(screen.queryByTestId('chat-result-title')).toBeNull();
     // Not shown as the raw JSON it travelled in.
     expect(fact.textContent).not.toContain('has_more');
     expect(screen.queryByTestId('chat-result-text')).toBeNull();

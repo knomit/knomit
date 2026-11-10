@@ -9,25 +9,21 @@ import type { Action, FactReading } from './state';
 import { ChatResultPanel } from './ChatResultPanel';
 import { FacetSplitter } from './FacetColumns';
 import type { ChatCall } from './chatApi';
-import type { RepoRef } from './chatFactLinks';
-import { bindTarget, isBind, toolCallLabel, toolCallOf } from './chatState';
+import type { RepoRef, ResolvedFact } from './chatFactLinks';
+import { toolCallOf } from './chatState';
 import type { ToolCall } from './chatState';
-import { crumbOf, shownEntry, typingIn } from './chatPanelState';
+import { shownEntry, typingIn } from './chatPanelState';
 import type { BrowseFactRequest, PanelAction, PanelState } from './chatPanelState';
-import { PANEL_CLOSE_LABEL, PANEL_KEY_CLOSE } from './chatCopy';
+import { ToolCallHead } from './ChatToolGroup';
+import type { JsonViewHandle } from './JsonView';
+import { FIND_KEY, FIND_LABEL, PANEL_CLOSE_LABEL } from './chatCopy';
 
 // The mockup's icon (mockup.html, `I`): a 13px stroke.
 const svg = (size: number, children: React.ReactNode) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>
 );
 const ICON_CLOSE = svg(13, <><line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" /></>);
-
-/** A string argument of a tool call, or ''. */
-const arg = (call: ChatCall, ...names: string[]): string => {
-  const a = (call.arguments ?? {}) as Record<string, unknown>;
-  for (const n of names) if (typeof a[n] === 'string' && a[n]) return a[n] as string;
-  return '';
-};
+const ICON_FIND = svg(12, <><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></>);
 
 function isShown(el: HTMLElement | null): boolean {
   for (let n = el; n; n = n.parentElement) if (getComputedStyle(n).display === 'none') return false;
@@ -106,9 +102,12 @@ function PanelFact({ repo, branch, path, commit, close, onBrowse, repos, repoNam
 
 /**
  * ChatSidePanel is the 470px panel on the right of a chat: a fact, a commit or
- * a tool result, and a footer. A commit or a tool result has a 40px header
- * (breadcrumb, close). A fact has its band instead, with the close in the panel's
- * top-right corner, away from the band's action row (history, materialize). It is
+ * a tool result, and a footer. A commit has a 40px header (breadcrumb, close); a
+ * tool result's 36px header is the call's own timeline row (ToolCallHead: state
+ * dot, label · main argument, size and time) beside the close. A fact has its
+ * band instead, with the close in the panel's top-right corner, away from the
+ * band's action row (history, materialize). The footer holds Find, which opens
+ * the find bar of the JSON view on screen (a result's Result or Arguments). It is
  * mounted only while open, so it costs nothing before a step is clicked; the chat
  * column beside it narrows to make room.
  *
@@ -122,7 +121,7 @@ function PanelFact({ repo, branch, path, commit, close, onBrowse, repos, repoNam
  * else already took (defaultPrevented) is left alone, as is a chat that is not on
  * screen.
  */
-export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplitterDown, onBrowse, repos, repoNames, serverReadOnly = false, onScreen = true, boundFor, callFor }: {
+export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplitterDown, onBrowse, repos, repoNames, serverReadOnly = false, onScreen = true, callFor }: {
   chatId: string;
   panel: PanelState;
   dispatch: Dispatch<PanelAction>;
@@ -138,38 +137,25 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
   serverReadOnly?: boolean;
   /** Whether the chat is on screen. It stays mounted behind Browse. */
   onScreen?: boolean;
-  /** The repo or lens the chat was bound to when a call ran (a result with no
-   *  target of its own belongs to it). */
-  boundFor?: (callId: string) => string;
   /** The transcript's record of a call, which its timeline row is drawn from:
-   *  the panel's header is that row, and the breadcrumb names it the same way. */
+   *  a result's header is that row. */
   callFor?: (callId: string) => ToolCall | undefined;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const entry = shownEntry(panel);
-  // What a loaded result says about itself: its breadcrumb.
-  const [calls, setCalls] = useState<Record<string, { crumb: string[] }>>({});
-  const boundForRef = useRef(boundFor);
-  const callForRef = useRef(callFor);
-  useEffect(() => { boundForRef.current = boundFor; callForRef.current = callFor; });
+  // A loaded call, drawn as its row: the header of a call the transcript no longer holds.
+  const [calls, setCalls] = useState<Record<string, ToolCall>>({});
+  // The JSON view on screen, whose find bar the footer's Find opens.
+  const [finder, setFinder] = useState<JsonViewHandle | null>(null);
   // What each commit view loaded and where it was scrolled to, so its chip in the answer returns to the same place in a long list.
   const [commitMemo] = useState<CommitMemo>(() => new Map());
   const onCall = useCallback((callId: string, call: ChatCall) => {
-    // A materialize names its fact as `file` (a path, or kb://<id>/<path>); other
-    // tools use `path`. The target is what the call names, else the binding in
-    // force when it ran (the handle in `binding` is opaque, so it is not read).
-    const file = arg(call, 'file', 'path');
-    const path = file.replace(/^kb:\/\/[^/]+\//, '');
-    // A bind names its own target (bindTarget's rule: lens, repo, name, target), and it is that, not the binding in
-    // force BEFORE it ran, that the call belongs to. Other calls name a repo or lens, else the binding in force.
-    const own = isBind(call.name) ? bindTarget(toolCallOf(callId, call)) : arg(call, 'repo', 'lens', 'target');
-    const repo = own || boundForRef.current?.(callId) || '';
-    // The mockup's "repo / path / dir" when the call names a file; otherwise the repo it ran in, then the call,
-    // labelled as its row is (toolCallLabel).
-    const label = toolCallLabel(callForRef.current?.(callId) ?? toolCallOf(callId, call));
-    const crumb = path ? crumbOf(repo || label, path) : [repo, label].filter(Boolean);
-    setCalls(c => ({ ...c, [callId]: { crumb } }));
+    setCalls(c => ({ ...c, [callId]: toolCallOf(callId, call) }));
   }, []);
+  // A kb:// path in a result opens its fact here, as a fact link in the answer does.
+  const onOpenFact = useCallback((f: ResolvedFact) => {
+    dispatch({ type: 'open', entry: { kind: 'fact', repo: f.repo, branch: f.branch, path: f.path } });
+  }, [dispatch]);
 
   const runningRef = useRef(running);
   useEffect(() => { runningRef.current = running; });
@@ -190,13 +176,23 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
     <button type="button" data-testid="chat-panel-close" aria-label={PANEL_CLOSE_LABEL} title={PANEL_CLOSE_LABEL}
       onClick={() => dispatch({ type: 'close' })} style={iconBtn}>{ICON_CLOSE}</button>
   );
-  const crumb = entry.kind === 'commit' ? [entry.repo, entry.commit.slice(0, 7)] : entry.kind === 'result' ? calls[entry.callId]?.crumb ?? [] : [];
+  const crumb = entry.kind === 'commit' ? [entry.repo, entry.commit.slice(0, 7)] : [];
+  const head = entry.kind === 'result' ? callFor?.(entry.callId) ?? calls[entry.callId] : undefined;
 
   return (
     <>
       <FacetSplitter onMouseDown={onSplitterDown} testId="chat-panel-splitter" />
       <div ref={root} data-testid="chat-side-panel" className="k-chat-result" style={{ ['--k-panel-w' as string]: `${width}px` }}>
-        {entry.kind !== 'fact' && (
+        {entry.kind === 'result' && (
+          // The call's own row is the heading: no breadcrumb, and none in the body.
+          <div data-testid="chat-panel-header" style={resultHeader}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {head && <ToolCallHead call={head} testId="chat-result-title" style={headInRow} />}
+            </div>
+            {close}
+          </div>
+        )}
+        {entry.kind === 'commit' && (
           <div data-testid="chat-panel-header" style={header}>
             <div data-testid="chat-panel-crumb" style={crumbBox}>
               {crumb.map((c, i) => (
@@ -208,7 +204,7 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
         )}
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
           {entry.kind === 'result'
-            ? <ChatResultPanel chatId={chatId} callId={entry.callId} row={callFor?.(entry.callId)} onCall={onCall} />
+            ? <ChatResultPanel chatId={chatId} callId={entry.callId} onCall={onCall} onOpenFact={onOpenFact} onFinder={setFinder} />
             : entry.kind === 'commit'
               ? <ChatCommitView key={`${entry.repo}\0${entry.branch}\0${entry.commit}`} repo={entry.repo} branch={entry.branch} commit={entry.commit} memo={commitMemo} onOpenFact={path => dispatch({
                   type: 'open',
@@ -219,8 +215,11 @@ export function ChatSidePanel({ chatId, panel, dispatch, running, width, onSplit
                   onScreen={onScreen} runningRef={runningRef} />}
         </div>
         <div data-testid="chat-panel-footer" style={footer}>
-          <span style={keycap}>{PANEL_KEY_CLOSE.slice(0, PANEL_KEY_CLOSE.indexOf(' '))}</span>
-          <span>{PANEL_KEY_CLOSE.slice(PANEL_KEY_CLOSE.indexOf(' '))}</span>
+          {entry.kind === 'result' && finder && (
+            <button type="button" data-testid="chat-panel-find" className="k-panel-find" onClick={() => finder.openFind()}>
+              {ICON_FIND}{FIND_LABEL}<kbd style={keycap}>{FIND_KEY}</kbd>
+            </button>
+          )}
         </div>
       </div>
     </>
@@ -237,13 +236,17 @@ const iconBtn: CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'center',
   color: '#888', cursor: 'pointer',
 };
+// A result's header: no rule under it (the tabs' underline already separates),
+// and its dot on the body's 12px edge.
+const resultHeader: CSSProperties = { ...header, height: 36, borderBottom: 'none', gap: 10, padding: '0 6px 0 12px' };
+const headInRow: CSSProperties = { margin: 0, padding: 0 };
 const crumbBox: CSSProperties = {
   flex: 1, minWidth: 0, marginLeft: 4, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
   fontSize: 11.5, color: '#777',
 };
 const footer: CSSProperties = {
-  flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', boxSizing: 'border-box',
-  borderTop: '1px solid #1e1e1e', fontSize: 10.5, color: '#555',
+  flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '4px 12px', boxSizing: 'border-box',
+  fontSize: 10.5, color: '#555',
 };
 const keycap: CSSProperties = {
   fontFamily: 'var(--k-font-mono)', fontSize: 9.5, color: '#555', border: '1px solid #2a2a2a', borderRadius: 3, padding: '0 4px',

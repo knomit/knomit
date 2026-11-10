@@ -31,7 +31,7 @@ let open: (e: PanelEntry) => void;
 function Panel({ callFor }: { callFor: (id: string) => ToolCall | undefined }) {
   const [panel, dispatch] = useReducer(panelReducer, initialPanelState);
   useEffect(() => { open = entry => dispatch({ type: 'open', entry }); });
-  return <ChatSidePanel chatId="chat-a" panel={panel} dispatch={dispatch} running={false} width={480} onSplitterDown={vi.fn()} boundFor={() => 'r1'} callFor={callFor} />;
+  return <ChatSidePanel chatId="chat-a" panel={panel} dispatch={dispatch} running={false} width={480} onSplitterDown={vi.fn()} callFor={callFor} />;
 }
 
 /** The transcript row and the side panel's header for the same call. */

@@ -49,11 +49,16 @@ export interface BrowseFactRequest {
   motif?: string;
 }
 
-/** Whether the key went to something the person types into. */
+/** Whether the key went to something the person types into. A read-only text
+ *  view (a tool result's JsonView, contenteditable so it can be selected and
+ *  searched, marked data-k-readonly-text) is not one: nothing types there, so
+ *  Esc in it is the panel's as it was when the result was a <pre>. */
 export function typingIn(el: Element | null): boolean {
   if (!el) return false;
   const tag = el.tagName;
-  return tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT' || (el as HTMLElement).isContentEditable === true;
+  if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') return true;
+  if (el.closest('[data-k-readonly-text]')) return false;
+  return (el as HTMLElement).isContentEditable === true;
 }
 
 // ── width ──
@@ -110,10 +115,4 @@ export function usePanelWidth(): { width: number; onSplitterDown: (e: ReactMouse
     document.addEventListener('mouseup', onUp);
   }, [width]);
   return { width, onSplitterDown };
-}
-
-/** The breadcrumb for a path: the repo, then the path's directories (not the file). */
-export function crumbOf(repo: string, path: string): string[] {
-  const parts = path.split('/').filter(Boolean);
-  return [repo, ...parts.slice(0, -1)].filter(Boolean);
 }

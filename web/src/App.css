@@ -64,7 +64,18 @@ a { color: inherit; }
 .k-chat-body { flex: 1 1 0; min-height: 0; min-width: 0; display: flex; overflow: hidden; }
 .k-chat-main { flex: 1 1 0; min-width: 0; min-height: 0; }
 .k-chat-result { width: var(--k-panel-w, 470px); max-width: 60%; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden; background: #111;
-  /* mockup.html .side */ border-left: 1px solid #262626; box-shadow: -18px 0 30px -24px rgba(0,0,0,.8); }
+  /* mockup.html .side. No border-left of its own: the splitter beside it
+     (FacetSplitter) already draws the one edge line, and a second here drew a
+     doubled edge 2px apart. */ box-shadow: -18px 0 30px -24px rgba(0,0,0,.8); }
+/* The side panel footer's Find (a result's JSON view): a bare button at the
+   right, lifted on hover, the app's ring on keyboard focus. */
+.k-panel-find {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 6px; background: none; border: 1px solid transparent;
+  color: #888; border-radius: 4px; padding: 3px 7px; cursor: pointer; font: inherit; font-size: 11.5px;
+}
+.k-panel-find:hover { color: #eee; background: #1a1a1a; border-color: #2a2a2a; }
+.k-panel-find:focus { outline: none; }
+.k-panel-find:focus-visible { outline: 2px solid #4a7ab5; outline-offset: 2px; }
 /* At a phone width the side panel STACKS ABOVE the chat, full width, and the
    splitter goes (there is nothing to drag sideways); the page never scrolls
    sideways because of it. These come AFTER the base rule above, so they win by

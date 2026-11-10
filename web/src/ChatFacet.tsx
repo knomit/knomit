@@ -11,7 +11,7 @@ import {
 import type { ApprovalDecision, ChatApproval, ChatInfo, ChatNotice } from './chatApi';
 import { subscribeChatEvents } from './chatEvents';
 import { NEW_CHAT_ERROR } from './chatCopy';
-import { boundBeforeCall, chatReducer, findCall, initialChatState, refusalReason, sessionCost } from './chatState';
+import { chatReducer, findCall, initialChatState, refusalReason, sessionCost } from './chatState';
 import { RECONNECT_INITIAL_MS, RECONNECT_MAX_MS } from './eventStream';
 import type { ToolCall, UsagePayload } from './chatState';
 import { commitKey, factKey } from './chatFactLinks';
@@ -338,7 +338,7 @@ export function ChatFacet({ chat, facet, onGone, onNewChat, onBrowseFact, repos,
             <ChatSidePanel chatId={chat.id} panel={panel} dispatch={dispatchPanel} running={state.running}
               width={panelWidth} onSplitterDown={onSplitterDown} onBrowse={onBrowseFact ? req => onBrowseFact(chat.id, req) : undefined}
               repos={repos} repoNames={repoNames} serverReadOnly={serverReadOnly} onScreen={onScreen && facet === 'chat'}
-              boundFor={callId => boundBeforeCall(state.turns, callId)} callFor={callId => findCall(state.turns, callId)} />
+              callFor={callId => findCall(state.turns, callId)} />
           )}
         </div>
       </div>
