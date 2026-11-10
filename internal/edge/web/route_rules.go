@@ -6,8 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"knomit/internal/edge/web/api/manage"
-	"knomit/internal/edge/web/api/origins"
+	"knomit/internal/edge/web/httpx"
 	"knomit/internal/foundation/authz"
 )
 
@@ -30,10 +29,11 @@ type routeRule struct {
 	// Resolve picks the permission from the request when it depends on the
 	// body or query (inventory G9: create-with-origin, secret_id, git push vs
 	// fetch). It must return one of Possible and must leave the body readable
-	// for the handler. A body resolver lives next to its handler and decodes
-	// into the handler's OWN request struct with httpx.PeekJSON (DecodeJSON's
-	// decoder), so the two read the same body the same way: case-insensitive
-	// field names, duplicate keys, empty objects. A body it cannot decode
+	// for the handler. A body resolver (httpx/permission_bodies.go) decodes
+	// into the handler's OWN request struct, which the handler aliases, with
+	// httpx.PeekJSON (DecodeJSON's decoder), so the two read the same body
+	// the same way: case-insensitive field names, duplicate keys, empty
+	// objects. A body it cannot decode
 	// resolves to the strongest (last) of Possible: fail closed, and the
 	// handler answers 400 anyway.
 	//
@@ -222,9 +222,9 @@ var apiRouteRules = concat(
 	[]routeRule{
 		rule(mGet, "/repo-events", pRead),
 		rule(mGet, "/repos", pRead),
-		resolved(mPost, "/repos", manage.ResolveRepoCreate, pManage, pOrigin, pSecret),
-		resolved(mPost, "/repos:probe-origin", manage.ResolveProbeOrigin, pOrigin, pSecret),
-		resolved(mPost, "/repos:probe-initialized", manage.ResolveProbeInitialized, pOrigin, pSecret),
+		resolved(mPost, "/repos", httpx.ResolveRepoCreate, pManage, pOrigin, pSecret),
+		resolved(mPost, "/repos:probe-origin", httpx.ResolveProbeOrigin, pOrigin, pSecret),
+		resolved(mPost, "/repos:probe-initialized", httpx.ResolveProbeInitialized, pOrigin, pSecret),
 		rule(mGet, "/repos/{repo}/", pRead),
 		rule(mPatch, "/repos/{repo}/", pManage),
 		rule(mDel, "/repos/{repo}/", pManage),
@@ -239,7 +239,7 @@ var apiRouteRules = concat(
 		rule(mGet, "/archived", pRead),
 		rule(mGet, "/archived/{id}", pRead),
 		rule(mDel, "/archived/{id}", pManage),
-		resolved(mPost, "/archived/{id}/restore", manage.ResolveArchivedRestore, pManage, pOrigin, pSecret),
+		resolved(mPost, "/archived/{id}/restore", httpx.ResolveArchivedRestore, pManage, pOrigin, pSecret),
 	},
 
 	// api/manage: origin (the operator gate today)
@@ -248,14 +248,14 @@ var apiRouteRules = concat(
 		rule(mPut, "/repos/{repo}/origin", pOrigin),
 		rule(mDel, "/repos/{repo}/origin", pOrigin),
 		rule(mPatch, "/repos/{repo}/origin/upstream", pOrigin),
-		resolved(mPut, "/repos/{repo}/origin/credential", manage.ResolveOriginCredential, pOrigin, pSecret),
+		resolved(mPut, "/repos/{repo}/origin/credential", httpx.ResolveOriginCredential, pOrigin, pSecret),
 		rule(mPost, "/repos/{repo}/branches/{branch}/merge", pOrigin),
 	},
 
 	// api/origins: origin sessions (the operator gate today, reads included)
 	[]routeRule{
 		rule(mGet, "/repos/{repo}/origin-sessions/", pOrigin),
-		resolved(mPost, "/repos/{repo}/origin-sessions/", origins.ResolveCreateSession, pOrigin, pSecret),
+		resolved(mPost, "/repos/{repo}/origin-sessions/", httpx.ResolveOriginSession, pOrigin, pSecret),
 		rule(mGet, "/repos/{repo}/origin-sessions/{sessionID}", pOrigin),
 		rule(mDel, "/repos/{repo}/origin-sessions/{sessionID}", pOrigin),
 		rule(mGet, "/repos/{repo}/origin-sessions/{sessionID}/preview", pOrigin),
@@ -358,15 +358,15 @@ var apiRouteRules = concat(
 		rule(mGet, "/fleet/root", pFleet),
 		rule(mPut, "/fleet/root", pFleet),
 		rule(mDel, "/fleet/root", pFleet),
-		resolved(mPost, "/fleet/create", manage.ResolveFleetCreate, pFleet, pSecret),
+		resolved(mPost, "/fleet/create", httpx.ResolveFleetCreate, pFleet, pSecret),
 		rule(mPost, "/fleet/enroll", pFleet),
-		resolved(mPost, "/fleet/join", manage.ResolveFleetJoin, pFleet, pSecret),
-		resolved(mPost, "/fleet/join:check", manage.ResolveFleetJoin, pFleet, pSecret),
+		resolved(mPost, "/fleet/join", httpx.ResolveFleetJoin, pFleet, pSecret),
+		resolved(mPost, "/fleet/join:check", httpx.ResolveFleetJoin, pFleet, pSecret),
 		rule(mPost, "/fleet/leave", pFleet),
 		rule(mPost, "/fleet/revoke", pFleet),
 		rule(mPost, "/fleet/decommission", pFleet),
 		rule(mPost, "/fleet/host", pFleet),
-		resolved(mPost, "/fleet/follow", manage.ResolveFleetFollow, pFleet, pSecret),
+		resolved(mPost, "/fleet/follow", httpx.ResolveFleetFollow, pFleet, pSecret),
 		rule(mPost, "/fleet/index-rebuild", pFleet),
 		rule(mPost, "/fleet/drop-commit", pFleet),
 	},

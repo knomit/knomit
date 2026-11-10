@@ -171,8 +171,8 @@ var webKnownTypes = map[string]map[string]string{
 	// api/origins (12d): the session manager and a handler's request body,
 	// each in its own file; mount.go declares no type.
 	webPkg + "/api/origins": {
-		"sessionManager":       "session_manager.go",
-		"createSessionRequest": "handlers.go",
+		"sessionManager": "session_manager.go",
+		"applyRequest":   "handlers.go",
 	},
 	// api/chat: the chat manager, one live chat, its temp-file store and its
 	// persistent session log, each in its own file.

@@ -15,28 +15,6 @@ import (
 	"knomit/internal/foundation/pki"
 )
 
-type createRepoRequest struct {
-	Name           string `json:"name"`
-	Mode           string `json:"mode"`
-	OntologyPreset string `json:"ontology_preset"`
-	OntologyYAML   string `json:"ontology_yaml"`
-	// Template (F24): {repo, name}, repo by NAME and required. The third
-	// ontology source, for modes "template" and "initialize".
-	Template *struct {
-		Repo string `json:"repo"`
-		Name string `json:"name"`
-	} `json:"template"`
-	Origin *struct {
-		URL        string `json:"url"`
-		Branch     string `json:"branch"`
-		AuthMethod string `json:"auth_method"`
-		AuthToken  string `json:"auth_token"`
-		// SecretID links the new repo's origin to a stored secret instead
-		// of a pasted credential (admin only).
-		SecretID string `json:"secret_id"`
-	} `json:"origin"`
-}
-
 // maxCreateBodyBytes bounds the whole create envelope, and is deliberately NOT
 // maxOntologyBytes. ontology_yaml rides here as a JSON STRING, and encoding
 // inflates it: every newline costs two bytes, every quote and backslash two,
@@ -85,7 +63,7 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager, operator, admin fu
 		// different questions: the reader below bounds how much we will read at
 		// all (see maxCreateBodyBytes), and the check after it enforces the
 		// ontology limit on the ontology itself.
-		var req createRepoRequest
+		var req httpx.RepoCreateBody
 		if !httpx.DecodeJSON(w, r, &req, maxCreateBodyBytes) {
 			return
 		}

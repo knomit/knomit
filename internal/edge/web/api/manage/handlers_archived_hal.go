@@ -148,19 +148,6 @@ func handleHALArchivedItem(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc 
 	}
 }
 
-type restoreRequest struct {
-	NewName string `json:"new_name"`
-	// The restored origin's credential, exactly one of: a stored secret, a
-	// pasted credential, or none. Required when the archived repo has an
-	// origin.
-	SecretID     string `json:"secret_id"`
-	AuthMethod   string `json:"auth_method"`
-	Token        string `json:"token"`
-	User         string `json:"user"`
-	Password     string `json:"password"`
-	NoCredential bool   `json:"no_credential"`
-}
-
 // handleHALArchivedRestore serves POST /api/v1/archived/{id}/restore. The {id}
 // path segment is the repo's uid — ArchiveInfo.ID is now the same uid Create
 // minted, so this is the same string throughout, just named for what it is.
@@ -172,7 +159,7 @@ type restoreRequest struct {
 func handleHALArchivedRestore(b hal.URLBuilder, m *repos.Manager, operator, admin func(http.Handler) http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		uid := chi.URLParam(r, "id")
-		var req restoreRequest
+		var req httpx.ArchivedRestoreBody
 		// Optional: an empty body restores under the original name.
 		if !httpx.DecodeOptionalJSON(w, r, &req, 0) {
 			return

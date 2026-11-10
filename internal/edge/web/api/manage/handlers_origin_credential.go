@@ -13,16 +13,6 @@ import (
 	"knomit/internal/edge/web/httpx"
 )
 
-// setCredentialRequest is the JSON body for PUT /repos/{repo}/origin/credential.
-// basic is user plus password (or a token already in user:password form).
-type setCredentialRequest struct {
-	AuthMethod string          `json:"auth_method"`
-	Token      string          `json:"token"`
-	User       string          `json:"user"`
-	Password   string          `json:"password"`
-	SecretID   json.RawMessage `json:"secret_id"`
-}
-
 // handleSetOriginCredential serves PUT /repos/{repo}/origin/credential: it
 // changes the origin's credential WITHOUT reconnecting (no probe, no guard,
 // no Sync restart; URL, branch and mode unchanged) and resets the sync
@@ -42,7 +32,7 @@ func handleSetOriginCredential(b hal.URLBuilder, m *repos.Manager, admin func(ht
 		repoName := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		var req setCredentialRequest
+		var req httpx.OriginCredentialBody
 		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}

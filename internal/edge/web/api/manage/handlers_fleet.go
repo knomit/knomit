@@ -82,19 +82,6 @@ func handleGetFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	}
 }
 
-type createFleetRequest struct {
-	Name   string `json:"name,omitempty"`
-	Origin *struct {
-		URL        string `json:"url"`
-		Branch     string `json:"branch,omitempty"`
-		AuthMethod string `json:"auth_method,omitempty"`
-		AuthToken  string `json:"auth_token,omitempty"`
-		// SecretID hosts the fleet on the forge with a stored secret
-		// instead of a pasted credential.
-		SecretID string `json:"secret_id,omitempty"`
-	} `json:"origin,omitempty"`
-}
-
 // createdFleetStatus is POST /fleet/create's success status: 201 only when
 // the fleet's main holds this instance's active record (state registered AND
 // record_state active, read at local main), 202 otherwise: a forge publish
@@ -113,7 +100,7 @@ func createdFleetStatus(st repos.FleetStatus) int {
 // (router).
 func handleCreateFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req createFleetRequest
+		var req httpx.FleetCreateBody
 		if !httpx.DecodeJSON(w, r, &req, 0) {
 			return
 		}
