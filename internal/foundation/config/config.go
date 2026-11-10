@@ -389,6 +389,16 @@ type Config struct {
 	// is derived from host, port, auth.loopback_hosts, host names or
 	// certificates, and nothing is probed. The fleet member record carries
 	// the list verbatim, refreshed at every boot. Default empty.
+	//
+	// The same list is also this instance's ISSUER SET (unified auth,
+	// design §15.2; see Issuers): every entry is a URL browsers, OAuth
+	// clients and git reach the main port at, and a token is valid on all of
+	// them. The two meanings usually name one host (`tailscale serve` in
+	// front of both ports); an entry that reaches only the Fleet port is an
+	// issuer nothing uses, which is harmless. With the list empty, Issuers
+	// derives one URL from the bind (never from a request) — that derived
+	// URL is NOT written here and never reaches the member record. Two
+	// entries that normalise to the same URL are refused.
 	ExternalAddresses []string `toml:"external_addresses"`
 	// Socket is the local authenticated listener: KNOMIT_SOCKET, else this
 	// key, else a default under Home (see socketFor). An explicit value must
@@ -501,6 +511,52 @@ type AuthConfig struct {
 	// Older knomit versions only warn about the key, so it can be added
 	// before upgrading.
 	LoopbackHosts []string `toml:"loopback_hosts"`
+
+	// Lifetimes of the unified auth model (design §7, OPEN-9: all under
+	// [auth]). Durations in TOML are strings ("10m", "720h").
+	//
+	// Until the flip (P4) only what P3 built reads them — browser sessions,
+	// one-time login links, personal access tokens and pairing requests.
+	// The existing OAuth listener's tokens still follow [oauth].access_ttl
+	// and [oauth].refresh_ttl, unchanged; at P4 those two keys become boot
+	// errors naming access_ttl / refresh_idle_ttl / refresh_absolute_ttl here.
+	PendingTTL         time.Duration `toml:"pending_ttl"`          // a pairing or OAuth request waiting for approval
+	LinkTTL            time.Duration `toml:"link_ttl"`             // a one-time login link (single use)
+	SessionIdleTTL     time.Duration `toml:"session_idle_ttl"`     // a browser session unused this long ends
+	SessionAbsoluteTTL time.Duration `toml:"session_absolute_ttl"` // a browser session ends this long after login, used or not
+	AccessTTL          time.Duration `toml:"access_ttl"`           // an OAuth access token
+	RefreshIdleTTL     time.Duration `toml:"refresh_idle_ttl"`     // an OAuth refresh token unused this long is dead
+	RefreshAbsoluteTTL time.Duration `toml:"refresh_absolute_ttl"` // an OAuth login (family) ends this long after approval
+	PATDefaultTTL      time.Duration `toml:"pat_default_ttl"`      // a personal access token minted without an expiry
+	PATMaxTTL          time.Duration `toml:"pat_max_ttl"`          // the longest expiry a personal access token may have
+}
+
+// validateLifetimes refuses a non-positive lifetime, an idle lifetime longer
+// than its absolute one, and a PAT default beyond the PAT maximum.
+func (a AuthConfig) validateLifetimes() error {
+	for _, d := range []struct {
+		key string
+		v   time.Duration
+	}{
+		{"pending_ttl", a.PendingTTL}, {"link_ttl", a.LinkTTL},
+		{"session_idle_ttl", a.SessionIdleTTL}, {"session_absolute_ttl", a.SessionAbsoluteTTL},
+		{"access_ttl", a.AccessTTL}, {"refresh_idle_ttl", a.RefreshIdleTTL},
+		{"refresh_absolute_ttl", a.RefreshAbsoluteTTL}, {"pat_default_ttl", a.PATDefaultTTL},
+		{"pat_max_ttl", a.PATMaxTTL},
+	} {
+		if d.v <= 0 {
+			return fmt.Errorf("config: [auth].%s must be positive, got %v", d.key, d.v)
+		}
+	}
+	switch {
+	case a.SessionIdleTTL > a.SessionAbsoluteTTL:
+		return fmt.Errorf("config: [auth].session_idle_ttl (%v) must not exceed session_absolute_ttl (%v)", a.SessionIdleTTL, a.SessionAbsoluteTTL)
+	case a.RefreshIdleTTL > a.RefreshAbsoluteTTL:
+		return fmt.Errorf("config: [auth].refresh_idle_ttl (%v) must not exceed refresh_absolute_ttl (%v)", a.RefreshIdleTTL, a.RefreshAbsoluteTTL)
+	case a.PATDefaultTTL > a.PATMaxTTL:
+		return fmt.Errorf("config: [auth].pat_default_ttl (%v) must not exceed pat_max_ttl (%v)", a.PATDefaultTTL, a.PATMaxTTL)
+	}
+	return nil
 }
 
 // validateExternalAddress accepts scheme://host[:port] and nothing more. Any
@@ -638,6 +694,16 @@ func Defaults() Config {
 		Auth: AuthConfig{
 			// Everything a local operator could do before [auth] existed.
 			LoopbackDefault: []string{"read", "write", "push:own", "operator", "admin"},
+			// Unified auth lifetimes (design §7).
+			PendingTTL:         10 * time.Minute,
+			LinkTTL:            2 * time.Minute,
+			SessionIdleTTL:     30 * 24 * time.Hour,
+			SessionAbsoluteTTL: 90 * 24 * time.Hour,
+			AccessTTL:          2 * time.Hour,
+			RefreshIdleTTL:     30 * 24 * time.Hour,
+			RefreshAbsoluteTTL: 90 * 24 * time.Hour,
+			PATDefaultTTL:      90 * 24 * time.Hour,
+			PATMaxTTL:          365 * 24 * time.Hour,
 		},
 		// Off (no issuer, no addr). The TTLs are policy defaults.
 		OAuth: OAuthConfig{
@@ -1000,6 +1066,12 @@ func (c Config) Validate() error {
 		if err := validateExternalAddress(a); err != nil {
 			return fmt.Errorf("config: external_addresses entry %q %v (want scheme://host[:port], the address peers use)", a, err)
 		}
+	}
+	if err := validateIssuerSet(c.ExternalAddresses); err != nil {
+		return err
+	}
+	if err := c.Auth.validateLifetimes(); err != nil {
+		return err
 	}
 	// runtime.addr serves pprof and process controls with no authentication
 	// (#288). A non-loopback bind — including ":6060", which binds every
