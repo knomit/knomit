@@ -86,9 +86,21 @@ describe('the zero-repo shell', () => {
     // Nothing persisted said open: the rail is forced.
     expect(localStorage.getItem('knomit.rail')).not.toBe('1');
     const section = await screen.findByTestId('rail-repos');
-    const rows = within(section).getAllByRole('button').filter(b => b.dataset.testid !== 'rail-new-repo');
+    const rows = within(section).getAllByRole('button').filter(b => b.dataset.testid !== 'rail-new-repo' && b.dataset.testid !== 'rail-repos-toggle');
     expect(rows.map(r => r.dataset.testid)).toEqual(['rail-draft-repo']);
     expect(rows[0]).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('opens a Repositories section the reader had collapsed, so the forced draft row is seen, and stores it open', async () => {
+    localStorage.setItem('knomit.rail.collapsed', JSON.stringify(['repos', 'lenses']));
+    await primeEmptyApi();
+    await mountApp();
+    const toggle = await screen.findByTestId('rail-repos-toggle');
+    expect(screen.getByTestId('rail-draft-repo')).toHaveAttribute('aria-current', 'true');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(JSON.parse(localStorage.getItem('knomit.rail.collapsed')!)).toEqual(['lenses']);
+    // Only the section the draft is in: Lenses stays collapsed.
+    expect(screen.getByTestId('rail-lenses-toggle')).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('offers no Cancel, because there is nothing to go back to', async () => {

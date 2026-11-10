@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import type { BrowseContext } from './state';
 import { repoAvailable, brokenLensMember } from './api';
 import type { RepoInfo, Lens, ArchivedRepo, RepoCreateStatus, FleetStatus } from './api';
@@ -11,13 +11,15 @@ import { CredentialChip } from './CredentialChip';
 import { RepoDot } from './settingsParts';
 import { PendingCreateRow } from './PendingCreateRow';
 import { useRepoCreates, activeCreateByRepo, createFlag, pendingCreates } from './useRepoCreates';
-import { BookIcon, LayersIcon, ArchiveIcon, PlusIcon, ChevronDownIcon, FleetIcon, ChatIcon } from './icons';
+import { BookIcon, LayersIcon, ArchiveIcon, PlusIcon, FleetIcon, ChatIcon } from './icons';
 import { LENS, noMouseFocus } from './utils';
 import { ChatRailRow } from './ChatRailRow';
 import { RAIL_CHATS_SHOWN, railState, recentChats } from './chatRail';
-import { railMore } from './chatCopy';
+import { railMore, RAIL_STATE_ATTENTION } from './chatCopy';
 import { remoteFailing, DRAFT_NAME } from './facets';
 import type { PinnedTarget, DraftKind } from './facets';
+import { loadRailCollapsed, saveRailCollapsed } from './repoSelection';
+import type { RailSection } from './repoSelection';
 
 interface Props {
   repos: RepoInfo[];
@@ -110,6 +112,36 @@ export function TargetRail({
 }: Props) {
   const [query, setQuery] = useState('');
   const [chatsOpen, setChatsOpen] = useState(false);
+  // The sections the reader collapsed (a header is its own toggle), remembered
+  // per viewer. Nothing stored means every section open, as before.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<RailSection>>(() => new Set(loadRailCollapsed()));
+  const setSectionOpen = (s: RailSection, open: boolean) => {
+    if (open !== collapsed.has(s)) return;
+    const next = new Set(collapsed);
+    if (open) next.delete(s); else next.add(s);
+    setCollapsed(next);
+    saveRailCollapsed(next);
+  };
+  // A draft row that appears in a collapsed section, by any route (its `+`,
+  // the zero-repo shell forcing the repository draft, a chat started
+  // elsewhere), opens that section and remembers it open: a draft row hidden
+  // behind a closed header is a target nobody can see. Only on appearing, so
+  // the reader can still collapse the section afterwards. Adjusted during
+  // render, like Archived below, so the section and the row arrive in one paint.
+  const draftRows: Record<RailSection, boolean> = {
+    chats: Boolean(drafts.chat), repos: drafts.repo, lenses: drafts.lens, fleet: Boolean(drafts.fleet) && !fleet?.fleet_repo,
+  };
+  const [draftRowsSeen, setDraftRowsSeen] = useState<Record<RailSection, boolean>>({ chats: false, repos: false, lenses: false, fleet: false });
+  if ((Object.keys(draftRows) as RailSection[]).some(s => draftRows[s] !== draftRowsSeen[s])) {
+    setDraftRowsSeen(draftRows);
+    const appeared = (Object.keys(draftRows) as RailSection[]).filter(s => draftRows[s] && !draftRowsSeen[s] && collapsed.has(s));
+    if (appeared.length > 0) {
+      const next = new Set(collapsed);
+      appeared.forEach(s => next.delete(s));
+      setCollapsed(next);
+      saveRailCollapsed(next);
+    }
+  }
   const searchRef = useRef<HTMLInputElement>(null);
   // A create still working on a listed repo flags its row; one not yet
   // registered is a row of its own. The poller is already mounted app-wide.
@@ -150,6 +182,15 @@ export function TargetRail({
 
   const q = query.trim().toLowerCase();
   const match = (name: string) => !q || name.toLowerCase().includes(q);
+  // A collapsed section still shows its MATCHES while the search has text — a
+  // match hidden behind a closed header is not found (the rule Archived already
+  // follows) — and clearing the search closes it again: the search never
+  // changes what is remembered. Only the sections the search filters have
+  // matches (Repositories with its Archived, and Lenses); Chats and Fleet are
+  // not filtered, so a search leaves them as they are, count and dot included.
+  const rowsShown = (s: RailSection) => !collapsed.has(s) || (q !== '' && SEARCH_FILTERED.has(s));
+  // A `+` on a collapsed section opens it, so the draft row it adds is seen.
+  const newDraft = (s: RailSection, kind: DraftKind) => { release(); setSectionOpen(s, true); onNewDraft?.(kind); };
   // Sorted here rather than trusted from the server: the listing's order is
   // its own business, and a reader scanning for a name must find it where a
   // name goes, whatever state the thing behind it is in — a create not yet
@@ -157,10 +198,11 @@ export function TargetRail({
   type RepoItem = { kind: 'repo'; name: string; repo: RepoInfo } | { kind: 'pending'; name: string; job: RepoCreateStatus };
   // The fleet repository is the fleet target, drawn in the Fleet section.
   const fleetRepo = fleet?.fleet_repo ?? '';
-  const repoItems: RepoItem[] = [
+  const allRepoItems: RepoItem[] = [
     ...repos.filter(r => !r.fleet && r.name !== fleetRepo).map(r => ({ kind: 'repo' as const, name: r.name, repo: r })),
     ...pending.map(j => ({ kind: 'pending' as const, name: j.name, job: j })),
-  ].sort(byName).filter(it => match(it.name));
+  ];
+  const repoItems = allRepoItems.sort(byName).filter(it => match(it.name));
   const shownLenses = [...lenses].sort(byName).filter(l => match(l.name));
   const shownArchived = [...archived].sort(byName).filter(a => match(a.name));
   // A search shows its archived matches without the reader having to open
@@ -198,12 +240,12 @@ export function TargetRail({
             provider's mark, whose colour is the chat's state, and its title. */}
         {chatsAvailable && (
           <div data-testid="rail-chats">
-            <div style={{ ...sectionHeader, marginTop: 0 }}>
-              <ChatIcon color={CHAT_ACCENT} size={13} />
-              <span style={sectionTitle}>Chats</span>
-              <PlusButton testId="rail-new-chat" tone={PLUS_CHAT} label="New chat" disabled={locked}
-                active={draftShown === 'chat'} onClick={() => { release(); onNewDraft?.('chat'); }} />
-            </div>
+            <SectionHeader section="chats" first icon={<ChatIcon color={CHAT_ACCENT} size={13} />} title="Chats"
+              open={rowsShown('chats')} onToggle={() => setSectionOpen('chats', collapsed.has('chats'))}
+              count={chats.length} attention={chats.some(c => railState(c, chatSeen[c.id], false) === 'attention')}
+              plus={<PlusButton testId="rail-new-chat" tone={PLUS_CHAT} label="New chat" disabled={locked}
+                active={draftShown === 'chat'} onClick={() => newDraft('chats', 'chat')} />} />
+            {rowsShown('chats') && <>
             {drafts.chat && (
               <DraftRow kind="chat" selected={draftShown === 'chat'} disabled={locked}
                 onClick={() => { release(); onPickDraft?.('chat'); }} />
@@ -234,16 +276,17 @@ export function TargetRail({
                 {railMore(hiddenChats)}
               </button>
             )}
+            </>}
           </div>
         )}
 
         <div data-testid="rail-repos">
-          <div style={sectionHeader}>
-            <BookIcon color="#7c9" size={13} />
-            <span style={sectionTitle}>Repositories</span>
-            <PlusButton testId="rail-new-repo" tone={PLUS_REPO} label="New repository" disabled={serverReadOnly || locked}
-              active={draftShown === 'repo'} onClick={() => { release(); onNewDraft?.('repo'); }} />
-          </div>
+          <SectionHeader section="repos" icon={<BookIcon color="#7c9" size={13} />} title="Repositories"
+            open={rowsShown('repos')} onToggle={() => setSectionOpen('repos', collapsed.has('repos'))}
+            count={allRepoItems.length}
+            plus={<PlusButton testId="rail-new-repo" tone={PLUS_REPO} label="New repository" disabled={serverReadOnly || locked}
+              active={draftShown === 'repo'} onClick={() => newDraft('repos', 'repo')} />} />
+          {rowsShown('repos') && <>
           {drafts.repo && (
             <DraftRow kind="repo" selected={draftShown === 'repo'} disabled={locked}
               onClick={() => { release(); onPickDraft?.('repo'); }} />
@@ -345,9 +388,6 @@ export function TargetRail({
               <ArchiveIcon color="#7a6a5a" size={12} />
               <span style={{ flex: 1 }}>Archived</span>
               <span data-testid="rail-archived-count" style={archCount}>{archived.length}</span>
-              <span style={{ display: 'inline-flex', transform: archivedRowsShown ? 'none' : 'rotate(-90deg)' }}>
-                <ChevronDownIcon color="#5a5a5a" size={11} />
-              </span>
             </button>
           )}
           {archivedRowsShown && shownArchived.map(a => {
@@ -367,15 +407,16 @@ export function TargetRail({
               </button>
             );
           })}
+          </>}
         </div>
 
         <div data-testid="rail-lenses">
-          <div style={sectionHeader}>
-            <LayersIcon color={LENS_ACCENT} size={13} />
-            <span style={sectionTitle}>Lenses</span>
-            <PlusButton testId="rail-new-lens" tone={PLUS_LENS} label="New lens" disabled={serverReadOnly || locked}
-              active={draftShown === 'lens'} onClick={() => { release(); onNewDraft?.('lens'); }} />
-          </div>
+          <SectionHeader section="lenses" icon={<LayersIcon color={LENS_ACCENT} size={13} />} title="Lenses"
+            open={rowsShown('lenses')} onToggle={() => setSectionOpen('lenses', collapsed.has('lenses'))}
+            count={lenses.length}
+            plus={<PlusButton testId="rail-new-lens" tone={PLUS_LENS} label="New lens" disabled={serverReadOnly || locked}
+              active={draftShown === 'lens'} onClick={() => newDraft('lenses', 'lens')} />} />
+          {rowsShown('lenses') && <>
           {drafts.lens && (
             <DraftRow kind="lens" selected={draftShown === 'lens'} disabled={locked}
               onClick={() => { release(); onPickDraft?.('lens'); }} />
@@ -410,22 +451,23 @@ export function TargetRail({
               </button>
             );
           })}
+          </>}
         </div>
 
         {/* The fleet: one row once this instance is in one, with its role;
             otherwise the `+` that opens New fleet (create or join), which
             only the desktop app can act on (GET /fleet's `local`). */}
         <div data-testid="rail-fleet">
-          <div style={sectionHeader}>
-            <FleetIcon color={FLEET_ACCENT} size={13} />
-            <span style={sectionTitle}>Fleet</span>
-            {!fleetRepo && (
+          <SectionHeader section="fleet" icon={<FleetIcon color={FLEET_ACCENT} size={13} />} title="Fleet"
+            open={rowsShown('fleet')} onToggle={() => setSectionOpen('fleet', collapsed.has('fleet'))}
+            count={fleetRepo ? 1 : 0}
+            plus={!fleetRepo && (
               <PlusButton testId="rail-new-fleet" tone={PLUS_FLEET} label="Create or join a fleet"
                 hint={fleet && !fleet.local ? 'Not in a fleet — create or join from the desktop app' : undefined}
                 disabled={locked || fleet?.local !== true}
-                active={draftShown === 'fleet'} onClick={() => { release(); onNewDraft?.('fleet'); }} />
-            )}
-          </div>
+                active={draftShown === 'fleet'} onClick={() => newDraft('fleet', 'fleet')} />
+            )} />
+          {rowsShown('fleet') && <>
           {drafts.fleet && !fleetRepo && (
             <DraftRow kind="fleet" selected={draftShown === 'fleet'} disabled={locked}
               onClick={() => { release(); onPickDraft?.('fleet'); }} />
@@ -457,9 +499,38 @@ export function TargetRail({
               Not in a fleet
             </div>
           )}
+          </>}
         </div>
       </div>
     </nav>
+  );
+}
+
+// A section's header, which is its own collapse toggle (variant C, approved
+// 2026-11-09): the icon and the title are one button, with no chevron; the `+`
+// stays a separate button beside it. At rest it looks as it always did.
+// Collapsed, the title dims and is followed by the count of the rows the
+// section holds, and Chats adds the amber dot when a chat it hides is waiting
+// for an approval. Numbers and colour only: the dot's accessible name is the
+// rail's own words for that state.
+function SectionHeader({ section, first, icon, title, open, onToggle, count, attention = false, plus }: {
+  section: RailSection; first?: boolean; icon: ReactNode; title: string; open: boolean; onToggle: () => void;
+  count: number; attention?: boolean; plus: ReactNode;
+}) {
+  return (
+    <div style={first ? { ...sectionHeader, marginTop: 0 } : sectionHeader}>
+      <button type="button" className="k-rail-toggle" data-testid={`rail-${section}-toggle`} aria-expanded={open}
+        onMouseDown={noMouseFocus} onClick={onToggle}
+        style={{ ...sectionToggle, ['--k-rail-title' as string]: open ? TITLE_OPEN : TITLE_COLLAPSED }}>
+        {icon}
+        <span className="k-rail-title" data-testid={`rail-${section}-title`} style={sectionTitle}>{title}</span>
+        {!open && <span data-testid={`rail-${section}-count`} style={sectionCount}>{count}</span>}
+        {!open && attention && (
+          <span data-testid={`rail-${section}-attention`} role="img" aria-label={RAIL_STATE_ATTENTION} style={attentionDot} />
+        )}
+      </button>
+      {plus}
+    </div>
   );
 }
 
@@ -495,6 +566,10 @@ function DraftRow({ kind, selected, disabled, onClick }: {
 }
 
 const byName = (a: { name: string }, b: { name: string }) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+
+// The sections whose rows the rail search filters by name, and so the only ones
+// a search reveals while collapsed.
+const SEARCH_FILTERED: ReadonlySet<RailSection> = new Set(['repos', 'lenses']);
 
 const SearchGlyph = () => (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" style={{ flexShrink: 0 }}>
@@ -537,7 +612,23 @@ const list: CSSProperties = {
 };
 // The manage rail's section header, unchanged: the component wins over the mock.
 const sectionHeader: CSSProperties = { display: 'flex', alignItems: 'center', gap: 7, padding: '6px 8px 5px', marginTop: 6, marginBottom: 2, borderBottom: '1px solid #242424' };
-const sectionTitle: CSSProperties = { flex: 1, fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9a9a9a' };
+// The title's colour comes from App.css (.k-rail-title) through --k-rail-title,
+// so a :hover can lighten it: an inline colour would outrank the hover.
+const sectionTitle: CSSProperties = { fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' };
+const TITLE_OPEN = '#9a9a9a';
+const TITLE_COLLAPSED = '#6a6a6a';
+// The header's toggle: bare, so the header looks as it did before it was one.
+const sectionToggle: CSSProperties = {
+  flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 7,
+  background: 'transparent', border: 'none', borderRadius: 3, padding: 0, margin: 0,
+  color: 'inherit', font: 'inherit', lineHeight: 'inherit', textAlign: 'left', cursor: 'pointer',
+};
+// A collapsed section's count: Archived's count, beside the title.
+const sectionCount: CSSProperties = { fontSize: 11, color: '#5a5a5a', fontVariantNumeric: 'tabular-nums' };
+// A hidden chat waiting for an approval: the chat amber with its faint ring.
+const attentionDot: CSSProperties = {
+  width: 6, height: 6, borderRadius: '50%', background: CHAT_ACCENT, boxShadow: '0 0 0 2px rgba(232,194,122,.18)', flexShrink: 0,
+};
 // A row is the manage rail's listItem in geometry. The selected treatment is
 // the spec's: the green-tinted row with an inset left bar for a repo, the lens
 // tint and bar for a lens.

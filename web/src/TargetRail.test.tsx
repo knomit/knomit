@@ -213,7 +213,7 @@ describe('TargetRail — drafts', () => {
         remoteError="" serverReadOnly={false} onSelect={() => {}} drafts={{ repo: true, lens: false }} draftShown="repo" />,
     );
     const section = screen.getByTestId('rail-repos');
-    const rows = within(section).getAllByRole('button').filter(b => b.dataset.testid !== 'rail-new-repo');
+    const rows = within(section).getAllByRole('button').filter(b => b.dataset.testid !== 'rail-new-repo' && b.dataset.testid !== 'rail-repos-toggle');
     expect(rows[0]).toBe(screen.getByTestId('rail-draft-repo'));
     expect(rows[0]).toHaveTextContent('New repository');
     expect(rows[0]).toHaveAttribute('aria-current', 'true');
@@ -243,7 +243,7 @@ describe('TargetRail — drafts', () => {
     const draft = screen.getByTestId('rail-draft-lens');
     expect(draft).toHaveTextContent('New lens');
     expect(draft).toHaveStyle({ fontStyle: 'italic', background: '#1d1a2c', color: '#e6defc' });
-    const lensRows = within(screen.getByTestId('rail-lenses')).getAllByRole('button').filter(b => b.dataset.testid !== 'rail-new-lens');
+    const lensRows = within(screen.getByTestId('rail-lenses')).getAllByRole('button').filter(b => b.dataset.testid !== 'rail-new-lens' && b.dataset.testid !== 'rail-lenses-toggle');
     expect(lensRows[0]).toBe(draft);
     // No repository draft was asked for.
     expect(screen.queryByTestId('rail-draft-repo')).toBeNull();
@@ -341,7 +341,7 @@ describe('TargetRail — creates in flight', () => {
     const row = await screen.findByTestId('pending-create-rail-b-kb');
     expect(screen.getByTestId('pending-create-chip-rail-b-kb')).toHaveTextContent('creating');
     const order = within(screen.getByTestId('rail-repos')).getAllByRole('button')
-      .map(b => b.dataset.testid).filter(id => id !== 'rail-new-repo');
+      .map(b => b.dataset.testid).filter(id => id !== 'rail-new-repo' && id !== 'rail-repos-toggle');
     expect(order).toEqual(['rail-repo-a-kb', 'pending-create-rail-b-kb', 'rail-repo-c-kb']);
     // No inline controls on it: the page carries those.
     expect(within(row).queryAllByRole('button')).toHaveLength(0);
