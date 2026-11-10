@@ -2,8 +2,10 @@ package archtest
 
 import (
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -11,35 +13,52 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	gopackages "golang.org/x/tools/go/packages"
 )
 
 const (
-	webDir        = "internal/edge/web"
-	seamFile      = webDir + "/testpolicy.go"
-	authzImport   = "knomit/internal/foundation/authz"
-	seamName      = "injectedPolicy"
-	policyTypeIdt = "Policy"
+	webDir      = "internal/edge/web"
+	seamPkg     = "knomit/internal/edge/web"
+	seamFile    = webDir + "/testpolicy.go"
+	authzImport = "knomit/internal/foundation/authz"
+	seamName    = "injectedPolicy"
 )
 
-// checkInjectedPolicy applies the seam guard to non-_test.go sources, keyed by
-// module-root-relative slash path, and returns one message per violation.
-//
-// The seam (unified authn/z plan, P2) is
+// The in-process auth test seam (unified authn/z plan, P2) is
 // `var injectedPolicy func(*http.Request) (authz.Policy, bool)` in
 // internal/edge/web/testpolicy.go: nil in production, assigned only by _test.go
 // files. If production code could set it, a hook that replaces authentication
-// would ship. Rules, over non-test files only:
+// would ship. Three checks pin that.
 //
-//  1. injectedPolicy may be mentioned exactly once: its declaration in
-//     testpolicy.go, which must name a func type and carry NO initializer.
-//     ANY other mention is a violation: an assignment, `p := &injectedPolicy`,
-//     a read, a declaration elsewhere.
-//  2. No other package-level var in internal/edge/web may hold a func that
-//     returns authz.Policy, however it is spelled: a func type literal, a
-//     named func type (declared in the package), an untyped initializer that is
-//     a func literal, or an initializer naming a package func that returns one.
-//     (Types from other packages are not resolved: aliasing authz.Policy
-//     through another package would slip past, and review should catch that.)
+// Rule 1 (checkInjectedPolicy, syntactic, non-_test.go files under internal/):
+// injectedPolicy may be mentioned exactly once, in its declaration in
+// testpolicy.go, which must name a func type and carry NO initializer. Any
+// other mention (assignment, `p := &injectedPolicy`, a read, a declaration
+// elsewhere) fails.
+//
+// Rule 2 (policyVarViolations, type-aware): in the non-test code of
+// internal/edge/web and every package below it, no package-level var other than
+// the seam itself may have a type that REACHES authz.Policy. Reaching walks
+// aliases, named types (their underlying type and type arguments), pointers,
+// slices, arrays, maps, channels, signatures (parameters and results), struct
+// fields and interface methods, and treats a local named type whose underlying
+// type is Policy's (`type P authz.Policy`) as Policy. The type is the checker's,
+// so spelling does not matter: a local alias, a dot import, an inferred type
+// from a call, a method value and a generic func type all resolve.
+//
+// What rule 2 does NOT catch, and review must: a Policy held through
+// atomic.Value or any other any-typed cell (the type says "any"); a field added
+// to an existing struct type such as Server (rule 2 looks at package-level
+// vars, not at the fields of types declared with them, unless a var has such a
+// type); a package outside internal/edge/web; and a func var that returns
+// something convertible to a policy without naming authz.Policy.
+//
+// Rule 3 (linknameViolations): a //go:linkname naming injectedPolicy anywhere in
+// the module, test files included.
+
+// checkInjectedPolicy is rule 1 over non-_test.go sources keyed by
+// module-root-relative slash path.
 func checkInjectedPolicy(files map[string]string) []string {
 	fset := token.NewFileSet()
 	var problems []string
@@ -54,20 +73,10 @@ func checkInjectedPolicy(files map[string]string) []string {
 	}
 	sort.Strings(names)
 
-	parsed := map[string]*ast.File{}
 	for _, n := range names {
 		f, err := parser.ParseFile(fset, n, files[n], parser.SkipObjectResolution)
 		if err != nil {
 			problems = append(problems, n+": does not parse: "+err.Error())
-			continue
-		}
-		parsed[n] = f
-	}
-
-	// Rule 1.
-	for _, n := range names {
-		f := parsed[n]
-		if f == nil {
 			continue
 		}
 		var declIdent *ast.Ident
@@ -106,136 +115,121 @@ func checkInjectedPolicy(files map[string]string) []string {
 			return true
 		})
 	}
+	return problems
+}
 
-	// Rule 2.
-	var webFiles []string
-	for _, n := range names {
-		if parsed[n] != nil && strings.HasPrefix(n, webDir+"/") && !strings.Contains(strings.TrimPrefix(n, webDir+"/"), "/") {
-			webFiles = append(webFiles, n)
-		}
+// reachesPolicy reports whether t mentions authz.Policy anywhere (see rule 2).
+// under is Policy's underlying type as the package under inspection sees it, or
+// nil when that package does not import authz.
+func reachesPolicy(t types.Type, under types.Type, seen map[types.Type]bool) bool {
+	if t == nil {
+		return false
 	}
-	funcTypes := map[string]bool{}   // package type names whose underlying type is a func
-	policyFuncs := map[string]bool{} // package funcs returning authz.Policy
-	type tspec struct {
-		file string
-		expr ast.Expr
+	t = types.Unalias(t)
+	if seen[t] {
+		return false
 	}
-	typeSpecs := map[string]tspec{}
-	for _, n := range webFiles {
-		for _, d := range parsed[n].Decls {
-			switch x := d.(type) {
-			case *ast.GenDecl:
-				if x.Tok != token.TYPE {
-					continue
-				}
-				for _, s := range x.Specs {
-					ts := s.(*ast.TypeSpec)
-					typeSpecs[ts.Name.Name] = tspec{n, ts.Type}
-				}
-			}
-		}
-	}
-	// returnsPolicy reports whether ft has a result of type authz.Policy (as
-	// spelled via the file's authz import name).
-	returnsPolicy := func(file string, ft *ast.FuncType) bool {
-		if ft == nil || ft.Results == nil {
-			return false
-		}
-		local := authzLocalName(parsed[file])
-		for _, r := range ft.Results.List {
-			if sel, ok := r.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == policyTypeIdt {
-				if x, ok := sel.X.(*ast.Ident); ok && local != "" && x.Name == local {
-					return true
-				}
+	seen[t] = true
+	walk := func(ts ...types.Type) bool {
+		for _, x := range ts {
+			if reachesPolicy(x, under, seen) {
+				return true
 			}
 		}
 		return false
 	}
-	var resolveFunc func(file string, e ast.Expr, depth int) *ast.FuncType
-	resolveFunc = func(file string, e ast.Expr, depth int) *ast.FuncType {
-		if depth > 8 {
-			return nil
+	switch x := t.(type) {
+	case *types.Named:
+		if o := x.Obj(); o != nil && o.Pkg() != nil && o.Pkg().Path() == authzImport && o.Name() == "Policy" {
+			return true
 		}
-		switch x := e.(type) {
-		case *ast.FuncType:
-			return x
-		case *ast.ParenExpr:
-			return resolveFunc(file, x.X, depth+1)
-		case *ast.Ident:
-			if ts, ok := typeSpecs[x.Name]; ok {
-				return resolveFunc(ts.file, ts.expr, depth+1)
+		if under != nil && types.Identical(x.Underlying(), under) {
+			return true // type P authz.Policy
+		}
+		targs := x.TypeArgs()
+		for i := 0; i < targs.Len(); i++ {
+			if walk(targs.At(i)) {
+				return true
 			}
 		}
-		return nil
-	}
-	for name, ts := range typeSpecs {
-		if ft := resolveFunc(ts.file, ts.expr, 0); ft != nil && returnsPolicy(ts.file, ft) {
-			funcTypes[name] = true
-		}
-	}
-	for _, n := range webFiles {
-		for _, d := range parsed[n].Decls {
-			if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil && returnsPolicy(n, fd.Type) {
-				policyFuncs[fd.Name.Name] = true
+		return walk(x.Underlying())
+	case *types.Pointer:
+		return walk(x.Elem())
+	case *types.Slice:
+		return walk(x.Elem())
+	case *types.Array:
+		return walk(x.Elem())
+	case *types.Chan:
+		return walk(x.Elem())
+	case *types.Map:
+		return walk(x.Key(), x.Elem())
+	case *types.Signature:
+		for i := 0; i < x.Params().Len(); i++ {
+			if walk(x.Params().At(i).Type()) {
+				return true
 			}
 		}
-	}
-	for _, n := range webFiles {
-		for _, d := range parsed[n].Decls {
-			gd, ok := d.(*ast.GenDecl)
-			if !ok || gd.Tok != token.VAR {
-				continue
+		for i := 0; i < x.Results().Len(); i++ {
+			if walk(x.Results().At(i).Type()) {
+				return true
 			}
-			for _, s := range gd.Specs {
-				vs := s.(*ast.ValueSpec)
-				holds := false
-				if vs.Type != nil {
-					if ft := resolveFunc(n, vs.Type, 0); ft != nil && returnsPolicy(n, ft) {
-						holds = true
-					}
-				}
-				for _, v := range vs.Values {
-					switch x := v.(type) {
-					case *ast.FuncLit:
-						if returnsPolicy(n, x.Type) {
-							holds = true
-						}
-					case *ast.Ident:
-						if policyFuncs[x.Name] {
-							holds = true
-						}
-					}
-				}
-				if !holds {
-					continue
-				}
-				for _, id := range vs.Names {
-					if id.Name == "_" || (n == seamFile && id.Name == seamName) {
-						continue
-					}
-					add(id.Pos(), "package-level var "+id.Name+" holds a func returning authz.Policy: a second policy seam; the only one is "+seamName+" in testpolicy.go")
-				}
+		}
+	case *types.Struct:
+		for i := 0; i < x.NumFields(); i++ {
+			if walk(x.Field(i).Type()) {
+				return true
+			}
+		}
+	case *types.Interface:
+		for i := 0; i < x.NumMethods(); i++ {
+			if walk(x.Method(i).Type()) {
+				return true
+			}
+		}
+	case *types.Tuple:
+		for i := 0; i < x.Len(); i++ {
+			if walk(x.At(i).Type()) {
+				return true
 			}
 		}
 	}
-	return problems
+	return false
 }
 
-// authzLocalName is the name f gives the authz package, or "".
-func authzLocalName(f *ast.File) string {
-	if f == nil {
-		return ""
-	}
-	for _, imp := range f.Imports {
-		if strings.Trim(imp.Path.Value, `"`) != authzImport {
+// policyUnder is authz.Policy's underlying type as seen from pkg's imports, or
+// nil if pkg does not import authz.
+func policyUnder(pkg *types.Package) types.Type {
+	for _, imp := range pkg.Imports() {
+		if imp.Path() != authzImport {
 			continue
 		}
-		if imp.Name != nil {
-			return imp.Name.Name
+		if o := imp.Scope().Lookup("Policy"); o != nil {
+			return o.Type().Underlying()
 		}
-		return "authz"
 	}
-	return ""
+	return nil
+}
+
+// policyVarViolations is rule 2 for one type-checked package: every
+// package-level var whose type reaches authz.Policy, except the seam itself
+// when pkg is internal/edge/web.
+func policyVarViolations(pkg *types.Package) []string {
+	under := policyUnder(pkg)
+	var out []string
+	scope := pkg.Scope()
+	for _, name := range scope.Names() {
+		v, ok := scope.Lookup(name).(*types.Var)
+		if !ok || name == "_" {
+			continue
+		}
+		if pkg.Path() == seamPkg && name == seamName {
+			continue
+		}
+		if reachesPolicy(v.Type(), under, map[types.Type]bool{}) {
+			out = append(out, pkg.Path()+"."+name+" has type "+v.Type().String()+", which reaches authz.Policy: a second policy seam; the only one is "+seamName+" in testpolicy.go")
+		}
+	}
+	return out
 }
 
 // linknameViolations scans raw file text for //go:linkname directives that name
@@ -267,7 +261,7 @@ func TestInjectedPolicy_GuardShapes(t *testing.T) {
 	web := func(extra string) map[string]string {
 		return map[string]string{
 			seamFile:             goodSeamFile,
-			webDir + "/other.go": "package web\n\nimport (\n\t\"net/http\"\n\n\t\"knomit/internal/foundation/authz\"\n)\n\nvar _ = http.StatusOK\nvar _ authz.Policy\n\n" + extra,
+			webDir + "/other.go": "package web\n\n" + extra,
 		}
 	}
 	if got := checkInjectedPolicy(web("")); len(got) != 0 {
@@ -282,13 +276,6 @@ func TestInjectedPolicy_GuardShapes(t *testing.T) {
 		{"direct assignment", web("func init() { injectedPolicy = nil }\n"), "mentions injectedPolicy"},
 		{"(a) assignment through a pointer", web("func init() {\n\tp := &injectedPolicy\n\t*p = nil\n}\n"), "mentions injectedPolicy"},
 		{"(b) initializer on the declaration", map[string]string{seamFile: "package web\n\nimport (\n\t\"net/http\"\n\n\t\"knomit/internal/foundation/authz\"\n)\n\nvar injectedPolicy func(*http.Request) (authz.Policy, bool) = func(*http.Request) (authz.Policy, bool) {\n\treturn authz.Policy{Owner: true}, true\n}\n"}, "without an initializer"},
-		{"(c) second seam of a named func type", web("type policyHook func(*http.Request) (authz.Policy, bool)\n\nvar altPolicy policyHook\n"), "second policy seam"},
-		{"(d) untyped initializer", web("var inferredPolicy = func(*http.Request) (authz.Policy, bool) { return authz.Policy{}, false }\n"), "second policy seam"},
-		{"second seam by naming a package func", web("func hook(*http.Request) (authz.Policy, bool) { return authz.Policy{}, false }\n\nvar viaFunc = hook\n"), "second policy seam"},
-		{"second seam under an import alias", map[string]string{
-			seamFile:             goodSeamFile,
-			webDir + "/alias.go": "package web\n\nimport az \"knomit/internal/foundation/authz\"\n\nvar aliased func() az.Policy\n",
-		}, "second policy seam"},
 		{"declared in another file", map[string]string{
 			seamFile:            goodSeamFile,
 			webDir + "/more.go": "package web\n\nvar injectedPolicy func()\n",
@@ -315,6 +302,133 @@ func TestInjectedPolicy_GuardShapes(t *testing.T) {
 	}
 	if got := linknameViolations("x.go", "//go:linkname a b.other\n// injectedPolicy in prose\n"); len(got) != 0 {
 		t.Errorf("unrelated linkname flagged: %v", got)
+	}
+}
+
+// fakeAuthz stands in for knomit/internal/foundation/authz so the self-test
+// type-checks small snippets without loading the module.
+const fakeAuthz = `package authz
+
+type Policy struct{ Owner bool }
+
+type Principal struct{ ID string }
+`
+
+type fixtureImporter struct {
+	authz *types.Package
+	std   types.Importer
+}
+
+func (f fixtureImporter) Import(path string) (*types.Package, error) {
+	if path == authzImport {
+		return f.authz, nil
+	}
+	return f.std.Import(path)
+}
+
+func typeCheckFixture(t *testing.T, src string) *types.Package {
+	t.Helper()
+	fset := token.NewFileSet()
+	std := importer.ForCompiler(fset, "source", nil)
+
+	af, err := parser.ParseFile(fset, "authz.go", fakeAuthz, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	az, err := (&types.Config{}).Check(authzImport, fset, []*ast.File{af}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := parser.ParseFile(fset, "fixture.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+	pkg, err := (&types.Config{Importer: fixtureImporter{az, std}}).Check(seamPkg, fset, []*ast.File{f}, nil)
+	if err != nil {
+		t.Fatalf("type-check fixture: %v\n%s", err, src)
+	}
+	return pkg
+}
+
+// TestInjectedPolicy_TypeWalkerShapes checks rule 2 on constructed types: each
+// shape must be flagged, each innocent var must not be.
+func TestInjectedPolicy_TypeWalkerShapes(t *testing.T) {
+	const header = `package web
+
+import (
+	"net/http"
+	"sync/atomic"
+
+	"knomit/internal/foundation/authz"
+)
+
+var _ = http.StatusOK
+var _ atomic.Int32
+
+func mk() func() authz.Policy { return nil }
+
+type holder struct{ f func(*http.Request) authz.Policy }
+type reader interface{ Policy() authz.Policy }
+type hook[T any] func(T) authz.Policy
+type localAlias = authz.Policy
+type localNamed authz.Policy
+type srv struct{}
+
+func (srv) get() authz.Policy { return authz.Policy{} }
+
+var theServer srv
+`
+	flagged := map[string]string{
+		"plainFunc":     "var plainFunc func(*http.Request) (authz.Policy, bool)",
+		"ptrResult":     "var ptrResult func() *authz.Policy",
+		"callInit":      "var callInit = mk()",
+		"ptrToFunc":     "var ptrToFunc *func() authz.Policy",
+		"sliceOfFunc":   "var sliceOfFunc []func() authz.Policy",
+		"mapOfFunc":     "var mapOfFunc map[string]func() authz.Policy",
+		"atomicPointer": "var atomicPointer atomic.Pointer[func() authz.Policy]",
+		"ifaceVar":      "var ifaceVar reader",
+		"structVar":     "var structVar holder",
+		"aliasResult":   "var aliasResult func() localAlias",
+		"namedResult":   "var namedResult func() localNamed",
+		"genericHook":   "var genericHook hook[int]",
+		"methodValue":   "var methodValue = theServer.get",
+		"policyItself":  "var policyItself authz.Policy",
+		"paramOnly":     "var paramOnly func(authz.Policy)",
+	}
+	clean := map[string]string{
+		"anInt":      "var anInt int",
+		"plainFn":    "var plainFn func(*http.Request) bool",
+		"principal":  "var principal authz.Principal",
+		"atomicInt":  "var atomicInt atomic.Int32",
+		"mapOfStr":   "var mapOfStr map[string][]string",
+		"emptyIface": "var emptyIface any",
+	}
+	var body strings.Builder
+	body.WriteString(header)
+	for _, d := range flagged {
+		body.WriteString(d + "\n")
+	}
+	for _, d := range clean {
+		body.WriteString(d + "\n")
+	}
+	pkg := typeCheckFixture(t, body.String())
+	got := strings.Join(policyVarViolations(pkg), "\n")
+	for name := range flagged {
+		if !strings.Contains(got, "web."+name+" ") {
+			t.Errorf("%s: type walker stayed green", name)
+		}
+	}
+	for name := range clean {
+		if strings.Contains(got, "web."+name+" ") {
+			t.Errorf("%s: innocent var flagged", name)
+		}
+	}
+
+	// The seam itself is exempt only as injectedPolicy in the web package.
+	pkg = typeCheckFixture(t, header+"var injectedPolicy func() authz.Policy\n")
+	if got := policyVarViolations(pkg); len(got) != 0 {
+		t.Errorf("the seam was flagged: %v", got)
 	}
 }
 
@@ -361,5 +475,38 @@ func TestInjectedPolicy_AssignedOnlyFromTestFiles(t *testing.T) {
 	}
 	for _, p := range problems {
 		t.Error(p)
+	}
+}
+
+// TestInjectedPolicy_NoSecondSeamInTheWebTree is rule 2 over the real
+// internal/edge/web tree, type-checked.
+func TestInjectedPolicy_NoSecondSeamInTheWebTree(t *testing.T) {
+	cfg := &gopackages.Config{
+		Dir: moduleRoot(t),
+		Mode: gopackages.NeedName | gopackages.NeedFiles | gopackages.NeedCompiledGoFiles | gopackages.NeedImports |
+			gopackages.NeedTypes | gopackages.NeedSyntax | gopackages.NeedTypesInfo,
+	}
+	pkgs, err := gopackages.Load(cfg, seamPkg+"/...")
+	if err != nil {
+		t.Fatalf("gopackages.Load: %v", err)
+	}
+	sawSeam := false
+	for _, p := range pkgs {
+		if len(p.Errors) > 0 {
+			t.Fatalf("type-checking %s: %v", p.PkgPath, p.Errors)
+		}
+		for _, v := range policyVarViolations(p.Types) {
+			t.Error(v)
+		}
+		if p.PkgPath == seamPkg {
+			if o := p.Types.Scope().Lookup(seamName); o != nil {
+				// The walker must see the seam as a policy holder, or a
+				// green run here proves nothing.
+				sawSeam = reachesPolicy(o.Type(), policyUnder(p.Types), map[types.Type]bool{})
+			}
+		}
+	}
+	if !sawSeam {
+		t.Errorf("%s.%s not found, or the type walker does not see authz.Policy in it", seamPkg, seamName)
 	}
 }
