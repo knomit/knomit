@@ -240,6 +240,21 @@ func TestBind_NodeRoleIsNeverBound(t *testing.T) {
 	}
 }
 
+// A node principal is bound to nothing at all: its only role is the implicit
+// node role its certificate carries.
+func TestBind_NodePrincipalIsNeverBound(t *testing.T) {
+	s := seededStore(t)
+	node := Principal{Kind: KindNode, ID: "9f86d081884c7d65"}
+	for r := range Seed {
+		if err := bind(s, node, r); err == nil {
+			t.Fatalf("bound node principal to %s", r)
+		}
+	}
+	if bs, _ := s.Bindings(context.Background()); len(bs) != 0 {
+		t.Fatalf("refused binds left rows: %v", bs)
+	}
+}
+
 func TestBind_ValidatesInput(t *testing.T) {
 	s := seededStore(t)
 	os := Principal{Kind: KindOS, ID: "uid:4242"}

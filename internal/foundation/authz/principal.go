@@ -72,33 +72,53 @@ func ParsePrincipal(s string) (Principal, error) {
 	return p, nil
 }
 
-// validOSID accepts exactly what auth's per-platform localID formats:
-// "uid:<decimal>" on unix and "sid:S-<…>" on Windows.
+// validOSID accepts exactly what auth's per-platform localID formats, in its
+// ONE spelling: "uid:<decimal>" on unix (strconv.Itoa: no sign, no leading
+// zero) and "sid:S-1-<authority>-<subauthority>…" on Windows
+// (ConvertSidToStringSid: revision 1, decimal components, none empty or
+// zero-padded). A second spelling of one account would be a second
+// principal: a binding made for one would not match a request naming the
+// other.
 func validOSID(id string) bool {
 	if n, ok := strings.CutPrefix(id, "uid:"); ok {
-		if n == "" {
-			return false
-		}
-		for _, r := range n {
-			if r < '0' || r > '9' {
-				return false
-			}
-		}
-		return true
+		return canonicalDecimal(n)
 	}
 	if sid, ok := strings.CutPrefix(id, "sid:"); ok {
-		rest, ok := strings.CutPrefix(sid, "S-")
-		if !ok || rest == "" {
+		rest, ok := strings.CutPrefix(sid, "S-1-")
+		if !ok {
 			return false
 		}
-		for _, r := range rest {
-			if (r < '0' || r > '9') && r != '-' {
+		for _, part := range strings.Split(rest, "-") {
+			if !canonicalDecimal(part) {
 				return false
 			}
 		}
 		return true
 	}
 	return false
+}
+
+// canonicalDecimal: a non-empty run of ASCII digits with no leading zero
+// (except "0" itself).
+func canonicalDecimal(s string) bool {
+	if s == "" || (len(s) > 1 && s[0] == '0') {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// canonical reports whether p is in its one persisted spelling: it parses,
+// and parses back to the same identity (an anonymous principal carrying an
+// ID, for example, stringifies to "anonymous" but is not the anonymous
+// principal).
+func canonical(p Principal) bool {
+	c, err := ParsePrincipal(p.String())
+	return err == nil && c == p.identity()
 }
 
 // validOpaqueID accepts a non-empty id of printable, non-space characters

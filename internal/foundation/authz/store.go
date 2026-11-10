@@ -174,8 +174,11 @@ func scanAll(ctx context.Context, q queryer, query string, each func(*sql.Rows) 
 // checkBindable applies the binding rules that need no database.
 func checkBindable(b Binding) error {
 	p := b.Principal.identity()
-	if _, err := ParsePrincipal(p.String()); err != nil {
-		return err
+	if !canonical(p) {
+		return fmt.Errorf("authz: %q is not a principal in its canonical spelling", p.String())
+	}
+	if p.Kind == KindNode {
+		return errors.New("authz: a node principal is never bound: its only role is the node role its instance certificate carries (§13.1)")
 	}
 	if _, ok := Seed[b.Role]; !ok {
 		return fmt.Errorf("authz: unknown role %q", b.Role)

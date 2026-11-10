@@ -1,6 +1,9 @@
 package authz
 
-import "context"
+import (
+	"context"
+	"slices"
+)
 
 // Via is how a request reached the server. It is for audit and logs ONLY:
 // no gate may consult it (design §2). A gate asks Policy.Has.
@@ -35,10 +38,15 @@ type Policy struct {
 }
 
 // Has reports whether the policy grants perm. Public is granted to everyone;
-// the owner is granted everything; otherwise perm must be in the set.
+// the owner is granted every KNOWN permission (an unknown or empty one is
+// denied even to the owner, so a typo in a gate fails closed); otherwise
+// perm must be in the set.
 func (p Policy) Has(perm Permission) bool {
-	if perm == Public || p.Owner {
+	if perm == Public {
 		return true
+	}
+	if p.Owner {
+		return slices.Contains(all, perm)
 	}
 	return p.perms[perm]
 }

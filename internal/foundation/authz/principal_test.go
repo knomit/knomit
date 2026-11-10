@@ -47,9 +47,24 @@ func TestParsePrincipal_Refuses(t *testing.T) {
 		"", "anonymous:x", "os:", "os:1000", "os:uid:", "os:uid:-1", "os:uid:1x",
 		"os:sid:", "os:sid:1-5", "token:", "node:", "bridge:uid:1000@socket",
 		"oauth:sub", "token:a b", "node:ab\n", "owner", "os:uid:1000@socket",
+		// One spelling per account: no leading zeros, and a SID exactly as
+		// Windows formats one (S-1-<authority>-<subauthority>..., decimal,
+		// no empty or zero-padded component).
+		"os:uid:01", "os:uid:00", "os:uid:+1",
+		"os:sid:S-1", "os:sid:S-1-", "os:sid:S--1", "os:sid:S-1-5--18", "os:sid:S-1-5-18-",
+		"os:sid:S-2-5-18", "os:sid:S-1-05-18", "os:sid:S-1-5-018", "os:sid:s-1-5-18", "os:sid:S-1-5-0x12",
 	} {
 		if p, err := ParsePrincipal(bad); err == nil {
 			t.Fatalf("ParsePrincipal(%q) accepted as %+v", bad, p)
+		}
+	}
+}
+
+func TestParsePrincipal_AcceptsCanonicalOS(t *testing.T) {
+	for _, ok := range []string{"os:uid:0", "os:uid:1000", "os:sid:S-1-5-18", "os:sid:S-1-5-32-544",
+		"os:sid:S-1-5-21-1004336348-1177238915-682003330-512", "os:sid:S-1-0-0"} {
+		if _, err := ParsePrincipal(ok); err != nil {
+			t.Fatalf("ParsePrincipal(%q): %v", ok, err)
 		}
 	}
 }

@@ -81,12 +81,54 @@ func TestMaterialize_UnionForOSPrincipal(t *testing.T) {
 func TestMaterialize_ZeroOwnerMatchesNobody(t *testing.T) {
 	m := NewMaterializer(seededStore(t), Principal{}, MaterializerOptions{})
 	for _, pr := range []Principal{{}, {Kind: KindOS}} {
-		p, err := m.For(context.Background(), pr, ViaNone)
-		if err != nil {
-			t.Fatal(err)
-		}
+		p, _ := m.For(context.Background(), pr, ViaNone)
 		if p.Owner || p.Has(KBRead) {
 			t.Fatalf("%+v matched a zero owner", pr)
+		}
+	}
+}
+
+// For accepts only principals in their one canonical spelling: anything
+// ParsePrincipal refuses (a zero principal, a zero-padded uid, a malformed
+// SID, a token id with a space) is an error and a policy granting nothing,
+// even where a binding exists for a look-alike.
+func TestMaterialize_NonCanonicalPrincipalDenied(t *testing.T) {
+	s := seededStore(t)
+	if err := bind(s, Principal{Kind: KindOS, ID: "uid:4242"}, RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	m := NewMaterializer(s, Principal{Kind: KindOS, ID: "uid:1"}, MaterializerOptions{})
+	for _, pr := range []Principal{
+		{},
+		{Kind: KindOS, ID: "uid:04242"},
+		{Kind: KindOS, ID: "uid:01"}, // a zero-padded spelling of the owner
+		{Kind: KindOS, ID: "sid:S-1-5--18"},
+		{Kind: KindToken, ID: "a b"},
+		{Kind: "bridge", ID: "uid:4242"},
+		{Kind: KindAnonymous, ID: "x"},
+	} {
+		p, err := m.For(context.Background(), pr, ViaSocket)
+		if err == nil {
+			t.Errorf("%+v: materialized without error", pr)
+		}
+		if p.Owner || len(p.Permissions()) != 0 {
+			t.Errorf("%+v: granted %v (owner %v)", pr, p.Permissions(), p.Owner)
+		}
+	}
+}
+
+// Owner is "everything we know of", not "any string": an unknown or empty
+// permission is denied even to the owner, so a typo in a gate fails closed.
+func TestPolicy_OwnerHasOnlyKnownPermissions(t *testing.T) {
+	p := Policy{Owner: true}
+	for _, perm := range append(All(), Public) {
+		if !p.Has(perm) {
+			t.Fatalf("owner lacks %s", perm)
+		}
+	}
+	for _, perm := range []Permission{"", "x:y", "KB:READ", "merge:main", "push:own"} {
+		if p.Has(perm) {
+			t.Fatalf("owner holds unknown permission %q", perm)
 		}
 	}
 }

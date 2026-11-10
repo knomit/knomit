@@ -88,6 +88,12 @@ func admits(p Principal, r Role) bool {
 // fleet node's certificate).
 func (m *Materializer) For(ctx context.Context, p Principal, via Via, implicit ...Role) (Policy, error) {
 	pol := Policy{Principal: p, Via: via}
+	// Only a principal in its one canonical spelling is materialized: a
+	// zero-padded uid, a malformed SID or a zero principal is no principal,
+	// and it must not reach the owner comparison or a binding lookup.
+	if !canonical(p) {
+		return pol, fmt.Errorf("authz: %q is not a principal in its canonical spelling", p.String())
+	}
 	if m.isOwner(p) {
 		pol.Owner = true
 		return pol, nil
