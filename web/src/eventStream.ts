@@ -327,11 +327,21 @@ export function watchUnauthorized(s: EventSourceLike, url: string): void {
       noteStatus(status);
       return;
     }
-    if (probed || s.readyState !== CLOSED || typeof fetch !== 'function') return;
+    if (probed || probing || s.readyState !== CLOSED || typeof fetch !== 'function') return;
     probed = true;
+    // ONE probe in flight for the whole page, and never for long: a stream
+    // route that holds its headers back would otherwise keep a connection per
+    // probe, and a browser has only a handful per host (the requests the page
+    // is waiting for queue behind them).
+    probing = true;
     const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), PROBE_TIMEOUT_MS);
     fetch(url, { headers: { Accept: 'text/event-stream' }, signal: ac.signal })
-      .then(r => { noteStatus(r.status); ac.abort(); })
-      .catch(() => { /* gone or aborted: nothing to learn */ });
+      .then(r => { noteStatus(r.status); })
+      .catch(() => { /* gone or aborted: nothing to learn */ })
+      .finally(() => { clearTimeout(timer); ac.abort(); probing = false; });
   });
 }
+
+let probing = false;
+const PROBE_TIMEOUT_MS = 3000;
