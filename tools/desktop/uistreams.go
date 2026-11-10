@@ -46,8 +46,8 @@ const sseStreamName = "knomit-sse"
 // a stream session that has not polled for streamSessionGrace (10 min), which
 // ends every handler here without a close frame reaching the page, and the
 // page's next poll recreates the session empty. The page's socket then stays
-// open with nothing behind it, and every chat the page starts ends on the
-// server's stream grace. A package variable so tests can shorten it.
+// open with nothing behind it, and the page sees no event from any chat until
+// it reloads. A package variable so tests can shorten it.
 var ssePingInterval = 15 * time.Second
 
 // subscribeTimeout is how long a freshly opened stream may stay silent before

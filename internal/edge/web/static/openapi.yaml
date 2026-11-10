@@ -77,8 +77,8 @@ tags:
     description: |
       The web chat: an in-process model that reaches knomit only through its
       own MCP tools. Chats are owned by the principal that started them, live
-      while a page events stream of their owner is attached (60 s grace after
-      the owner's last one closes), and ask before any
+      until they are deleted or the server stops (closing every page events
+      stream does not end them), and ask before any
       tool call that writes.
   - name: secrets
     description: |
@@ -4361,8 +4361,7 @@ paths:
       description: |
         Ends the chat: a blocked approval and a running turn unwind, the MCP
         session records `ended_at`, and the temp files are removed. The
-        persistent session log stays. A chat also ends 60 seconds after its
-        last page events stream closes, or when the server stops.
+        persistent session log stays. A chat also ends when the server stops.
       operationId: deleteChat
       responses:
         "204": { description: Ended }
@@ -4418,8 +4417,7 @@ paths:
         followed but whose prompt is not the conversation's), `warning`, `turn_done`, `turn_error`, `chat_state` (the
         chat's rail row changed: `title`, `state` idle, running,
         awaiting_approval or error, `turns`, `cost_usd`, `last_activity`,
-        `started_at`; the same row `GET /chats` lists) and `chat_end`. A chat ends 60 seconds
-        after the last page stream of its owner closes.
+        `started_at`; the same row `GET /chats` lists) and `chat_end`.
       operationId: streamChatEvents
       responses:
         "200":
