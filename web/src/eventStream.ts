@@ -16,6 +16,8 @@
 // completes, so it works on all three platforms. The Go side is
 // tools/desktop/uistreams.go; DesktopFrame below mirrors its sseFrame.
 
+import { noteStatus } from './authState';
+
 export interface EventSourceLike {
   readonly url: string;
   readonly readyState: number;
@@ -303,6 +305,33 @@ export function streamErrorSuffix(e: unknown): string {
 }
 
 export function openEventStream(url: string): EventSourceLike {
-  if (!wailsStreamsEnabled()) return new EventSource(url) as unknown as EventSourceLike;
-  return new WailsEventSource(url, loadWailsStream);
+  const s = wailsStreamsEnabled()
+    ? new WailsEventSource(url, loadWailsStream)
+    : new EventSource(url) as unknown as EventSourceLike;
+  watchUnauthorized(s, url);
+  return s;
+}
+
+/**
+ * watchUnauthorized routes a stream refused with 401 to the login page
+ * (authState), as a 401 on any API call does. The desktop's stream carries the
+ * status on its error event; EventSource hides it, so once a native stream
+ * is CLOSED (a refusal, not a dropped connection, which reconnects) one GET of
+ * the same URL, aborted as soon as its status is known, asks.
+ */
+export function watchUnauthorized(s: EventSourceLike, url: string): void {
+  let probed = false;
+  s.addEventListener('error', (e: unknown) => {
+    const status = (e as { status?: unknown } | null)?.status;
+    if (typeof status === 'number') {
+      noteStatus(status);
+      return;
+    }
+    if (probed || s.readyState !== CLOSED || typeof fetch !== 'function') return;
+    probed = true;
+    const ac = new AbortController();
+    fetch(url, { headers: { Accept: 'text/event-stream' }, signal: ac.signal })
+      .then(r => { noteStatus(r.status); ac.abort(); })
+      .catch(() => { /* gone or aborted: nothing to learn */ });
+  });
 }
