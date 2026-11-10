@@ -72,7 +72,7 @@ func serveWrite(t *testing.T, s *Server, method, url, body string) *httptest.Res
 		req = httptest.NewRequest(method, url, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 	}
-	s.NewAPIRouter().ServeHTTP(rec, fromLoopback(req))
+	s.NewAPIRouter().ServeHTTP(rec, asOwner(req))
 	return rec
 }
 

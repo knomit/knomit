@@ -37,7 +37,7 @@ func archiveViaAPI(t *testing.T, r http.Handler, name, body string) (int, wireAr
 		req = newJSONRequest(http.MethodDelete, "/repos/"+name, strings.NewReader(body))
 	}
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(req))
+	r.ServeHTTP(rec, asOwner(req))
 	var got wireArchived
 	if rec.Code == http.StatusOK {
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {

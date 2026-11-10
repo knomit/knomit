@@ -183,7 +183,7 @@ func TestRestore_SymlinkedOntologyIs422AndStaysArchived(t *testing.T) {
 	}
 
 	drec := httptest.NewRecorder()
-	r.ServeHTTP(drec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/linked", nil)))
+	r.ServeHTTP(drec, asOwner(httptest.NewRequest(http.MethodDelete, "/repos/linked", nil)))
 	if drec.Code != http.StatusOK {
 		t.Fatalf("archive: status %d body %s", drec.Code, drec.Body.String())
 	}
@@ -195,7 +195,7 @@ func TestRestore_SymlinkedOntologyIs422AndStaysArchived(t *testing.T) {
 	}
 
 	rrec := httptest.NewRecorder()
-	r.ServeHTTP(rrec, fromLoopback(newJSONRequest(http.MethodPost, "/archived/"+archived.ID+"/restore", strings.NewReader(`{}`))))
+	r.ServeHTTP(rrec, asOwner(newJSONRequest(http.MethodPost, "/archived/"+archived.ID+"/restore", strings.NewReader(`{}`))))
 	if rrec.Code != http.StatusUnprocessableEntity || !strings.Contains(rrec.Body.String(), fact.OntologyFile+" is a symlink") {
 		t.Fatalf("restore: status %d body %s, want 422 naming the symlink", rrec.Code, rrec.Body.String())
 	}
@@ -208,7 +208,7 @@ func TestRestore_SymlinkedOntologyIs422AndStaysArchived(t *testing.T) {
 		t.Fatalf("refused restore lost the archive row: %s", grec.Body.String())
 	}
 	prec := httptest.NewRecorder()
-	r.ServeHTTP(prec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/archived/"+archived.ID, nil)))
+	r.ServeHTTP(prec, asOwner(httptest.NewRequest(http.MethodDelete, "/archived/"+archived.ID, nil)))
 	if prec.Code != http.StatusNoContent {
 		t.Fatalf("purge after the refused restore: status %d body %s, want 204", prec.Code, prec.Body.String())
 	}

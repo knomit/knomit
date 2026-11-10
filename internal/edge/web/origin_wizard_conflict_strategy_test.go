@@ -91,7 +91,7 @@ func TestConnect_ConflictStrategyReachesTheReplay(t *testing.T) {
 			// The commit finalizes the session: it must no longer resolve.
 			{
 				rec := httptest.NewRecorder()
-				s.NewAPIRouter().ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodGet, base, nil)))
+				s.NewAPIRouter().ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodGet, base, nil)))
 				if rec.Code != http.StatusNotFound {
 					t.Errorf("%s: session after commit: status %d, want 404", tc.strategy, rec.Code)
 				}
@@ -100,7 +100,7 @@ func TestConnect_ConflictStrategyReachesTheReplay(t *testing.T) {
 			// the session tracked (the seeded remote's default, main).
 			{
 				rec := httptest.NewRecorder()
-				s.NewAPIRouter().ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodGet, "/repos/core/origin", nil)))
+				s.NewAPIRouter().ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodGet, "/repos/core/origin", nil)))
 				var origin struct {
 					URL    string `json:"url"`
 					Branch string `json:"branch"`
@@ -115,7 +115,7 @@ func TestConnect_ConflictStrategyReachesTheReplay(t *testing.T) {
 
 			factBody := func(path string) (int, string) {
 				rec := httptest.NewRecorder()
-				req := fromLoopback(httptest.NewRequest(http.MethodGet,
+				req := asOwner(httptest.NewRequest(http.MethodGet,
 					"/repos/core/branches/"+urlBranch("agent/test")+"/facts/"+path, nil))
 				s.NewAPIRouter().ServeHTTP(rec, req)
 				var out struct {

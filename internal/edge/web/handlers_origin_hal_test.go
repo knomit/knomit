@@ -183,7 +183,7 @@ func TestHandleHALSetOrigin_Returns200(t *testing.T) {
 func putOrigin(t *testing.T, r http.Handler, repo, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/"+repo+"/origin", strings.NewReader(body)))
+	req := asOwner(httptest.NewRequest(http.MethodPut, "/repos/"+repo+"/origin", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 	return rec
@@ -283,7 +283,7 @@ func TestHandleHALSetOrigin_UnknownRepo_Returns404(t *testing.T) {
 
 	body := `{"url":"https://github.com/example/repo.git"}`
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/missing/origin", strings.NewReader(body)))
+	req := asOwner(httptest.NewRequest(http.MethodPut, "/repos/missing/origin", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -377,7 +377,7 @@ func TestHandleHALSetOrigin_DuringIndexingIs409WithACancelLink(t *testing.T) {
 func patchUpstream(t *testing.T, r http.Handler, repo, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPatch, "/repos/"+repo+"/origin/upstream", strings.NewReader(body)))
+	req := asOwner(httptest.NewRequest(http.MethodPatch, "/repos/"+repo+"/origin/upstream", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 	return rec
@@ -530,7 +530,7 @@ func TestHandleHALDeleteOrigin_Returns204(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/alpha/origin", nil))
+	req := asOwner(httptest.NewRequest(http.MethodDelete, "/repos/alpha/origin", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {
@@ -543,7 +543,7 @@ func TestHandleHALDeleteOrigin_UnknownRepo_Returns404(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/missing/origin", nil))
+	req := asOwner(httptest.NewRequest(http.MethodDelete, "/repos/missing/origin", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
@@ -654,7 +654,7 @@ func TestPutOrigin_PersistsToControlDB(t *testing.T) {
 	wantURL := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
 	body := mustJSON(t, map[string]any{"url": wantURL, "branch": "main", "auth_method": "token", "token": "tok-secret"})
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(body)))
+	req := asOwner(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -736,7 +736,7 @@ func TestPatchOriginUpstream_NoOriginIsRejected(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPatch, "/repos/alpha/origin/upstream",
+	req := asOwner(httptest.NewRequest(http.MethodPatch, "/repos/alpha/origin/upstream",
 		strings.NewReader(`{"branch":"develop"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
@@ -767,7 +767,7 @@ func TestPatchOriginUpstream_PersistsToControlDB(t *testing.T) {
 	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
 	putBody := mustJSON(t, map[string]any{"url": url, "branch": "main", "auth_method": "none"})
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(putBody)))
+	req := asOwner(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(putBody)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 	if rec.Code < 200 || rec.Code >= 300 {
@@ -775,7 +775,7 @@ func TestPatchOriginUpstream_PersistsToControlDB(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	req = fromLoopback(httptest.NewRequest(http.MethodPatch, "/repos/alpha/origin/upstream",
+	req = asOwner(httptest.NewRequest(http.MethodPatch, "/repos/alpha/origin/upstream",
 		strings.NewReader(`{"branch":"develop"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
@@ -837,7 +837,7 @@ func TestDeleteOrigin_RemovesFromControlDB(t *testing.T) {
 	url := seedBareRemoteForTest(t, filepath.Join(originsRoot, "upstream.git"))
 	putBody := mustJSON(t, map[string]any{"url": url, "branch": "main", "auth_method": "none"})
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(putBody)))
+	req := asOwner(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin", strings.NewReader(putBody)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 	if rec.Code < 200 || rec.Code >= 300 {
@@ -845,7 +845,7 @@ func TestDeleteOrigin_RemovesFromControlDB(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	req = fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/alpha/origin", nil))
+	req = asOwner(httptest.NewRequest(http.MethodDelete, "/repos/alpha/origin", nil))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("DELETE status: got %d, body=%s", rec.Code, rec.Body.String())
@@ -1008,7 +1008,7 @@ func TestHandleHALSetOrigin_RefusesARemoteWithADifferentOntology(t *testing.T) {
 
 	// A repo on the CODE taxonomy.
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos",
+	r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos",
 		strings.NewReader(`{"name":"kb","mode":"preset","ontology_preset":"code"}`))))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("create: status = %d, body = %s", rec.Code, rec.Body.String())
@@ -1021,7 +1021,7 @@ func TestHandleHALSetOrigin_RefusesARemoteWithADifferentOntology(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	body := mustJSON(t, map[string]any{"url": url, "branch": "main"})
-	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPut, "/repos/kb/origin", strings.NewReader(body))))
+	r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPut, "/repos/kb/origin", strings.NewReader(body))))
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body = %s", rec.Code, rec.Body.String())
@@ -1043,7 +1043,7 @@ func TestHandleHALSetOrigin_PlainRemoteIsAllowedAndKeepsTheOntology(t *testing.T
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos",
+	r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos",
 		strings.NewReader(`{"name":"kb","mode":"preset","ontology_preset":"code"}`))))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("create: status = %d, body = %s", rec.Code, rec.Body.String())
@@ -1055,7 +1055,7 @@ func TestHandleHALSetOrigin_PlainRemoteIsAllowedAndKeepsTheOntology(t *testing.T
 
 	rec = httptest.NewRecorder()
 	body := mustJSON(t, map[string]any{"url": url, "branch": "main"})
-	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPut, "/repos/kb/origin", strings.NewReader(body))))
+	r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPut, "/repos/kb/origin", strings.NewReader(body))))
 
 	if rec.Code != http.StatusOK && rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want the attach to be allowed; body = %s", rec.Code, rec.Body.String())
@@ -1082,7 +1082,7 @@ func TestHandleHALDeleteOrigin_SubscriptionIs409(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/sub/origin", nil)))
+	r.ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodDelete, "/repos/sub/origin", nil)))
 	require.Equal(t, http.StatusConflict, rec.Code, "body=%s", rec.Body.String())
 	require.Contains(t, rec.Body.String(), "Subscription requires its origin")
 	o, err := m.Origins().Get(m.Get("sub").UID())
@@ -1139,7 +1139,7 @@ func TestPutOrigin_OnASubscriptionPreservesItsMode(t *testing.T) {
 	require.Equal(t, control.OriginModeSubscribe, before.Mode, "precondition: created as a subscription")
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/sub/origin",
+	req := asOwner(httptest.NewRequest(http.MethodPut, "/repos/sub/origin",
 		strings.NewReader(mustJSON(t, map[string]any{"url": url, "auth_method": "token", "token": "s3cret"}))))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)

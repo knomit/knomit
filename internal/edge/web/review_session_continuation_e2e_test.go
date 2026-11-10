@@ -248,7 +248,7 @@ func TestReviewE2E_RestartAfterDisconnectResumes(t *testing.T) {
 	sid1, h1 := e.client()
 	first := e.start(sid1, h1)
 
-	req := fromLoopback(httptest.NewRequest(http.MethodDelete, unscopedMount, nil))
+	req := asOwner(httptest.NewRequest(http.MethodDelete, unscopedMount, nil))
 	req.Header.Set("Mcp-Session-Id", sid1)
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)

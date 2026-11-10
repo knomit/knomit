@@ -328,7 +328,7 @@ func TestPlainListener_IgnoresAuthorization(t *testing.T) {
 	f := newOAuthWebFixture(t, testIssuer)
 	tok := f.mint(t, "laptop", testIssuer, []string{"read", "write"}, auth.Read, auth.Write)
 	post := func(h http.Handler) *httptest.ResponseRecorder {
-		req := fromLoopback(httptest.NewRequest(http.MethodPost, "/api/v1/repos/alpha/branches/agent:test/facts", strings.NewReader(`{}`)))
+		req := asAnonymousOnLoopback(httptest.NewRequest(http.MethodPost, "/api/v1/repos/alpha/branches/agent:test/facts", strings.NewReader(`{}`)))
 		req.Header.Set("Content-Type", "application/json")
 		return serve(h, req)
 	}

@@ -185,8 +185,8 @@ func TestFleetREST_LocalIsTheListenerNotTheClient(t *testing.T) {
 		return out
 	}
 	require.Equal(t, true, get(localPeer(httptest.NewRequest(http.MethodGet, "/fleet", nil)))["local"], "over the local listener")
-	require.Equal(t, false, get(fromLoopback(httptest.NewRequest(http.MethodGet, "/fleet", nil)))["local"], "over loopback TCP")
-	spoofed := fromLoopback(httptest.NewRequest(http.MethodGet, "/fleet", nil))
+	require.Equal(t, false, get(asOwner(httptest.NewRequest(http.MethodGet, "/fleet", nil)))["local"], "over loopback TCP")
+	spoofed := asOwner(httptest.NewRequest(http.MethodGet, "/fleet", nil))
 	spoofed.Header.Set("X-Knomit-Via", string(auth.LocalVia))
 	spoofed.Header.Set("X-Forwarded-For", "unix")
 	spoofed.Header.Set("Origin", "app://knomit")
@@ -194,7 +194,7 @@ func TestFleetREST_LocalIsTheListenerNotTheClient(t *testing.T) {
 	// A query cannot either: GET /fleet declares no parameter, so ?local= is
 	// refused outright rather than read or ignored.
 	rec := httptest.NewRecorder()
-	s.NewAPIRouter().ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodGet, "/fleet?local=true", nil)))
+	s.NewAPIRouter().ServeHTTP(rec, asOwner(httptest.NewRequest(http.MethodGet, "/fleet?local=true", nil)))
 	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), `unknown parameter \"local\"`)
 }
@@ -227,7 +227,7 @@ func TestFleetREST_ListenerIsShownOnlyLocally(t *testing.T) {
 	local := get(localPeer(httptest.NewRequest(http.MethodGet, "/fleet", nil)))["host"].(map[string]any)
 	require.Equal(t, "0.0.0.0:7443", local["listener"], "a local caller sees the bind")
 	require.Equal(t, true, local["listener_on"])
-	tcp := get(fromLoopback(httptest.NewRequest(http.MethodGet, "/fleet", nil)))["host"].(map[string]any)
+	tcp := get(asOwner(httptest.NewRequest(http.MethodGet, "/fleet", nil)))["host"].(map[string]any)
 	require.NotContains(t, tcp, "listener", "over TCP the bind is not shown")
 	require.Equal(t, true, tcp["listener_on"], "only that the listener is on")
 }

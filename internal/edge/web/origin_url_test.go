@@ -91,7 +91,7 @@ func TestOriginURL_PaddedURLReachesTheSameRemotePath(t *testing.T) {
 
 			post := func(url string) int {
 				rec := httptest.NewRecorder()
-				r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, endpoint,
+				r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, endpoint,
 					strings.NewReader(`{"url":"`+url+`"}`))))
 				return rec.Code
 			}
@@ -148,7 +148,7 @@ func TestOriginURL_EveryEntryPointTrims(t *testing.T) {
 			clean, paths, _ := recordingRemote(t)
 			s := &Server{Manager: newRealManager(t)}
 			rec := httptest.NewRecorder()
-			s.NewAPIRouter().ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos",
+			s.NewAPIRouter().ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos",
 				strings.NewReader(`{"name":"`+name+`","mode":"clone","origin":{"url":"`+pad(clean)+`"}}`))))
 			return paths()
 		}
@@ -175,7 +175,7 @@ func TestOriginURL_EveryEntryPointTrims(t *testing.T) {
 				clean, _, _ := recordingRemote(t)
 				s, m, ri := newControlDBTestServer(t, t.TempDir())
 				rec := httptest.NewRecorder()
-				req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin",
+				req := asOwner(httptest.NewRequest(http.MethodPut, "/repos/alpha/origin",
 					strings.NewReader(`{"url":"`+pad(clean)+`","branch":"main","auth_method":"token","token":"tok"}`)))
 				req.Header.Set("Content-Type", "application/json")
 				s.NewAPIRouter().ServeHTTP(rec, req)
@@ -215,7 +215,7 @@ func TestOriginURL_EveryEntryPointTrims(t *testing.T) {
 				r := s.NewAPIRouter()
 
 				rec := httptest.NewRecorder()
-				r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos/alpha/origin-sessions",
+				r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, "/repos/alpha/origin-sessions",
 					strings.NewReader(`{"url":"`+pad(clean)+`","auth_method":"none"}`))))
 				require.Equal(t, http.StatusOK, rec.Code,
 					"a URL padded with %s was REJECTED before a session opened (%s) — "+
@@ -223,7 +223,7 @@ func TestOriginURL_EveryEntryPointTrims(t *testing.T) {
 					name, strings.TrimSpace(rec.Body.String()))
 
 				list := httptest.NewRecorder()
-				r.ServeHTTP(list, fromLoopback(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions", nil)))
+				r.ServeHTTP(list, asOwner(httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions", nil)))
 				require.Equal(t, http.StatusOK, list.Code, list.Body.String())
 
 				var got struct {
@@ -250,7 +250,7 @@ func TestOriginURL_WhitespaceOnlyURLIsRejectedAsMissing(t *testing.T) {
 			s := &Server{Manager: newRealManager(t)}
 			r := s.NewAPIRouter()
 			rec := httptest.NewRecorder()
-			r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, endpoint,
+			r.ServeHTTP(rec, asOwner(newJSONRequest(http.MethodPost, endpoint,
 				strings.NewReader(`{"url":"  \t "}`))))
 			require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 			require.Contains(t, rec.Body.String(), "url is required")

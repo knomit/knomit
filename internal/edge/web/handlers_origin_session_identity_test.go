@@ -166,7 +166,7 @@ func createLocalRepo(t *testing.T, m *repos.Manager, name string) *repos.RepoIns
 func startOriginSession(t *testing.T, s *Server, repo, url string) string {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/"+repo+"/origin-sessions",
+	req := asOwner(httptest.NewRequest(http.MethodPost, "/repos/"+repo+"/origin-sessions",
 		strings.NewReader(`{"url":`+mustJSON(t, url)+`}`)))
 	req.Header.Set("Content-Type", "application/json")
 	s.NewAPIRouter().ServeHTTP(rec, req)
@@ -193,15 +193,15 @@ func sseCall(t *testing.T, s *Server, method, path, body string) string {
 	rec := newStreamRecorder()
 	var req *http.Request
 	if body == "" {
-		req = fromLoopback(httptest.NewRequest(method, path, nil))
+		req = asOwner(httptest.NewRequest(method, path, nil))
 	} else {
-		req = fromLoopback(httptest.NewRequest(method, path, strings.NewReader(body)))
+		req = asOwner(httptest.NewRequest(method, path, strings.NewReader(body)))
 		req.Header.Set("Content-Type", "application/json")
 	}
 	s.NewAPIRouter().ServeHTTP(rec, req)
 	// /apply and /commit answer 202 and a link to their events (#509).
 	out := followRunEvents(t, rec.ResponseRecorder, func(href string, get *streamRecorder) {
-		s.NewAPIRouter().ServeHTTP(get, fromLoopback(httptest.NewRequest(http.MethodGet, stripAPIBase(href), nil)))
+		s.NewAPIRouter().ServeHTTP(get, asOwner(httptest.NewRequest(http.MethodGet, stripAPIBase(href), nil)))
 	})
 	if out.Code != http.StatusOK {
 		t.Fatalf("%s %s: status %d, body=%s", method, path, out.Code, out.Body.String())
@@ -343,7 +343,7 @@ func TestConnect_AlreadyRegisteredRemoteRejectedAtTest(t *testing.T) {
 	// /commit will act on, and beta still holds its own knowledge base.
 	// The session's state, read through GET /origin-sessions/{id}.
 	got := httptest.NewRecorder()
-	s.NewAPIRouter().ServeHTTP(got, fromLoopback(httptest.NewRequest(http.MethodGet, "/repos/beta/origin-sessions/"+sessID, nil)))
+	s.NewAPIRouter().ServeHTTP(got, asOwner(httptest.NewRequest(http.MethodGet, "/repos/beta/origin-sessions/"+sessID, nil)))
 	if got.Code != http.StatusOK {
 		t.Fatalf("session vanished: GET %d %s", got.Code, got.Body.String())
 	}
@@ -367,7 +367,7 @@ func TestConnect_AlreadyRegisteredRemoteRejectedAtTest(t *testing.T) {
 
 	// /apply must refuse outright — the refusal at /test is not advisory.
 	rec := newStreamRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/beta/origin-sessions/"+sessID+"/apply",
+	req := asOwner(httptest.NewRequest(http.MethodPost, "/repos/beta/origin-sessions/"+sessID+"/apply",
 		strings.NewReader(`{"conflict_strategy":"local_wins"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	s.NewAPIRouter().ServeHTTP(rec, req)
@@ -418,7 +418,7 @@ func TestConnect_RemoteClaimedBetweenTestAndCommitRejectedBeforeSwap(t *testing.
 	// plain 409 problem on the POST — the run never logged a phase, so the
 	// POST answers the refusal instead of 202 and an events link (#509).
 	commitRec := newStreamRecorder()
-	s.NewAPIRouter().ServeHTTP(commitRec, fromLoopback(httptest.NewRequest(http.MethodPost, base+"/commit", nil)))
+	s.NewAPIRouter().ServeHTTP(commitRec, asOwner(httptest.NewRequest(http.MethodPost, base+"/commit", nil)))
 	commitBody := commitRec.Body.String()
 	if commitRec.Code != http.StatusConflict || !strings.Contains(commitBody, "Knowledge base already local") {
 		t.Fatalf("commit must refuse a swap that duplicates a registered knowledge base; body=%s", commitBody)

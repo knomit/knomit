@@ -88,7 +88,7 @@ func placementFact(title, body string) string {
 func (fx placementFixture) serve(t *testing.T, method, url, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(method, url, strings.NewReader(body)))
+	req := asOwner(httptest.NewRequest(method, url, strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	fx.h.ServeHTTP(rec, req)
 	return rec

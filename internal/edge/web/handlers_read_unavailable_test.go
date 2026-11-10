@@ -50,7 +50,7 @@ func requireUnavailableProblem(t *testing.T, rec *httptest.ResponseRecorder, ins
 func serveRead(t *testing.T, s *Server, method, url string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	s.NewAPIRouter().ServeHTTP(rec, fromLoopback(httptest.NewRequest(method, url, nil)))
+	s.NewAPIRouter().ServeHTTP(rec, asOwner(httptest.NewRequest(method, url, nil)))
 	return rec
 }
 

@@ -85,7 +85,7 @@ func pbBody(t *testing.T, m *repos.Manager, branch, path string) string {
 
 func pbPost(t *testing.T, h http.Handler, branch, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost,
+	req := asOwner(httptest.NewRequest(http.MethodPost,
 		"/api/v1/repos/"+pbRepo+"/branches/"+strings.ReplaceAll(branch, "/", ":")+"/merge", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -95,7 +95,7 @@ func pbPost(t *testing.T, h http.Handler, branch, body string) *httptest.Respons
 
 func pbList(t *testing.T, h http.Handler) []map[string]any {
 	t.Helper()
-	req := fromLoopback(httptest.NewRequest(http.MethodGet, "/api/v1/repos/"+pbRepo+"/pushed-branches", nil))
+	req := asOwner(httptest.NewRequest(http.MethodGet, "/api/v1/repos/"+pbRepo+"/pushed-branches", nil))
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())

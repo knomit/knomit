@@ -16,7 +16,7 @@ func TestHandleStartRebuild_UnknownRepo_Returns404(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost,
+	req := asOwner(httptest.NewRequest(http.MethodPost,
 		"/repos/missing/branches/main/index-rebuilds", nil))
 	r.ServeHTTP(rec, req)
 
@@ -38,7 +38,7 @@ func TestHandleStartRebuild_Returns201WithJobEnvelope(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost,
+	req := asOwner(httptest.NewRequest(http.MethodPost,
 		"/repos/alpha/branches/main/index-rebuilds", nil))
 	r.ServeHTTP(rec, req)
 
@@ -74,7 +74,7 @@ func TestHandleStartRebuild_WithStub_Returns201(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost,
+	req := asOwner(httptest.NewRequest(http.MethodPost,
 		"/repos/alpha/branches/main/index-rebuilds", nil))
 	r.ServeHTTP(rec, req)
 
@@ -101,7 +101,7 @@ func TestJobs_SynthesisRoutesGone(t *testing.T) {
 
 	do := func(method, path string) int {
 		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(method, path, nil)))
+		r.ServeHTTP(rec, asOwner(httptest.NewRequest(method, path, nil)))
 		return rec.Code
 	}
 	const base = "/repos/alpha/branches/agent:test/"

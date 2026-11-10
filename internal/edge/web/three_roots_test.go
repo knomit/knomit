@@ -53,7 +53,7 @@ func (h threeRootsREST) do(t *testing.T, method, url, body string) *httptest.Res
 		req.Header.Set("Content-Type", "application/json")
 	}
 	rec := httptest.NewRecorder()
-	h.r.ServeHTTP(rec, fromLoopback(req))
+	h.r.ServeHTTP(rec, asOwner(req))
 	return rec
 }
 
