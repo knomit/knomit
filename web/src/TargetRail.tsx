@@ -122,6 +122,26 @@ export function TargetRail({
     setCollapsed(next);
     saveRailCollapsed(next);
   };
+  // A draft row that appears in a collapsed section, by any route (its `+`,
+  // the zero-repo shell forcing the repository draft, a chat started
+  // elsewhere), opens that section and remembers it open: a draft row hidden
+  // behind a closed header is a target nobody can see. Only on appearing, so
+  // the reader can still collapse the section afterwards. Adjusted during
+  // render, like Archived below, so the section and the row arrive in one paint.
+  const draftRows: Record<RailSection, boolean> = {
+    chats: Boolean(drafts.chat), repos: drafts.repo, lenses: drafts.lens, fleet: Boolean(drafts.fleet) && !fleet?.fleet_repo,
+  };
+  const [draftRowsSeen, setDraftRowsSeen] = useState<Record<RailSection, boolean>>({ chats: false, repos: false, lenses: false, fleet: false });
+  if ((Object.keys(draftRows) as RailSection[]).some(s => draftRows[s] !== draftRowsSeen[s])) {
+    setDraftRowsSeen(draftRows);
+    const appeared = (Object.keys(draftRows) as RailSection[]).filter(s => draftRows[s] && !draftRowsSeen[s] && collapsed.has(s));
+    if (appeared.length > 0) {
+      const next = new Set(collapsed);
+      appeared.forEach(s => next.delete(s));
+      setCollapsed(next);
+      saveRailCollapsed(next);
+    }
+  }
   const searchRef = useRef<HTMLInputElement>(null);
   // A create still working on a listed repo flags its row; one not yet
   // registered is a row of its own. The poller is already mounted app-wide.
@@ -162,11 +182,13 @@ export function TargetRail({
 
   const q = query.trim().toLowerCase();
   const match = (name: string) => !q || name.toLowerCase().includes(q);
-  // A collapsed section still shows its matches while the search has text — a
+  // A collapsed section still shows its MATCHES while the search has text — a
   // match hidden behind a closed header is not found (the rule Archived already
   // follows) — and clearing the search closes it again: the search never
-  // changes what is remembered.
-  const rowsShown = (s: RailSection) => !collapsed.has(s) || q !== '';
+  // changes what is remembered. Only the sections the search filters have
+  // matches (Repositories with its Archived, and Lenses); Chats and Fleet are
+  // not filtered, so a search leaves them as they are, count and dot included.
+  const rowsShown = (s: RailSection) => !collapsed.has(s) || (q !== '' && SEARCH_FILTERED.has(s));
   // A `+` on a collapsed section opens it, so the draft row it adds is seen.
   const newDraft = (s: RailSection, kind: DraftKind) => { release(); setSectionOpen(s, true); onNewDraft?.(kind); };
   // Sorted here rather than trusted from the server: the listing's order is
@@ -544,6 +566,10 @@ function DraftRow({ kind, selected, disabled, onClick }: {
 }
 
 const byName = (a: { name: string }, b: { name: string }) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+
+// The sections whose rows the rail search filters by name, and so the only ones
+// a search reveals while collapsed.
+const SEARCH_FILTERED: ReadonlySet<RailSection> = new Set(['repos', 'lenses']);
 
 const SearchGlyph = () => (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" style={{ flexShrink: 0 }}>

@@ -249,6 +249,64 @@ describe('rail sections: the search', () => {
   });
 });
 
+describe('rail sections: the search leaves unfiltered sections alone', () => {
+  it('a collapsed Chats keeps its count and dot and shows no rows while searching; a collapsed Fleet stays collapsed', () => {
+    const waiting = sevenChats.map(c => (c.id === 'c2' ? { ...c, state: 'awaiting_approval' as const } : c));
+    renderRail({ chats: waiting, fleet: { fleet_repo: 'fleet-kb', master: true, local: true } as never });
+    fireEvent.click(toggle('chats'));
+    fireEvent.click(toggle('fleet'));
+    fireEvent.click(toggle('repos'));
+    fireEvent.change(screen.getByTestId('rail-search'), { target: { value: 'ops' } });
+    // Control: the filtered section reveals its match.
+    expect(repoNames()).toEqual(['ops-kb']);
+    expect(toggle('chats')).toHaveAttribute('aria-expanded', 'false');
+    expect(chatTitles()).toEqual([]);
+    expect(screen.getByTestId('rail-chats-count')).toHaveTextContent(/^7$/);
+    expect(screen.getByTestId('rail-chats-attention')).toBeInTheDocument();
+    expect(toggle('fleet')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('rail-fleet-row')).toBeNull();
+    expect(screen.getByTestId('rail-fleet-count')).toHaveTextContent(/^1$/);
+  });
+
+  it('an OPEN Chats still shows its rows while searching (the search never filters chats)', () => {
+    renderRail();
+    fireEvent.change(screen.getByTestId('rail-search'), { target: { value: 'zzz' } });
+    expect(chatTitles()).toHaveLength(5);
+  });
+});
+
+describe('rail sections: a draft row appearing by any route', () => {
+  const base = { repos, lenses, archived, context: { kind: 'repo' as const, repo: 'b' }, currentRepo: 'b', remoteError: '',
+    serverReadOnly: false, onSelect: () => {}, chatProviders: providers, chatsAvailable: true, chats: sevenChats };
+
+  it('opens its collapsed section and stores it open — without a + click — and only that section', () => {
+    localStorage.setItem(RAIL_COLLAPSED_KEY, JSON.stringify(['repos', 'chats']));
+    const { rerender } = render(<TargetRail {...base} drafts={{ repo: false, lens: false, chat: false }} />);
+    expect(toggle('chats')).toHaveAttribute('aria-expanded', 'false');
+    rerender(<TargetRail {...base} drafts={{ repo: false, lens: false, chat: true }} draftShown="chat" />);
+    expect(screen.getByTestId('rail-draft-chat')).toBeInTheDocument();
+    expect(toggle('chats')).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle('repos')).toHaveAttribute('aria-expanded', 'false');
+    expect(JSON.parse(localStorage.getItem(RAIL_COLLAPSED_KEY)!)).toEqual(['repos']);
+  });
+
+  it('a draft already present on mount opens its collapsed section', () => {
+    localStorage.setItem(RAIL_COLLAPSED_KEY, JSON.stringify(['repos']));
+    render(<TargetRail {...base} drafts={{ repo: true, lens: false }} draftShown="repo" />);
+    expect(screen.getByTestId('rail-draft-repo')).toBeInTheDocument();
+    expect(toggle('repos')).toHaveAttribute('aria-expanded', 'true');
+    expect(JSON.parse(localStorage.getItem(RAIL_COLLAPSED_KEY)!)).toEqual([]);
+  });
+
+  it('only on appearing: the reader can collapse the section again while the draft stays', () => {
+    const { rerender } = render(<TargetRail {...base} drafts={{ repo: false, lens: true }} />);
+    fireEvent.click(toggle('lenses'));
+    rerender(<TargetRail {...base} drafts={{ repo: false, lens: true }} draftShown="lens" />);
+    expect(toggle('lenses')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('rail-draft-lens')).toBeNull();
+  });
+});
+
 describe('rail sections: the + on a collapsed section', () => {
   it('opens the section and asks for the draft, once', () => {
     const onNewDraft = vi.fn();
