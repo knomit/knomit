@@ -26,6 +26,25 @@ describe('resultText: what the JSON view shows for a raw result', () => {
     expect(unpackJson(' [1] ')).toEqual([1]);
   });
 
+  it('keeps a "__proto__" key (it is data, not a prototype), unpacked or not', () => {
+    const { text, json } = resultText('{"__proto__":1,"a":2}');
+    expect(json).toBe(true);
+    expect(text).toBe('{\n  "__proto__": 1,\n  "a": 2\n}');
+    expect(resultText(JSON.stringify({ s: '{"__proto__":{"x":1}}' })).text).toContain('"__proto__": {');
+  });
+
+  it('a structure too deep to walk falls back to plain text instead of throwing', () => {
+    const raw = '['.repeat(20000) + ']'.repeat(20000);
+    expect(() => JSON.parse(raw)).not.toThrow();
+    const out = resultText(raw);
+    expect(out).toEqual({ text: raw, json: false });
+    // The same depth arriving as a call's arguments does not throw either.
+    let deep: unknown = [];
+    for (let i = 0; i < 20000; i++) deep = [deep];
+    expect(() => jsonText(deep)).not.toThrow();
+    expect(jsonText(deep).json).toBe(false);
+  });
+
   it('jsonText: a call\'s arguments, unpacked and pretty-printed; no arguments is null', () => {
     expect(jsonText({ text: 'first' })).toEqual({ json: true, text: '{\n  "text": "first"\n}' });
     expect(jsonText(undefined)).toEqual({ json: true, text: 'null' });

@@ -103,7 +103,7 @@ function PanelFact({ repo, branch, path, commit, close, onBrowse, repos, repoNam
 /**
  * ChatSidePanel is the 470px panel on the right of a chat: a fact, a commit or
  * a tool result, and a footer. A commit has a 40px header (breadcrumb, close); a
- * tool result's 40px header is the call's own timeline row (ToolCallHead: state
+ * tool result's 36px header is the call's own timeline row (ToolCallHead: state
  * dot, label · main argument, size and time) beside the close. A fact has its
  * band instead, with the close in the panel's top-right corner, away from the
  * band's action row (history, materialize). The footer holds Find, which opens
@@ -236,7 +236,6 @@ const iconBtn: CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'center',
   color: '#888', cursor: 'pointer',
 };
-// A result's header: the row's dot sits on the body's 20px edge.
 // A result's header: no rule under it (the tabs' underline already separates),
 // and its dot on the body's 12px edge.
 const resultHeader: CSSProperties = { ...header, height: 36, borderBottom: 'none', gap: 10, padding: '0 6px 0 12px' };

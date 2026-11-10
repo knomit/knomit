@@ -23,7 +23,8 @@ export function resetResultLinks(): void { resolved.clear(); }
  * the route the chat's fact links use: the server reads the repo id (or name)
  * in the path and answers with the repo, its branch and the path. A path it
  * does not answer stays plain text, as does one that names a commit. Each
- * path is asked once for the page's life, in batches the server accepts.
+ * path the server ANSWERED is remembered for the page's life; a request that
+ * failed is not, so the next mount asks again. Batches are what the server accepts.
  */
 export function useKbLinks(text: string | null): FactLinks {
   const refs = useMemo(() => (text === null ? [] : [...new Set(kbRefs(text).map(r => r.ref))]), [text]);
@@ -38,7 +39,10 @@ export function useKbLinks(text: string | null): FactLinks {
         for (const h of batch) resolved.set(h, by.get(h) ?? null);
         if (!cancelled) setVersion(v => v + 1);
       };
-      resolveFactHandles(batch).then(settle, () => settle([]));
+      // A failed request caches nothing: the paths stay text now, and the next
+      // view of this result asks again (a transient error must not hide its
+      // links for the page's life).
+      resolveFactHandles(batch).then(settle, () => { /* not cached */ });
     }
     return () => { cancelled = true; };
   }, [refs]);

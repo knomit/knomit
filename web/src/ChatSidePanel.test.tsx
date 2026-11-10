@@ -770,6 +770,23 @@ describe('a result\'s JSON view in the side panel', () => {
     expect(api.state().entry).toEqual({ kind: 'fact', repo: 'r1', branch: 'main', path: 'kb/decisions/web/one.md' });
   });
 
+  it('a failed resolve is not remembered: the paths stay text, and the next time the result is opened they are asked again and link', async () => {
+    const fx = stubFleetFetch({ ...withRefs(), 'POST /api/v1/facts/resolve': { status: 500, body: { detail: 'boom' } } });
+    render(<Harness />);
+    act(() => api.open({ kind: 'result', callId: 'tu_k' }));
+    const first = await screen.findByTestId('chat-result-text');
+    await waitFor(() => expect(fx.calls.filter(c => c.route === 'POST /api/v1/facts/resolve')).toHaveLength(1));
+    expect(first.querySelector('.k-json-fact')).toBeNull();
+    // The server recovers; the reader opens something else, then the result again.
+    fx.set('POST /api/v1/facts/resolve', resolveReply);
+    act(() => api.open(F1));
+    await screen.findByTestId('fact-title');
+    act(() => api.open({ kind: 'result', callId: 'tu_k' }));
+    const again = await screen.findByTestId('chat-result-text');
+    await waitFor(() => expect(again.querySelector('.k-json-fact')).not.toBeNull());
+    expect(fx.calls.filter(c => c.route === 'POST /api/v1/facts/resolve')).toHaveLength(2);
+  });
+
   it('the footer\'s Find opens the find bar of the view on screen, on either tab', async () => {
     stubFleetFetch(routes());
     render(<Harness />);

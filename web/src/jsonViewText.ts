@@ -22,8 +22,12 @@ export function unpackJson(v: unknown): unknown {
   }
   if (Array.isArray(v)) return v.map(unpackJson);
   if (v && typeof v === 'object') {
+    // defineProperty, not out[k] = …: assigning "__proto__" on a plain object
+    // sets its prototype instead of adding the key, and the key was dropped.
     const out: Record<string, unknown> = {};
-    for (const [k, x] of Object.entries(v)) out[k] = unpackJson(x);
+    for (const [k, x] of Object.entries(v)) {
+      Object.defineProperty(out, k, { value: unpackJson(x), enumerable: true, writable: true, configurable: true });
+    }
     return out;
   }
   return v;
@@ -38,14 +42,24 @@ export interface ViewText { text: string; json: boolean }
  * result exactly as it came, as plain text.
  */
 export function resultText(raw: string): ViewText {
-  let parsed: unknown;
-  try { parsed = JSON.parse(raw); } catch { return { text: raw, json: false }; }
-  return { text: JSON.stringify(unpackJson(parsed), null, 2), json: true };
+  // Inside the try too: a structure deep enough to overflow the stack in
+  // unpackJson or JSON.stringify (a RangeError) is shown as the text it came as,
+  // rather than crashing the panel.
+  try {
+    return { text: JSON.stringify(unpackJson(JSON.parse(raw)), null, 2), json: true };
+  } catch {
+    return { text: raw, json: false };
+  }
 }
 
 /** jsonText is the view's text for a value the page already holds (a call's arguments). */
 export function jsonText(v: unknown): ViewText {
-  return { text: JSON.stringify(unpackJson(v ?? null), null, 2) ?? 'null', json: true };
+  try {
+    return { text: JSON.stringify(unpackJson(v ?? null), null, 2) ?? 'null', json: true };
+  } catch {
+    // Too deep to walk (a RangeError): the compact form, as plain text, if even that fits.
+    try { return { text: JSON.stringify(v) ?? 'null', json: false }; } catch { return { text: String(v), json: false }; }
+  }
 }
 
 /** One `{…}` or `[…]` of a JSON text: the range CodeMirror folds (just inside the
