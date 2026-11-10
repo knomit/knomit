@@ -5,7 +5,7 @@ import { render, screen, waitFor, cleanup, fireEvent, within, act } from '@testi
 import { useEffect, useReducer } from 'react';
 import { ChatFacet } from './ChatFacet';
 import { ChatSidePanel } from './ChatSidePanel';
-import { clampPanelWidth, initialPanelState, panelReducer, PANEL_WIDTH_KEY, PANEL_DEFAULT_WIDTH, PANEL_MAX_FRACTION, PANEL_MIN_WIDTH, usePanelWidth } from './chatPanelState';
+import { clampPanelWidth, initialPanelState, panelReducer, PANEL_WIDTH_KEY, PANEL_DEFAULT_WIDTH, PANEL_MAX_FRACTION, PANEL_MIN_WIDTH, typingIn, usePanelWidth } from './chatPanelState';
 import type { BrowseFactRequest, PanelEntry, PanelState } from './chatPanelState';
 import { installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
 import { stubFleetFetch, problem } from './fleetTestFetch';
@@ -804,6 +804,14 @@ describe('a result\'s JSON view in the side panel', () => {
     act(() => api.open(R1));
     const text = await screen.findByTestId('chat-result-text');
     const content = text.querySelector('.cm-content') as HTMLElement;
+    // jsdom does not implement isContentEditable; a browser reports true for
+    // CodeMirror's content, which is what made Esc there look like typing.
+    expect(content.getAttribute('contenteditable')).toBe('true');
+    Object.defineProperty(content, 'isContentEditable', { value: true });
+    expect(typingIn(content)).toBe(false);
+    const field = document.createElement('div');
+    Object.defineProperty(field, 'isContentEditable', { value: true });
+    expect(typingIn(field)).toBe(true);
     content.focus();
     expect(document.activeElement).toBe(content);
     fireEvent.keyDown(content, { key: 'Escape' });
