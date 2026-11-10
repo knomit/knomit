@@ -240,10 +240,35 @@ export const factLinksMore = (n: number): string => `+${n}`;
 /** The tool result's two tabs. Design copy table, "Side panel" row. */
 export const PANEL_TAB_RESULT = 'Result';
 export const PANEL_TAB_ARGUMENTS = 'Arguments';
-/** The footer. */
-export const PANEL_KEY_CLOSE = 'Esc close';
 // GAP (not in the design): the close button's accessible name.
 export const PANEL_CLOSE_LABEL = 'Close';
+
+// ── APPROVED 2026-11-09 ──
+// The tool result's JSON view and its find bar (chat result JSON view). Approved
+// by the user with the design trial: the footer's Find button, a folded block's
+// pill, the find bar's count, and the find bar's accessible names. The footer's
+// "Esc close" hint was removed at the same time (Esc itself is unchanged).
+
+/** The footer's button, and the find bar's placeholder and accessible name. */
+export const FIND_LABEL = 'Find';
+/** The shortcut beside the footer's Find, drawn as the app draws ⌘K and ⌘B. */
+export const FIND_KEY = '⌘F';
+/** A folded JSON block's pill: "3 keys", "1 item". */
+export const foldedCount = (kind: 'object' | 'array', n: number): string =>
+  kind === 'object' ? `${n} ${n === 1 ? 'key' : 'keys'}` : `${n} ${n === 1 ? 'item' : 'items'}`;
+/** The find bar's count: the match the selection is on, of all of them. */
+export const findAt = (at: number, n: number): string => `${at} of ${n}`;
+/** The find bar's count when the selection is on no match. */
+export const findFound = (n: number): string => `${n} found`;
+export const FIND_NONE = 'no results';
+/** The pattern is not a valid regular expression. */
+export const FIND_INVALID = 'invalid';
+export const FIND_MATCH_CASE = 'Match case';
+export const FIND_WHOLE_WORD = 'Whole word';
+export const FIND_REGEXP = 'Regular expression';
+export const FIND_PREV = 'Previous match';
+export const FIND_NEXT = 'Next match';
+export const FIND_CLOSE = 'Close find';
 
 // ── APPROVED (2026-11-06) ──
 // Chat UX v2, PR 4 (design section 6, the rail). Approved by the user on

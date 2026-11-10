@@ -2,6 +2,10 @@ import { EditorView } from '@codemirror/view';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 
+import {
+  CODE_COMMENT, CODE_ERROR, CODE_GROUND, CODE_KEY, CODE_LITERAL, CODE_PUNCT, CODE_SELECTION, CODE_TEXT, CODE_VALUE,
+} from './codePalette';
+
 // The ontology editor's theme.
 //
 // Without one, CodeMirror ships its DEFAULT highlight style — which is built
@@ -9,28 +13,15 @@ import { tags as t } from '@lezer/highlight';
 // keys as navy on near-black: the structure of the document, in the lowest
 // contrast on the screen.
 //
-// Colours are the app's own, so the editor reads as part of knomit rather than
-// an embedded third-party widget:
-//
-//   keys        #8af   the hue this UI already spends on refs and structure
-//   values      #c9a97a  warm, and never adjacent to a chrome element that
-//                        would make it read as a warning — amber's reserved
-//                        meaning (kb/conventions/ui/copy/warning-styling-
-//                        reserved-for-failures) is about chrome, not syntax,
-//                        and diagnostics below still get the real red
-//   numbers     #a8a4f0  the lens accent, reused for literals
-//   comments    #5f6b5f  muted, recedes
-//   punctuation #6a6a6a
-//
-// Diagnostics keep #f88 — inside the editor an invalid ontology IS a failure,
-// and it is the one thing here that must out-shout the syntax.
-const KEY = '#8af';
-const VALUE = '#c9a97a';
-const LITERAL = '#a8a4f0';
-const COMMENT = '#5f6b5f';
-const PUNCT = '#6a6a6a';
-const TEXT = '#ddd';
-const ERROR = '#f88';
+// The colours are the app's code palette (codePalette.ts, which says why each
+// is what it is), shared with the chat's JSON view.
+const KEY = CODE_KEY;
+const VALUE = CODE_VALUE;
+const LITERAL = CODE_LITERAL;
+const COMMENT = CODE_COMMENT;
+const PUNCT = CODE_PUNCT;
+const TEXT = CODE_TEXT;
+const ERROR = CODE_ERROR;
 
 const highlight = HighlightStyle.define([
   // YAML maps its keys to propertyName; the definition() form covers the
@@ -54,7 +45,7 @@ const highlight = HighlightStyle.define([
 const theme = EditorView.theme({
   '&': {
     color: TEXT,
-    backgroundColor: '#0c0c0c',
+    backgroundColor: CODE_GROUND,
     border: '1px solid #333',
     borderRadius: '4px',
     fontSize: '12px',
@@ -72,11 +63,11 @@ const theme = EditorView.theme({
   '.cm-content': { caretColor: '#eee', padding: '8px 0' },
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: '#eee' },
   '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
-    backgroundColor: '#24405e',
+    backgroundColor: CODE_SELECTION,
   },
   '.cm-activeLine': { backgroundColor: '#161616' },
   '.cm-gutters': {
-    backgroundColor: '#0c0c0c',
+    backgroundColor: CODE_GROUND,
     color: '#555',
     border: 'none',
     borderRight: '1px solid #1e1e1e',

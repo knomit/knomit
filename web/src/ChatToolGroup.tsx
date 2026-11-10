@@ -154,10 +154,11 @@ function ToolCallLine({ call: c, testPrefix }: { call: ToolCall; testPrefix: str
  * ToolCallHead is a call's timeline row drawn as a heading: the same dot and
  * the same line (ToolCallDot, ToolCallLine), so the side panel that shows a
  * call's result is headed by the very row that was clicked, failed or not.
+ * `style` places it (the side panel's top row sets its own spacing).
  */
-export function ToolCallHead({ call, testId }: { call: ToolCall; testId?: string }) {
+export function ToolCallHead({ call, testId, style }: { call: ToolCall; testId?: string; style?: CSSProperties }) {
   return (
-    <div data-testid={testId} data-state={call.state} data-error={call.isError || undefined} style={headRow}>
+    <div data-testid={testId} data-state={call.state} data-error={call.isError || undefined} style={style ? { ...headRow, ...style } : headRow}>
       <ToolCallDot call={call} />
       <ToolCallLine call={call} testPrefix="chat-result-call" />
     </div>
